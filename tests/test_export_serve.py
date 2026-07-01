@@ -47,6 +47,33 @@ def test_export_shows_frontier_and_escapes_html(root: Path) -> None:
     assert "upstream-unverified" in page or "stale" in page
 
 
+def test_spec_markdown_is_rendered_for_browsing(root: Path) -> None:
+    project = load_project(root)
+    page, _, _ = render(project)
+    assert '<div class="md">' in page
+    assert "<h2>Script</h2>" in page  # compute-alpha's "## Script" heading
+    assert "Fit the alpha model per models.md." in page  # its prose
+    assert "<h2>The beta fit</h2>" not in page  # host docs are not specs
+
+
+def test_sidebar_and_hash_routing(root: Path) -> None:
+    project = load_project(root)
+    page, _, _ = render(project)
+    # one nav entry per spec file, grouped by kind, plus the status shortcut
+    assert '<nav class="sidebar">' in page
+    assert 'data-file-anchor="status"' in page
+    for anchor in ("spec-compute-alpha", "spec-compute-beta", "spec-report-beta", "spec-models"):
+        assert f'data-file-anchor="{anchor}"' in page
+        assert f'<section class="spec" id="{anchor}">' in page
+    assert '<span class="kind kind-definitions">definitions</span>' in page
+    # spec titles come from the first heading
+    assert ">alpha fit</a>" in page
+    # the hash router and scroll-preserving reload ship inline
+    assert "anchorToFile" in page
+    assert "specsScrollY" in page
+    assert "MathJax" in page
+
+
 def test_export_view_is_pure_join(root: Path) -> None:
     # exporting must not change any status or ledger byte
     make_ready(root)

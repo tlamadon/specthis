@@ -82,6 +82,8 @@ class SpecFile:
     consumes: list[str]
     references: list[str]
     spec_sha: str  # sha256 of the FULL file text, frontmatter included
+    body: str  # markdown after the frontmatter (the contract prose)
+    title: str = ""  # display title: frontmatter `title:`, else first heading, else name
     entries: list[Entry] = field(default_factory=list)
     host_doc: str | None = None
     section_label: str | None = None
@@ -160,6 +162,8 @@ def parse_spec(path: Path) -> SpecFile:
     if tier not in TIERS:
         raise SpecError(f"{path.name}: `tier: {tier}` is not one of {sorted(TIERS)}")
 
+    body = text[m.end() :]
+    heading = re.search(r"^# +(.+?)\s*$", body, re.MULTILINE)
     spec = SpecFile(
         path=path,
         name=name,
@@ -168,12 +172,13 @@ def parse_spec(path: Path) -> SpecFile:
         consumes=_str_list(meta.get("consumes"), path.name, "consumes"),
         references=_str_list(meta.get("references"), path.name, "references"),
         spec_sha=sha256_text(text),
+        body=body,
+        title=str(meta.get("title") or (heading.group(1) if heading else name)),
         host_doc=meta.get("host_doc"),
         section_label=meta.get("section_label"),
     )
 
     if kind in ENTRY_KINDS:
-        body = text[m.end() :]
         label = "Output" if kind == "compute" else "Export outputs"
         for block_match in re.finditer(
             r"^### +(.+?)\s*$\n(.*?)(?=^### |^## |\Z)", body, re.MULTILINE | re.DOTALL

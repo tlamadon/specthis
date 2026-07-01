@@ -7,10 +7,11 @@ cheaply and at any moment: which claims are still true, and what kind
 of repair does each broken one need — a mind (re-judge), a machine
 (re-run), or patience (upstream will heal it).
 
-> Status: **core implemented**. `check` / `status` / `run` / `vouch` /
-> `migrate` and the scaffolding (`install` / `init`) work and are
-> tested. The dashboard renderer, live-reload server, and remote cache
-> are stubs. See [Roadmap](#roadmap).
+> Status: **implemented and tested** — the ledger verbs (`check` /
+> `status` / `run` / `vouch` / `migrate`), the scaffolding (`install` /
+> `init`), the live dashboard (`export` / `serve`) with spec browsing
+> and host-doc routing, and the remote cache. See [Roadmap](#roadmap)
+> for the deliberately-deferred extensions.
 
 ## The model
 
@@ -235,6 +236,20 @@ domain-general).
 pip install specthis          # core: CLI + agent templates
 pip install "specthis[s3]"    # adds the remote (S3) cache backend (stub)
 ```
+
+Or with [uv](https://docs.astral.sh/uv/) — no install needed, works from
+any directory:
+
+```bash
+uvx specthis serve            # run straight from PyPI
+uv tool install specthis      # or install a persistent `specthis` command
+```
+
+From a clone of this repo, `uv run specthis <command>` (at the repo root)
+builds the local source and runs it.
+
+The dashboard serves on `127.0.0.1:8765` by default; pass
+`--port`/`--host` to `specthis serve` if that port is taken.
 
 ## Scaffold a project
 
