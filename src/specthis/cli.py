@@ -105,6 +105,25 @@ def check_cmd(project_path: Path) -> None:
     if waiting:
         click.echo(f"waiting on the frontier: {waiting} upstream-unverified")
     click.echo(f"ready: {ready}/{len(reports)}")
+
+    # Routing findings are view-layer warnings, not claims: informational,
+    # never part of the exit code.
+    from .routing import check_routing
+
+    warnings = []
+    for rr in check_routing(project):
+        if not rr.host_doc_exists:
+            warnings.append(f"{rr.spec}: host doc {rr.host_doc} missing")
+        elif not rr.label_found:
+            warnings.append(f"{rr.spec}: \\label{{{rr.section_label}}} not found in {rr.host_doc}")
+        else:
+            for out in rr.orphaned:
+                warnings.append(f"{rr.spec}: {out} exported but never input by {rr.host_doc}")
+    if warnings:
+        click.echo("routing warnings (view-layer, not claims):", err=True)
+        for w in warnings:
+            click.echo(f"  {w}", err=True)
+
     if local:
         sys.exit(1)
 
@@ -156,7 +175,7 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
 # ------------------------------------------------------------------ run
 
 
-def _execute_entry(project: Project, name: str) -> None:
+def _execute_entry(project: Project, name: str, push_after: bool = False) -> None:
     """Resolve+record upstream digests -> dispatch -> write runs.toml."""
     entry = project.entries[name]
     runs = read_runs(project.specs_dir)
@@ -208,6 +227,27 @@ def _execute_entry(project: Project, name: str) -> None:
         ),
     )
     click.echo(f"recorded run of `{name}` -> {out_sha[:12]}…")
+    if push_after:
+        from .cache import CacheError, push
+
+        try:
+            key = push(project, name)
+            click.echo(f"pushed `{name}` -> {key}")
+        except CacheError as exc:
+            click.echo(f"cache push failed for `{name}`: {exc}", err=True)
+
+
+def _try_fetch(project: Project, name: str) -> bool:
+    """Best-effort cache fetch; True when verified bytes landed."""
+    from .cache import try_fetch
+    from .ledger import read_runs as _read_runs
+
+    entry = project.entries[name]
+    expected = hashing.signature(expected_inputs(project, entry, _read_runs(project.specs_dir)))
+    if try_fetch(project, name, expected):
+        click.echo(f"fetched `{name}` from cache (no recompute)")
+        return True
+    return False
 
 
 @main.command("run")
@@ -218,11 +258,27 @@ def _execute_entry(project: Project, name: str) -> None:
     is_flag=True,
     help="Rebuild every machine-repairable entry in dependency order.",
 )
+@click.option(
+    "--fetch",
+    "do_fetch",
+    is_flag=True,
+    help="Try the remote cache before recomputing (verified bytes, no ledger writes).",
+)
+@click.option(
+    "--push",
+    "do_push",
+    is_flag=True,
+    help="Push outputs to the remote cache after each successful run.",
+)
 @_path_option
-def run_cmd(entry: str | None, run_stale: bool, project_path: Path) -> None:
+def run_cmd(
+    entry: str | None, run_stale: bool, do_fetch: bool, do_push: bool, project_path: Path
+) -> None:
     """Run one entry (or every stale one) and record the derived claim.
 
-    Writes runs.toml only; never touches vouches.toml.
+    Writes runs.toml only; never touches vouches.toml. With --fetch,
+    an entry whose recorded claim already matches today's inputs is
+    materialized from the cache instead of recomputed.
     """
     project = _load(project_path)
     if run_stale == (entry is not None):
@@ -230,18 +286,26 @@ def run_cmd(entry: str | None, run_stale: bool, project_path: Path) -> None:
     if entry is not None:
         if entry not in project.entries:
             raise click.ClickException(f"unknown entry `{entry}`")
-        _execute_entry(project, entry)
+        if do_fetch and _try_fetch(project, entry):
+            return
+        _execute_entry(project, entry, push_after=do_push)
         return
-    ran, skipped = 0, []
+    ran, fetched, skipped = 0, 0, []
     for name in topo_order(project):
         # Re-derive after every run: an upstream rebuild makes new entries stale.
         report = check_project(project)[name]
         if report.status is Status.STALE:
-            _execute_entry(project, name)
+            if do_fetch and _try_fetch(project, name):
+                fetched += 1
+                continue
+            _execute_entry(project, name, push_after=do_push)
             ran += 1
         elif report.status in LOCAL_BREAKS:
             skipped.append((name, report.status.value))
-    click.echo(f"rebuilt {ran} stale entr{'y' if ran == 1 else 'ies'}")
+    summary = f"rebuilt {ran} stale entr{'y' if ran == 1 else 'ies'}"
+    if fetched:
+        summary += f", fetched {fetched} from cache"
+    click.echo(summary)
     for name, why in skipped:
         click.echo(f"  skipped {name}: {why} (needs a mind, not a machine)", err=True)
 
@@ -329,6 +393,83 @@ def serve_cmd(host: str, port: int, project_path: Path) -> None:
 
     _load(project_path)  # fail fast with a clear message if specs/ is absent/broken
     serve(host, port, project_path)
+
+
+# ---------------------------------------------------------------- cache
+
+
+@main.group("cache")
+def cache_group() -> None:
+    """Remote byte cache keyed by composed signature (never writes ledgers).
+
+    Configure with `[cache] url = "s3://bucket/prefix"` (or file:///path)
+    in specs/bindings.toml, or the SPECTHIS_CACHE_URL env var.
+    """
+
+
+def _cache_op(project_path: Path, entry: str | None = None):
+    from . import cache as cache_mod
+
+    project = _load(project_path)
+    if entry is not None and entry not in project.entries:
+        raise click.ClickException(f"unknown entry `{entry}`")
+    return cache_mod, project
+
+
+@cache_group.command("push")
+@click.argument("entry")
+@_path_option
+def cache_push_cmd(entry: str, project_path: Path) -> None:
+    """Upload the entry's certified outputs under its recorded signature."""
+    cache_mod, project = _cache_op(project_path, entry)
+    try:
+        key = cache_mod.push(project, entry)
+    except cache_mod.CacheError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"pushed {key}")
+
+
+@cache_group.command("fetch")
+@click.argument("entry")
+@_path_option
+def cache_fetch_cmd(entry: str, project_path: Path) -> None:
+    """Materialize the entry's recorded outputs (verified against the claim)."""
+    cache_mod, project = _cache_op(project_path, entry)
+    try:
+        key = cache_mod.fetch(project, entry)
+    except cache_mod.CacheError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"fetched {key}")
+
+
+@cache_group.command("has")
+@click.argument("entry")
+@_path_option
+def cache_has_cmd(entry: str, project_path: Path) -> None:
+    """Exit 0 if the cache holds the entry's recorded signature."""
+    cache_mod, project = _cache_op(project_path, entry)
+    try:
+        present = cache_mod.has(project, entry)
+    except cache_mod.CacheError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo("hit" if present else "miss")
+    if not present:
+        sys.exit(1)
+
+
+@cache_group.command("list")
+@_path_option
+def cache_list_cmd(project_path: Path) -> None:
+    """List cached archives."""
+    cache_mod, project = _cache_op(project_path)
+    try:
+        keys = cache_mod.list_keys(project)
+    except cache_mod.CacheError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for key in keys:
+        click.echo(key)
+    if not keys:
+        click.echo("(cache is empty)", err=True)
 
 
 # -------------------------------------------------------------- migrate

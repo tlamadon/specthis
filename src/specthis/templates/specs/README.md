@@ -100,6 +100,11 @@ entry has no binding, the convention `scripts/<entry>.py` (run with
 [package]
 globs = ["src/mypkg/**/*.py"]     # the shared library every code manifest covers
 
+[cache]
+url = "s3://my-bucket/myproject"  # optional remote byte cache (or file:///path);
+                                  #   `specthis run --stale --fetch` pulls verified
+                                  #   bytes instead of recomputing
+
 [entries.fit-alpha]
 scripts   = ["scripts/fit_alpha.py"]
 run       = "python scripts/fit_alpha.py"

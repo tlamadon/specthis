@@ -103,10 +103,33 @@ Two more verbs render **views** — regenerated, never read back by the
 ledger:
 
 ```bash
-specthis export    # write specs/specs.html + specs/_index.json
+specthis export    # write specs/specs.html + _index.json + _routing.json
 specthis serve     # live dashboard at localhost:8765; re-renders on any
-                   # spec / ledger / code / output change (writes nothing)
+                   # spec / ledger / code / output / host-doc change (writes nothing)
 ```
+
+The views include **host-doc routing**: for each report spec declaring
+`host_doc:` + `section_label:`, is every exported `.tex` actually
+`\input` into that labelled section? Orphaned exports and missing
+labels show on the dashboard and as warnings in `check` — warnings
+only, never the exit code, because routing is a view concern, not a
+claim.
+
+And the **remote cache** moves bytes without ever touching claims:
+
+```bash
+specthis cache push <entry>     # upload certified outputs, keyed by signature
+specthis cache fetch <entry>    # download + verify against the recorded claim
+specthis run --stale --fetch    # try the cache before recomputing
+specthis run <entry> --push     # push after a successful run
+```
+
+Configure with `[cache] url = "s3://bucket/prefix"` (needs
+`specthis[s3]`) or `file:///shared/drive` (no extras) in
+`specs/bindings.toml`, or `SPECTHIS_CACHE_URL`. `push` refuses bytes
+that don't match the recorded run; `fetch` verifies digests before
+anything lands on disk; neither writes a ledger row — git carries the
+claim, the cache carries the bytes.
 
 ## Use cases
 
@@ -168,8 +191,10 @@ same pair, so nobody can quietly re-stamp the same bytes.
 **Onboard a machine (or a collaborator).** Clone the repo anywhere
 and run `specthis check`: same claims, same digests, same answer — no
 mtimes to confuse a fresh checkout. Vouches travel with git; artifacts
-don't have to. Whatever reads *stale* is one `specthis run --stale`
-away (or, later, a cache fetch keyed by the same signature).
+don't have to. Whatever reads *stale* is one
+`specthis run --stale --fetch` away: entries whose recorded claim
+matches today's inputs are pulled from the cache (digest-verified,
+zero recompute, zero ledger writes); only genuinely new work executes.
 
 **Let agents work, keep the pen.** The `spec-auditor` runs the checks
 and judges contract-in-spirit but only ever *proposes* verdicts; the
@@ -246,21 +271,15 @@ humans work the queue with `specthis vouch` / `specthis run --stale`.
 
 Done: spec/bindings parsing, content hashing + composed signatures,
 both ledgers, status derivation + frontier, the five verbs, migration,
-scaffolding, agent templates, and the dashboard (`specthis export` +
-`specthis serve` with live reload — stdlib only, no extras needed).
+scaffolding, agent templates, the dashboard (`export` + `serve` with
+live reload, stdlib only), host-doc routing (`_routing.json` +
+orphaned-export checks), and the remote cache (`file://` and `s3://`
+backends, digest-verified fetch keyed by the composed signature).
 
-Next, in order — each a small additive layer that the core neither
-needs nor precludes:
-
-1. **Host-doc routing** — `_routing.json` and the
-   `\input{}`/`\label{}` cross-check between report entries and their
-   `host_doc:`, surfaced on the dashboard.
-2. **Remote cache** — fetch-instead-of-recompute keyed by the composed
-   signature.
-3. **Known future extensions** — output-schema-into-signature,
-   quick-tier caching as an executor concern, section-scoped spec
-   hashing if whole-file contract hashing ever causes too much
-   re-judgment churn.
+Known future extensions — each additive, none precluded by the core:
+output-schema-into-signature, quick-tier caching as an executor
+concern, section-scoped spec hashing if whole-file contract hashing
+ever causes too much re-judgment churn.
 
 ## License
 

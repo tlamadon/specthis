@@ -94,6 +94,7 @@ class Project:
     specs: list[SpecFile]
     entries: dict[str, Entry]
     package_globs: list[str]
+    cache_url: str | None = None
 
 
 def _field_paths(block: str, label: str) -> list[str]:
@@ -195,15 +196,16 @@ def parse_spec(path: Path) -> SpecFile:
     return spec
 
 
-def _load_bindings(specs_dir: Path) -> tuple[dict[str, Binding], list[str]]:
+def _load_bindings(specs_dir: Path) -> tuple[dict[str, Binding], list[str], str | None]:
     path = specs_dir / "bindings.toml"
     if not path.is_file():
-        return {}, []
+        return {}, [], None
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise SpecError(f"bindings.toml: {exc}") from exc
     globs = _str_list(data.get("package", {}).get("globs"), "bindings.toml", "package.globs")
+    cache_url = data.get("cache", {}).get("url")
     bindings: dict[str, Binding] = {}
     for entry_name, table in data.get("entries", {}).items():
         bindings[entry_name] = Binding(
@@ -212,7 +214,7 @@ def _load_bindings(specs_dir: Path) -> tuple[dict[str, Binding], list[str]]:
             workflows=_str_list(table.get("workflows"), "bindings.toml", "workflows"),
             executor=table.get("executor"),
         )
-    return bindings, globs
+    return bindings, globs, cache_url
 
 
 def _default_binding(entry_name: str) -> Binding:
@@ -229,7 +231,7 @@ def load_project(root: Path) -> Project:
         raise SpecError(f"no specs/ directory under {root}")
 
     specs = [parse_spec(p) for p in sorted(specs_dir.glob("*.md"))]
-    bindings, package_globs = _load_bindings(specs_dir)
+    bindings, package_globs, cache_url = _load_bindings(specs_dir)
 
     entries: dict[str, Entry] = {}
     for spec in specs:
@@ -257,4 +259,5 @@ def load_project(root: Path) -> Project:
         specs=specs,
         entries=entries,
         package_globs=package_globs,
+        cache_url=cache_url,
     )

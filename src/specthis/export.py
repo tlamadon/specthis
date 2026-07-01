@@ -1,11 +1,10 @@
-"""Dashboard renderer: builds specs/specs.html + specs/_index.json.
+"""Dashboard renderer: specs/specs.html + _index.json + _routing.json.
 
-Both artefacts are *regenerated views*, never sources of truth: they
-join the parsed specs (:mod:`specthis.parse`) with the derived
-statuses (:mod:`specthis.check`) and nothing else. ``specthis check``
+All three artefacts are *regenerated views*, never sources of truth:
+they join the parsed specs (:mod:`specthis.parse`), the derived
+statuses (:mod:`specthis.check`), and the host-doc routing scan
+(:mod:`specthis.routing`) — and nothing else. ``specthis check``
 never reads them; deleting them changes no answer the ledger gives.
-
-Host-doc routing (``_routing.json``) is the next increment.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from pathlib import Path
 
 from .check import Report, Status, check_project, frontier
 from .parse import Project, SpecFile, load_project
+from .routing import RoutingReport, build_routing_json, check_routing
 
 _KIND_ORDER = {"meta": 0, "definitions": 1, "templates": 2, "compute": 3, "report": 4, "figure": 5}
 
@@ -111,6 +111,9 @@ td code, .dep code { font-size: 12.5px; background: #f6f8fa; padding: 1px 5px; b
 .who { color: #57606a; font-size: 13px; }
 .moved { color: #7d4e00; font-size: 13px; }
 .empty { color: #8b949e; }
+.r-ok  { color: #116329; }
+.r-bad { color: #a40e26; font-weight: 600; }
+.r-note { color: #8b949e; }
 """
 
 _RELOAD_JS = """
@@ -188,7 +191,36 @@ def _entry_rows(spec: SpecFile, reports: dict[str, Report]) -> str:
     )
 
 
-def _spec_card(spec: SpecFile, project: Project, reports: dict[str, Report]) -> str:
+def _routing_line(spec: SpecFile, rr: RoutingReport | None) -> str:
+    head = f'<span class="lbl">routes to</span> <code>{_e(spec.host_doc)}</code>' + (
+        f" &sect; <code>{_e(spec.section_label)}</code>" if spec.section_label else ""
+    )
+    if rr is None:
+        return f'<div class="dep">{head}</div>'
+    if not rr.host_doc_exists:
+        return f'<div class="dep">{head} <span class="r-bad">&#10007; host doc missing</span></div>'
+    if not rr.label_found:
+        return f'<div class="dep">{head} <span class="r-bad">&#10007; label not found</span></div>'
+    marks = " ".join(
+        f'<span class="r-ok">&#10003; <code>{_e(Path(out).name)}</code></span>'
+        if ok
+        else f'<span class="r-bad">&#10007; <code>{_e(Path(out).name)}</code> orphaned</span>'
+        for out, ok in rr.routed.items()
+    )
+    extra = (
+        f' <span class="r-note">section also inputs: {_e(", ".join(rr.extra_inputs))}</span>'
+        if rr.extra_inputs
+        else ""
+    )
+    return f'<div class="dep">{head} {marks}{extra}</div>'
+
+
+def _spec_card(
+    spec: SpecFile,
+    project: Project,
+    reports: dict[str, Report],
+    routing: dict[str, RoutingReport],
+) -> str:
     spec_names = {s.name for s in project.specs}
     pair = ""
     for a, b in (("compute-", "report-"), ("report-", "compute-")):
@@ -209,11 +241,7 @@ def _spec_card(spec: SpecFile, project: Project, reports: dict[str, Report]) -> 
         )
         deps.append(f'<div class="dep"><span class="lbl">references</span> {chips}</div>')
     if spec.host_doc:
-        deps.append(
-            f'<div class="dep"><span class="lbl">routes to</span> <code>{_e(spec.host_doc)}</code>'
-            + (f" &sect; <code>{_e(spec.section_label)}</code>" if spec.section_label else "")
-            + "</div>"
-        )
+        deps.append(_routing_line(spec, routing.get(spec.name)))
     return (
         f'<div class="card" id="spec-{_e(spec.name)}"><div class="head">'
         f"<h2>{_e(spec.name)}</h2>"
@@ -224,7 +252,12 @@ def _spec_card(spec: SpecFile, project: Project, reports: dict[str, Report]) -> 
     )
 
 
-def render_html(project: Project, reports: dict[str, Report], generated: str) -> str:
+def render_html(
+    project: Project,
+    reports: dict[str, Report],
+    routing: dict[str, RoutingReport],
+    generated: str,
+) -> str:
     local, waiting, _ready = frontier(reports)
     counts: dict[Status, int] = {}
     for r in reports.values():
@@ -253,7 +286,7 @@ def render_html(project: Project, reports: dict[str, Report], generated: str) ->
         )
 
     cards = "".join(
-        _spec_card(spec, project, reports)
+        _spec_card(spec, project, reports, routing)
         for spec in sorted(project.specs, key=lambda s: (_KIND_ORDER.get(s.kind, 9), s.name))
     )
     return f"""<!doctype html>
@@ -271,20 +304,26 @@ def render_html(project: Project, reports: dict[str, Report], generated: str) ->
 """
 
 
-def render(project: Project) -> tuple[str, dict]:
-    """One joined view: (specs.html text, _index.json data)."""
+def render(project: Project) -> tuple[str, dict, dict]:
+    """One joined view: (specs.html text, _index.json data, _routing.json data)."""
     reports = check_project(project)
+    routing = {r.spec: r for r in check_routing(project)}
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    return render_html(project, reports, generated), build_index(project, reports)
+    return (
+        render_html(project, reports, routing, generated),
+        build_index(project, reports),
+        build_routing_json(project),
+    )
 
 
 def write_artefacts(root: Path) -> list[Path]:
-    """Render and write specs/specs.html + specs/_index.json."""
+    """Render and write specs/specs.html + _index.json + _routing.json."""
     project = load_project(root)
-    html_text, index = render(project)
+    html_text, index, routing = render(project)
     targets = {
         project.specs_dir / "specs.html": html_text,
         project.specs_dir / "_index.json": json.dumps(index, indent=2) + "\n",
+        project.specs_dir / "_routing.json": json.dumps(routing, indent=2) + "\n",
     }
     for path, content in targets.items():
         path.write_text(content, encoding="utf-8")

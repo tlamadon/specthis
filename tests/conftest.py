@@ -129,6 +129,18 @@ pathlib.Path("reports/fig_beta.tex").write_text("\\\\input{fig_beta.dat}")
 pathlib.Path("reports/fig_beta.dat").write_text(str(beta["loss"]))
 """
 
+PAPER_TEX = """\
+\\section{The beta fit}
+\\label{sec:beta}
+
+Results appear below. % \\input{commented-out.tex} is ignored
+
+\\input{fig_beta.tex}
+
+\\section{Discussion}
+\\label{sec:discussion}
+"""
+
 
 def write(root: Path, rel: str, text: str) -> None:
     path = root / rel
@@ -148,6 +160,7 @@ def root(tmp_path: Path) -> Path:
     write(tmp_path, "scripts/fig_beta.py", FIG_BETA_PY)
     write(tmp_path, "src/pkg/helpers.py", "X = 1\n")
     write(tmp_path, "hut.fit-alpha.json", '{"backend": "slurm"}\n')
+    write(tmp_path, "reports/paper.tex", PAPER_TEX)
     return tmp_path
 
 
