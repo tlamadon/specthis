@@ -5,11 +5,11 @@ Status: **stub**. The reference implementation:
 1. Reads ``specs/_index.json`` (built by :mod:`specthis.export`) and
    ``specs/_lock.json`` (managed by :mod:`specthis.lock`).
 2. For each entry, classifies state as one of: ``fresh``, ``stale``,
-   ``unimplemented`` (no implementation node registered), or
+   ``unimplemented`` (no ``implements`` link registered), or
    ``audit needed`` (the live authorship hash diverged from the
-   certified one -- spec contract or code changed).
+   certified one -- spec contract or code changed; a broken link).
 3. For ``stale`` entries, optionally fetches from the remote cache
-   (:mod:`specthis.cache`, keyed by the artifact node's
+   (:mod:`specthis.cache`, keyed by the ``produces`` link's
    ``input_signature``) before falling back to a local rerun via the
    project's Makefile or a per-entry ``run:`` command.
 4. After a successful rerun, optionally pushes the new artefacts to

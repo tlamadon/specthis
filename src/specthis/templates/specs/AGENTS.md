@@ -25,25 +25,26 @@ index, report state, propose changes**. The agent does not run the
 project's fitting scripts, does not edit result files, and does not
 modify the spec files unless explicitly asked.
 
-## The three-node model in one breath
+## Nodes and links in one breath
 
-A spec entry is a **spec node**: a contract plus the `Output:` it
-promises. Whether a spec is implemented, where its code lives, and
-whether its output is fresh are **not** in the spec — they are the
-**implementation node** and **artifact node**, recorded in
+The pipeline is a chain of custody with three kinds of **node** —
+`spec`, `code`, `artefact` — connected by certified **links**. A spec
+entry is a `spec` node: a contract plus the `Output:` it promises.
+Whether it is implemented, where its code lives, and whether its output
+is fresh are **not** in the spec — they are the links, recorded in
 `specs/_index.json` / `specs/_lock.json`:
 
-- **spec node** — hand-written contract in a `.md` entry. Stable.
-- **implementation node** — the binding between a spec and its code
-  (script + package deps). Registered at certify time; carries a
-  **status** and an **authorship hash** `= hash(spec contract +
-  script + package deps)`.
-- **artifact node** — the output file; carries an **input signature**
-  `= hash(implementation hash + upstream artifact signatures +
-  config)`.
+- **implements** (`spec → code`) — carries an **authorship hash**
+  `= hash(spec + code)`. Present when the spec is implemented.
+- **produces** (`code → artefact`) — carries an **input signature**
+  `= hash(code + upstream artefacts + config)`.
+- **provides** (`spec → artefact`) — carries a **content hash** of the
+  artefact, for source / external data that no code produces.
 
-The certificate is: every edge has a matching hash. `specthis check`
-re-derives them and reports the first broken edge.
+The certificate is: every link has a matching hash. `specthis check`
+re-derives them and reports the first **broken link**. A chain may stop
+at `code` (library code, no artefact); a spec may have no links at all
+(pure vocabulary).
 
 ## Spec anatomy: contract + promised output
 
@@ -58,15 +59,15 @@ Every compute / report spec carries the same structure:
   - `Output:` (compute, a JSON path under `results/<...>/`) or
     `Export outputs:` (report, one or more files under `reports/`) —
     the artefact the code must produce (path + schema). This is the
-    interface downstream steps depend on.
+    interface downstream links depend on.
 
-An entry carries **no** `Script:` and **no** `Status:`. The binding
-tuple therefore splits across nodes:
+An entry carries **no** `Script:` and **no** `Status:`. The contract
+lives in the spec; everything else lives on the links:
 
 ```
-spec node:            (what the code must do, output path + schema)
-implementation node:  (code path, status, authorship hash)   ← in the index
-artifact node:        (output path, input signature)          ← in the index
+spec node:      (what the code must do, output path + schema)
+implements:     (spec → code path, authorship hash)   ← in the index
+produces:       (code → output path, input signature)  ← in the index
 ```
 
 On the report side, an entry is followed by an
@@ -102,33 +103,33 @@ spec.
 ### 1. Audit
 
 Walk every `.md` file in `specs/`, join it against
-`specs/_index.json` (spec node ↔ implementation node ↔ artifact node)
-and the working tree. Two kinds of files carry per-entry contracts:
-`kind: compute` specs (which carry `Output:` per entry) and
-`kind: report` specs (which carry `Export outputs:` per entry plus
-`host_doc:` / `section_label:` in frontmatter). Compute and report
-specs pair by shared stem (`compute-<stem>.md` ↔ `report-<stem>.md`).
+`specs/_index.json` (spec ⋈ its links ⋈ artefacts) and the working
+tree. Two kinds of files carry per-entry contracts: `kind: compute`
+specs (which carry `Output:` per entry) and `kind: report` specs
+(which carry `Export outputs:` per entry plus `host_doc:` /
+`section_label:` in frontmatter). Compute and report specs pair by
+shared stem (`compute-<stem>.md` ↔ `report-<stem>.md`).
 
-The status of a step is read from its **implementation node** in the
-index, never from the spec:
+The status of an entry is derived from its **`implements` link**, never
+from the spec:
 
-- **unimplemented** — no implementation node is registered for this
+- **unimplemented** — no `implements` link is registered for this
   entry.
-- **ready** — an implementation node is registered, the code exists,
-  and its authorship hash matches the current `(spec contract +
-  script + package deps)`.
-- **audit needed** — an implementation node is registered but its
-  authorship hash has drifted: the spec's contract or the code
-  changed since it was certified. The code must be re-checked against
-  the contract and re-certified (`specthis lock record`).
+- **ready** — an `implements` link is registered, the code exists, and
+  its authorship hash matches the current `(spec + code)`.
+- **audit needed** — an `implements` link is registered but its
+  authorship hash has drifted: the spec's contract or the code changed
+  since it was certified. The link is **broken**; the code must be
+  re-checked against the contract and re-certified
+  (`specthis lock record`).
 
 #### Compute side
 
 For each named entry in a `kind: compute` spec:
 
-1. Read the implementation node status (unimplemented / ready /
+1. Read the entry's derived status (unimplemented / ready /
    audit needed) from the index.
-2. Check the implementation node's code path on disk:
+2. Check the `implements` link's code path on disk:
    - **File exists?** Open it only if the status is `audit needed` or
      the index flags a mismatch.
    - **Contract holds in spirit?** The code should match the contract
@@ -156,7 +157,7 @@ For each named entry in a `kind: compute` spec:
 
 For each named entry in a `kind: report` spec:
 
-5. Read the implementation node status and the spec's frontmatter
+5. Read the entry's derived status and the spec's frontmatter
    `host_doc:` + `section_label:`.
 6. **Export script exists?** Open it (when status warrants). Confirm
    it reads only the paired compute entry's `Output:` JSON (or a small
@@ -164,23 +165,22 @@ For each named entry in a `kind: report` spec:
    `Export outputs:` paths under `reports/`, and is side-effect-free
    (does not run the fit, does not touch `results/`).
 7. Each path under `Export outputs:` exists in `reports/`.
-   - **Five-state freshness check** — each artefact lands in
+   - **Four-state freshness check** — each artefact lands in
      exactly one of these buckets:
      1. **missing** — the file is not on disk.
-     2. **stale (contract)** — the owning implementation node is
+     2. **stale (contract)** — the owning `implements` link is
         `unimplemented` or `audit needed`. Whatever is on disk is from
         an old or unverified contract.
      3. **stale (mtime)** — `make -dq <path>` returns non-zero and
         at least one non-`specs/` prerequisite (the export script
         or a compute `Output:` JSON) is newer than the artefact.
      4. **fresh** — file exists, `make -dq` is zero, and the owning
-        implementation node is `ready`.
-   - The old "needs review" bucket (only the `specs/*.md` is newer, so
-     the contract *might* have moved) is gone: the **authorship hash**
-     resolves it. If the spec edit changed the contract, the hash
-     drifted → the node is already `audit needed` (bucket 2). If the
-     edit was a prose tweak, the hash is unchanged → the artefact stays
-     `fresh`. No guessing.
+        `implements` link is `ready`.
+   - There is no "needs review" bucket: the **authorship hash**
+     resolves the ambiguous "only the `specs/*.md` is newer" case. If
+     the spec edit changed the contract, the hash drifted → the link is
+     already `audit needed` (bucket 2). If it was a prose tweak, the
+     hash is unchanged → the artefact stays `fresh`. No guessing.
    - `make` exit code `2` ("no rule for target") is **no freshness
      signal**, not a failure.
 8. **Routing.** The named `host_doc:` exists under `reports/`.
@@ -204,15 +204,16 @@ For each named entry in a `kind: report` spec:
     - `kind: report` specs additionally have `host_doc:` and
       `section_label:` set.
     - No entry carries a `Script:` or `Status:` field — if one does,
-      flag it as **spec state leak**: that belongs in the index.
+      flag it as **spec state leak**: that state belongs on the links
+      in the index.
 
 Report as two markdown tables, one for compute and one for report:
 
 Compute side:
-| entry | spec | impl status | code ✓ | authorship ✓ | contract ✓ | output ✓ | schema ✓ | notes |
+| entry | spec | status | code ✓ | authorship ✓ | contract ✓ | output ✓ | schema ✓ | notes |
 
 Report side:
-| entry | spec | impl status | export code ✓ | authorship ✓ | artefacts ✓ | host_doc | section ✓ | notes |
+| entry | spec | status | export code ✓ | authorship ✓ | artefacts ✓ | host_doc | section ✓ | notes |
 
 Keep notes brief. Do **not** run any of the project scripts. Do
 **not** open large result JSONs in full — key existence is enough.
@@ -228,10 +229,11 @@ user could do. A few heuristics:
   variant of a `ready` entry, that is the natural next step to
   implement.
 - If any entry is **audit needed**, that takes priority: the contract
-  and code have diverged, so re-check and re-certify before running.
-- If every per-entry step is `ready` but the aggregator is
+  and code have diverged (a broken link), so re-check and re-certify
+  before running.
+- If every per-entry link is `ready` but the aggregator is
   unimplemented, the next step is the aggregator.
-- If the aggregator and all per-entry steps are `ready` but the paper
+- If the aggregator and all per-entry links are `ready` but the paper
   section that includes the aggregator's output does not exist in the
   report spec's `host_doc:`, propose adding that section.
 
@@ -249,9 +251,9 @@ whether the target lives on the compute or the report side.
 1. Re-read the entry's section in the spec and the referenced
    vocab specs (typically `models.md` / `estimators.md`). Treat
    those as the spec.
-2. Find the closest existing `ready` compute implementation (look it
-   up in the index — do not grep the specs for status, which no longer
-   carry it) and copy its script as the starting point. Edit only the
+2. Find the closest existing `ready` compute entry (look it up in the
+   index — do not grep the specs for status, which no longer carry it)
+   and copy its script as the starting point. Edit only the
    model-construction and post-step hooks. Keep the same JSON schema.
 3. The script's only output is the entry's `Output:` JSON (plus any
    sidecar arrays in the same `results/<...>/` directory). Do
@@ -260,17 +262,18 @@ whether the target lives on the compute or the report side.
 4. Smoke-test the script's first few iterations (data loads, model
    builds, first inner step has finite loss). Do **not** run a
    full fit.
-5. **Register the implementation node.** If the smoke-test passes, run
+5. **Register the `implements` link.** If the smoke-test passes, run
 
    ```bash
    specthis lock record <entry-name>
    ```
 
-   This writes the spec→code binding, the `ready` status, and the
-   authorship hash `hash(spec contract + script + package deps)` into
-   `specs/_lock.json` (a tracked file shared with the team). You do
-   **not** edit the spec to record status — the status lives on the
-   implementation node.
+   This writes the spec→code binding and the authorship hash
+   `hash(spec + code)` into `specs/_lock.json` (a tracked file shared
+   with the team). The entry's status becomes `ready`. You do **not**
+   edit the spec to record status — status is derived from the link.
+   (The `produces` link's input signature is stamped later, when the
+   artefact is actually built by `specthis refresh`.)
 
 **For a report-spec entry** (`kind: report`):
 
@@ -287,7 +290,7 @@ whether the target lives on the compute or the report side.
    artefact inside the labelled section named by the spec's
    `host_doc:` + `section_label:` frontmatter. Add the lines if
    they are missing.
-5. Register the implementation node with `specthis lock record
+5. Register the `implements` link with `specthis lock record
    <entry-name>`.
 
 ### 4. Refresh memory at the start of a session
@@ -308,8 +311,8 @@ not depend on prior chat history.
 
 ## Status interpretation
 
-Status is a property of the **implementation node** (in the index),
-not of the spec. Its vocabulary is intentionally narrow:
+Status is derived from an entry's **`implements` link** (in the index),
+not from the spec. Its vocabulary is intentionally narrow:
 
 - **unimplemented** — no code is registered for this entry, or none
   exists yet.
@@ -317,14 +320,14 @@ not of the spec. Its vocabulary is intentionally narrow:
   spot-checked (data loads, model builds, first inner step has finite
   loss), and its authorship hash matches the current spec + code. This
   makes no claim about whether the code has been *run* — that is the
-  artifact node's freshness.
+  artefact's freshness (the `produces` link).
 - **audit needed** — the authorship hash has drifted from what was
-  certified. Something in the contract or the code changed. Re-check
-  and re-certify.
+  certified. The link is broken: something in the contract or the code
+  changed. Re-check and re-certify.
 
 Whether the result JSON exists, whether a fit was run, whether the
 paper section is up to date — none of these are status. They are the
-artifact node's freshness, reported by the audit.
+artefact's freshness, reported by the audit.
 
 ### Contract drift is now automatic
 
@@ -332,12 +335,11 @@ Previously the agent had to remember to hand-flip an entry's status
 whenever a spec edit changed the contract, because an mtime check
 could not see that the meaning had changed while the files stayed put.
 That manual convention is **gone**. A contract edit changes the spec's
-content, so the implementation node's authorship hash no longer
-matches — the node shows **audit needed** on the next `specthis check`
-/ audit, automatically. The agent's remaining job is the honest one:
-after changing a contract, re-verify the code still satisfies it, then
-re-run `specthis lock record` to re-certify. No status field to
-forget.
+content, so the `implements` link's authorship hash no longer matches —
+the entry shows **audit needed** on the next `specthis check` / audit,
+automatically. The agent's remaining job is the honest one: after
+changing a contract, re-verify the code still satisfies it, then re-run
+`specthis lock record` to re-certify. No status field to forget.
 
 ## What NOT to do
 
@@ -349,8 +351,8 @@ forget.
   `reports/`. The spec describes what should produce them; only
   the user runs the producer.
 - Do **not** write a `Script:` or `Status:` field into a spec. That
-  state belongs to the implementation node in the index; register it
-  with `specthis lock record`.
+  state belongs on the links in the index; register it with
+  `specthis lock record`.
 - Do **not** describe figures, tables, palettes, or any
   LaTeX-bound layout inside a `kind: compute` spec.
 - Do **not** paste result numbers (point estimates, SEs,
@@ -359,6 +361,6 @@ forget.
 - Do **not** invent new conventions. If something is ambiguous,
   propose an addition to the relevant `definitions` spec and let
   the user decide.
-- Do **not** register an implementation node as `ready` unless the
+- Do **not** register an `implements` link as `ready` unless the
   spot-check passed.
 </content>

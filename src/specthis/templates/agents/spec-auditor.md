@@ -16,13 +16,13 @@ in queryable form, everything the audit needs from the spec files
 themselves:
 
 - `_index.json`: per spec file, frontmatter (`kind`, `depends_on`,
-  `host_doc`, `section_label`, `mtime`) and per entry the joined
-  spec/implementation/artifact nodes: `name`, `kind`, `output` +
-  `output_exists`, `output_top_level_keys`, `export_outputs` +
-  `export_outputs_exist`, and — from the registered implementation
-  node — `impl_status` (`unimplemented` / `ready` / `audit needed`),
-  `code` (path) + `code_exists`, `authorship_ok` (live authorship hash
-  matches the certified one), `workflows`.
+  `host_doc`, `section_label`, `mtime`) and per entry the spec joined
+  with its links: `name`, `kind`, `output` + `output_exists`,
+  `output_top_level_keys`, `export_outputs` + `export_outputs_exist`,
+  and — from the registered `implements` link — `status`
+  (`unimplemented` / `ready` / `audit needed`), `code` (path) +
+  `code_exists`, `authorship_ok` (live authorship hash matches the
+  certified one), `workflows`.
 - `_routing.json`: per host doc, per `\label{...}` found in that doc:
   `label_line`, `section_line`, `inputs` (all `\input{}` files in that
   section), `includegraphics`, `sectionversion_present_within_10_lines`.
@@ -66,10 +66,11 @@ step now leans on the index — only Read when noted):
    and fall back to spec walking.)
 3. For each entry in `_index.json[spec][entries]` that declares an
    `Output:` / `Export outputs:`:
-   - `impl_status` (`unimplemented` / `ready` / `audit needed`),
+   - `status` (`unimplemented` / `ready` / `audit needed`),
      `code_exists`, and `authorship_ok` → directly from the index.
-     `authorship_ok=false` (or `impl_status=audit needed`) means the
-     contract and code have drifted — flag it.
+     `authorship_ok=false` (or `status=audit needed`) means the
+     `implements` link is broken — the contract and code have drifted;
+     flag it.
    - Contract-in-spirit: only Read the code body when the index flags
      something off (e.g. `ready` but `code_exists=false`,
      `authorship_ok=false`, or output exists but schema keys look
@@ -109,7 +110,7 @@ step now leans on the index — only Read when noted):
 Return exactly one markdown table, one row per entry:
 
 ```
-| entry | impl status | code ✓ | authorship ✓ | contract ✓ | output ✓ | output schema ✓ | export code ✓ | export output ✓ | report routing ✓ | notes |
+| entry | status | code ✓ | authorship ✓ | contract ✓ | output ✓ | output schema ✓ | export code ✓ | export output ✓ | report routing ✓ | notes |
 ```
 
 Use `✓`, `✗`, or `n/a`. Keep notes short ("required key missing",

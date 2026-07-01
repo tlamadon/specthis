@@ -1,9 +1,8 @@
 """S3-backed compute cache for spec entries.
 
 Status: **stub**. The reference implementation provides four
-operations keyed by an artifact node's ``input_signature``
-(``hash(implementation authorship_hash + upstream artifact signatures
-+ config)``):
+operations keyed by a ``produces`` link's ``input_signature``
+(``hash(code + upstream artifact signatures + config)``):
 
 - ``push <entry>``: tar the entry's ``results/<entry>/`` directory and
   upload to ``s3://<bucket>/cache/<input_sig>/<entry>.tar.gz``.
