@@ -1,6 +1,6 @@
 ---
 name: experiment-runner
-description: Kicks off a long-running experiment (a `make <target>` or a script under experiments/) in the background and monitors its log for milestones, NaN/error lines, and completion. Use whenever the user says "run experiment X", "kick off the fit", "rerun <target>", or "monitor the running job". Frees the main thread from training-step log noise — reports only milestone/completion/error lines. Does NOT edit code, does NOT touch specs, does NOT analyse the result JSON beyond confirming it landed.
+description: Kicks off a long-running experiment (`specthis run <entry>` for a spec entry, or a `make <target>` / raw script otherwise) in the background and monitors its log for milestones, NaN/error lines, and completion. Use whenever the user says "run experiment X", "kick off the fit", "rerun <target>", or "monitor the running job". Frees the main thread from training-step log noise — reports only milestone/completion/error lines. Does NOT edit code, does NOT touch specs, does NOT analyse the result JSON beyond confirming it landed.
 tools: Read, Glob, Grep, Bash, ToolSearch
 color: orange
 ---
@@ -19,14 +19,19 @@ completion.
 
 ## Procedure
 
-1. **Inspect first**: Read the Makefile target (or the script) to
-   confirm the expected output path and any milestone-log markers
-   (search for `print(`, `logger.info`, `tqdm`). If output already
-   exists and is newer than the script, ask the parent whether to skip
-   or force-rerun before launching anything.
-2. **Launch in the background.** The project's `CLAUDE.md` or
-   `README.md` should document any required env vars (e.g.
-   `LD_LIBRARY_PATH`, `PYTHONUNBUFFERED`). Wrap the launch with
+1. **Inspect first**: Read the script (paths for a spec entry are in
+   `specs/bindings.toml`) to confirm the expected output path and any
+   milestone-log markers (search for `print(`, `logger.info`, `tqdm`).
+   If the experiment is a spec entry, run `specthis status <entry>`
+   first — if it is not `stale` (and has a recorded run), ask the
+   parent whether to force-rerun before launching anything. Never
+   infer freshness from mtimes.
+2. **Launch in the background.** If the experiment is a spec entry,
+   prefer `specthis run <entry>` — it resolves and records the input
+   digests so the run lands in `specs/runs.toml` as a derived claim;
+   a raw script invocation leaves no claim behind. The project's
+   `CLAUDE.md` or `README.md` should document any required env vars
+   (e.g. `LD_LIBRARY_PATH`, `PYTHONUNBUFFERED`). Wrap the launch with
    `> /tmp/<name>.log 2>&1 &` and pass `run_in_background: true` on
    the Bash call so you get the PID back and the call returns
    immediately. NEVER tail in the foreground.
@@ -51,9 +56,9 @@ completion.
    lines of context. Do NOT auto-kill the job unless the parent told
    you to.
 6. **On completion**: confirm the expected output JSON exists at the
-   path the spec / Makefile declared. Report the path, the file's
-   mtime, and the file size. Do NOT open the JSON to inspect numbers
-   — that is the parent's job.
+   path the spec declared. Report the path and the file size (and,
+   if launched via `specthis run`, that the run row was recorded).
+   Do NOT open the JSON to inspect numbers — that is the parent's job.
 
 ## Hard rules
 

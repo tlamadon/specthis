@@ -1,8 +1,7 @@
 ---
-title: AGENTS (agent workflows)
 name: AGENTS
 kind: meta
-depends_on:
+references:
   - README.md
 ---
 
@@ -18,349 +17,158 @@ Read this file before doing anything in `specs/`. If the user asks
 you to "check the specs", "audit", or "propose next steps", the
 relevant operation below is what they mean.
 
-## What the agent should do
+## The one rule that outranks all others
 
-The agent's job is **read specs/, observe the working tree and the
-index, report state, propose changes**. The agent does not run the
-project's fitting scripts, does not edit result files, and does not
-modify the spec files unless explicitly asked.
+**An agent session that edited an entry's spec or code must never
+vouch that entry. Propose the vouch; a separate critic session or the
+human holds the pen. Never run `specthis vouch` unless you are that
+critic and the human asked.**
 
-## Nodes and links in one breath
+The ledger's value is that every attested claim was judged by someone
+who did not author the change. An author-stamped vouch is worse than
+no vouch: it looks like verification and isn't.
 
-The pipeline is a chain of custody with three kinds of **node** —
-`spec`, `code`, `artefact` — connected by certified **links**. A spec
-entry is a `spec` node: a contract plus the `Output:` it promises.
-Whether it is implemented, where its code lives, and whether its output
-is fresh are **not** in the spec — they are the links, recorded in
-`specs/_index.json` / `specs/_lock.json`:
+## The model in one breath
 
-- **implements** (`spec → code`) — carries an **authorship hash**
-  `= hash(spec + code)`. Present when the spec is implemented.
-- **produces** (`code → artefact`) — carries an **input signature**
-  `= hash(code + upstream artefacts + config)`.
-- **provides** (`spec → artefact`) — carries a **content hash** of the
-  artefact, for source / external data that no code produces.
-
-The certificate is: every link has a matching hash. `specthis check`
-re-derives them and reports the first **broken link**. A chain may stop
-at `code` (library code, no artefact); a spec may have no links at all
-(pure vocabulary).
+Each spec entry promises one deliverable. Two ledgers record claims
+about it: `specs/vouches.toml` (a named non-author judged that the
+code satisfies the contract, at exact digests — written only by
+`specthis vouch`) and `specs/runs.toml` (the artefact came from this
+code on these exact inputs, as a composed signature over scripts +
+package + upstream artefact digests + workflow config — written only
+by `specthis run`). `specs/bindings.toml` maps entries to their
+scripts and run commands. `specthis check` re-derives everything and
+reports, per entry: **unimplemented** / **audit needed** /
+**rejected** (a mind's work), **stale** (a machine's work), or
+**upstream-unverified** (patience — fix upstream and it heals).
+Status is never written anywhere; it is derived. Nothing consults
+mtime.
 
 ## Spec anatomy: contract + promised output
 
-Every compute / report spec carries the same structure:
-
 - **`## Script`** (compute) / export prose (report) — *prose about how
-  to author the code*. Part of the contract (the authorship hash
-  covers it); it names no path.
-- **`## Entry`** (single-entry specs) or **`## Entries`**
-  (multi-entry specs) — the contract tuple(s) the audit walks. Each
-  `### entry-name` block carries:
-  - `Output:` (compute, a JSON path under `results/<...>/`) or
-    `Export outputs:` (report, one or more files under `reports/`) —
-    the artefact the code must produce (path + schema). This is the
-    interface downstream links depend on.
-
-An entry carries **no** `Script:` and **no** `Status:`. The contract
-lives in the spec; everything else lives on the links:
-
-```
-spec node:      (what the code must do, output path + schema)
-implements:     (spec → code path, authorship hash)   ← in the index
-produces:       (code → output path, input signature)  ← in the index
-```
-
-On the report side, an entry is followed by an
-**`## Artefact design`** section that pins the layout / palette /
-caption of each output file.
+  to author the code*. Part of the contract; names no path.
+- **`## Entry`** / **`## Entries`** — the claim unit(s). Each
+  `### entry-name` block carries `Output:` (compute, one path under
+  `results/`) or `Export outputs:` (report/figure, files under
+  `reports/`). No `Script:`, no `Status:` — flag either as **spec
+  state leak**.
+- Frontmatter: `name`, `kind`, `tier` (compute), `consumes:` (upstream
+  entry names — signature-bearing), `references:` (vocabulary spec
+  files — ledger-invisible). `depends_on:` is retired; flag it.
+- The whole file, frontmatter included, is the contract: any edit
+  returns its entries to *audit needed*.
 
 ## Compute / report responsibility split
 
-This is the single most important rule that follows from the
-taxonomy:
+The single most important authoring rule:
 
 - A **compute** spec describes a job whose output is a JSON file
   (plus optional sidecar arrays under the same `results/<...>/`
-  directory). That JSON is **the contract**: the fit's parameters,
-  diagnostics, log-likelihoods, posterior samples, anything a
-  downstream consumer might want. A compute spec does **not**
-  describe figures, tables, or LaTeX-bound artefacts; it does not
-  declare anything under `reports/`.
-- A **report** spec describes one or more exporter scripts whose
-  inputs are the JSON outputs of one or more compute specs and
-  whose outputs are LaTeX artefacts under `reports/` (tables,
-  `figures/*.tex`, `figures/*.dat`). Layout, captions, palette,
-  axis ranges, "what to plot" — all live here.
+  directory). That JSON is the contract: parameters, diagnostics,
+  log-likelihoods — anything a downstream consumer might want. A
+  compute spec does **not** describe figures, tables, or LaTeX-bound
+  artefacts and declares nothing under `reports/`.
+- A **report** spec describes exporter scripts whose inputs are
+  compute entries' JSONs (wired via `consumes:`) and whose outputs are
+  LaTeX artefacts under `reports/`. Layout, captions, palette, axis
+  ranges — all live here.
 
-The boundary is enforced both at audit time and at authoring time
-(see operations 1 and 3 below). If figure prose, palette choices, or
-table column orderings appear inside a compute spec, that is a spec
-bug — flag it and propose moving the prose to the paired report
-spec.
+If figure prose, palette choices, or table column orderings appear
+inside a compute spec, that is a spec bug — flag it and propose moving
+the prose to the paired report spec.
 
 ## Four named operations
 
 ### 1. Audit
 
-Walk every `.md` file in `specs/`, join it against
-`specs/_index.json` (spec ⋈ its links ⋈ artefacts) and the working
-tree. Two kinds of files carry per-entry contracts: `kind: compute`
-specs (which carry `Output:` per entry) and `kind: report` specs
-(which carry `Export outputs:` per entry plus `host_doc:` /
-`section_label:` in frontmatter). Compute and report specs pair by
-shared stem (`compute-<stem>.md` ↔ `report-<stem>.md`).
+Start mechanical, end judgmental:
 
-The status of an entry is derived from its **`implements` link**, never
-from the spec:
+1. Run `specthis check` (and `specthis status <entry>` for detail —
+   it names exactly which input moved). This replaces every
+   existence / freshness / hash check you would otherwise do by hand.
+   Never re-derive status yourself; never infer it from mtimes.
+2. For each entry on the frontier, characterise the repair:
+   - **stale** — machine work. Report it; `specthis run --stale` (or
+     the user) fixes it. Nothing to judge.
+   - **audit needed / rejected** — a mind's work. Open the entry's
+     spec section and its scripts (paths are in `specthis status
+     <entry>` / `specs/bindings.toml`) and judge **contract in
+     spirit**: does the code do what the prose demands? Read enough to
+     decide; do not run it.
+   - **upstream-unverified** — do nothing locally; point at the
+     frontier entry it is waiting on.
+3. While reading, also flag: compute-spec scope creep (compute code
+   writing under `reports/` or importing plotting libraries), routing
+   leaks (a compute `Output:` naming a `reports/` path), spec state
+   leaks (`Script:` / `Status:` / `depends_on:` fields), missing
+   `## Artefact design` on report entries, and `references:` targets
+   never mentioned in the body.
+4. Report as a table: entry / status / repair kind (mind, machine,
+   patience) / notes. For entries you judged, end each note with a
+   **proposed verdict** — "propose vouch ok" or "propose reject:
+   <reason>" — for the human or a critic session to act on. Do not
+   act on it yourself (see the one rule).
 
-- **unimplemented** — no `implements` link is registered for this
-  entry.
-- **ready** — an `implements` link is registered, the code exists, and
-  its authorship hash matches the current `(spec + code)`.
-- **audit needed** — an `implements` link is registered but its
-  authorship hash has drifted: the spec's contract or the code changed
-  since it was certified. The link is **broken**; the code must be
-  re-checked against the contract and re-certified
-  (`specthis lock record`).
-
-#### Compute side
-
-For each named entry in a `kind: compute` spec:
-
-1. Read the entry's derived status (unimplemented / ready /
-   audit needed) from the index.
-2. Check the `implements` link's code path on disk:
-   - **File exists?** Open it only if the status is `audit needed` or
-     the index flags a mismatch.
-   - **Contract holds in spirit?** The code should match the contract
-     described in the spec's `## Script` section. Read enough to
-     confirm; do not run it.
-   - **No report-side work?** The compute script should write to
-     `results/<...>/` only. If it writes to `reports/` or emits a
-     figure file, flag it as **compute-spec scope creep**: the work
-     belongs in the paired report spec's exporter.
-3. Check the `Output:` path on disk:
-   - **JSON exists?** If yes, confirm the top-level keys match the
-     schema declared in the entry contract.
-   - **JSON only?** The compute spec's `Output:` field should name
-     exactly one JSON path under `results/<section>-<entry>/`. If the
-     spec also names a `reports/...tex` path, flag it as **routing
-     leak**: that path belongs in the report spec's `Export outputs:`.
-4. **No figure / table prose**: the compute spec's body must not
-   describe figure palettes, axis labels, table column orderings,
-   `\input{...}` lines, or any other LaTeX-bound layout. Quickly
-   grep for `figure`, `pgfplots`, `tikz`, `\caption`, `\input`,
-   `palette`, `axis label`. If present, flag and propose moving to
-   the paired report spec.
-
-#### Report side
-
-For each named entry in a `kind: report` spec:
-
-5. Read the entry's derived status and the spec's frontmatter
-   `host_doc:` + `section_label:`.
-6. **Export script exists?** Open it (when status warrants). Confirm
-   it reads only the paired compute entry's `Output:` JSON (or a small
-   set of compute JSONs in the aggregator case), writes only to its
-   `Export outputs:` paths under `reports/`, and is side-effect-free
-   (does not run the fit, does not touch `results/`).
-7. Each path under `Export outputs:` exists in `reports/`.
-   - **Four-state freshness check** — each artefact lands in
-     exactly one of these buckets:
-     1. **missing** — the file is not on disk.
-     2. **stale (contract)** — the owning `implements` link is
-        `unimplemented` or `audit needed`. Whatever is on disk is from
-        an old or unverified contract.
-     3. **stale (mtime)** — `make -dq <path>` returns non-zero and
-        at least one non-`specs/` prerequisite (the export script
-        or a compute `Output:` JSON) is newer than the artefact.
-     4. **fresh** — file exists, `make -dq` is zero, and the owning
-        `implements` link is `ready`.
-   - There is no "needs review" bucket: the **authorship hash**
-     resolves the ambiguous "only the `specs/*.md` is newer" case. If
-     the spec edit changed the contract, the hash drifted → the link is
-     already `audit needed` (bucket 2). If it was a prose tweak, the
-     hash is unchanged → the artefact stays `fresh`. No guessing.
-   - `make` exit code `2` ("no rule for target") is **no freshness
-     signal**, not a failure.
-8. **Routing.** The named `host_doc:` exists under `reports/`.
-   Inside it, a `\label{<section_label>}` matching the spec's
-   frontmatter exists, and every path in `Export outputs:` has a
-   corresponding `\input{...}` / `\includegraphics{...}` line
-   inside that labelled section.
-9. **Figure / table prose lives here**: every paper-bound artefact
-   the report spec declares should also have its layout described
-   here — palette, axis labels, panel structure, table column
-   ordering, caption intent.
-10. **Frontmatter check** (every `.md` file in `specs/`):
-    - The file begins with a YAML frontmatter block declaring
-      `name`, `kind`, and `depends_on` per the convention in
-      `README.md`.
-    - `name` matches the filename stem.
-    - `kind` is one of the documented enum values (`meta`,
-      `definitions`, `templates`, `compute`, `report`, `figure`).
-    - Every entry in `depends_on` is the filename of another `.md`
-      file in `specs/`, and appears at least once in the body.
-    - `kind: report` specs additionally have `host_doc:` and
-      `section_label:` set.
-    - No entry carries a `Script:` or `Status:` field — if one does,
-      flag it as **spec state leak**: that state belongs on the links
-      in the index.
-
-Report as two markdown tables, one for compute and one for report:
-
-Compute side:
-| entry | spec | status | code ✓ | authorship ✓ | contract ✓ | output ✓ | schema ✓ | notes |
-
-Report side:
-| entry | spec | status | export code ✓ | authorship ✓ | artefacts ✓ | host_doc | section ✓ | notes |
-
-Keep notes brief. Do **not** run any of the project scripts. Do
-**not** open large result JSONs in full — key existence is enough.
-Do **not** compile any document under `reports/` — the audit is a
-working-tree check, not a build check.
+Do not run project scripts, do not open large result files (key
+existence is enough), do not compile anything under `reports/`.
 
 ### 2. Propose next steps
 
-After (or as part of) an audit, suggest the next concrete thing the
-user could do. A few heuristics:
+After (or as part of) an audit:
 
-- If there is an **unimplemented** entry whose model is a small
-  variant of a `ready` entry, that is the natural next step to
-  implement.
-- If any entry is **audit needed**, that takes priority: the contract
-  and code have diverged (a broken link), so re-check and re-certify
-  before running.
-- If every per-entry link is `ready` but the aggregator is
-  unimplemented, the next step is the aggregator.
-- If the aggregator and all per-entry links are `ready` but the paper
-  section that includes the aggregator's output does not exist in the
-  report spec's `host_doc:`, propose adding that section.
+- **rejected** or **audit needed** entries outrank everything: a
+  contract and its code have diverged, and machine repairs downstream
+  of them are wasted until a mind rules.
+- Then **stale** entries, in dependency order — that is one
+  `specthis run --stale` away.
+- Then **unimplemented** entries whose contract is a small variant of
+  a ready one — the natural next authoring step.
 
-Express proposals as "I could now implement X" or "the next thing the
-user can run is Y" — not as actions the agent has taken. Wait for
-explicit confirmation before authoring or running.
+Express proposals as "I could now implement X" or "the next thing to
+run is Y" — not as actions taken. Wait for explicit confirmation.
 
-### 3. Implement a spec (author + register)
+### 3. Implement a spec (author + propose)
 
-Only when explicitly asked. The procedure differs depending on
-whether the target lives on the compute or the report side.
+Only when explicitly asked:
 
-**For a compute-spec entry** (`kind: compute`):
-
-1. Re-read the entry's section in the spec and the referenced
-   vocab specs (typically `models.md` / `estimators.md`). Treat
-   those as the spec.
-2. Find the closest existing `ready` compute entry (look it up in the
-   index — do not grep the specs for status, which no longer carry it)
-   and copy its script as the starting point. Edit only the
-   model-construction and post-step hooks. Keep the same JSON schema.
-3. The script's only output is the entry's `Output:` JSON (plus any
-   sidecar arrays in the same `results/<...>/` directory). Do
-   **not** emit anything under `reports/`, do **not** import a
-   plotting library, do **not** write LaTeX.
-4. Smoke-test the script's first few iterations (data loads, model
-   builds, first inner step has finite loss). Do **not** run a
-   full fit.
-5. **Register the `implements` link.** If the smoke-test passes, run
-
-   ```bash
-   specthis lock record <entry-name>
-   ```
-
-   This writes the spec→code binding and the authorship hash
-   `hash(spec + code)` into `specs/_lock.json` (a tracked file shared
-   with the team). The entry's status becomes `ready`. You do **not**
-   edit the spec to record status — status is derived from the link.
-   (The `produces` link's input signature is stamped later, when the
-   artefact is actually built by `specthis refresh`.)
-
-**For a report-spec entry** (`kind: report`):
-
-1. Re-read the entry's section in the report spec, the paired
-   compute spec's `Output:` schema, and any applicable `templates`
-   spec for figure conventions.
-2. Find the closest existing `ready` exporter (via the index) and
-   copy it as the starting point. The exporter reads the compute
-   JSON, writes one or more files under `reports/`, and does nothing
-   else.
-3. Run the exporter end-to-end (it is cheap; not a "fit") and
-   confirm the artefacts under `Export outputs:` materialise.
-4. Confirm the host document `\input`s or `\includegraphics`s each
-   artefact inside the labelled section named by the spec's
-   `host_doc:` + `section_label:` frontmatter. Add the lines if
-   they are missing.
-5. Register the `implements` link with `specthis lock record
-   <entry-name>`.
+1. Re-read the entry's spec section and every spec in `references:`.
+   Treat those as the contract.
+2. Find the closest *ready* entry (`specthis status`) and copy its
+   script as the starting point; edit only what the contract demands.
+   Keep the declared output schema.
+3. Bind the entry in `specs/bindings.toml` (scripts + run command)
+   if the default `scripts/<entry>.py` convention doesn't fit.
+4. Compute entries: smoke-test only (data loads, model builds, first
+   step finite) — never a full fit, never writing the real output.
+   Report/figure entries: run the exporter end-to-end (it is cheap)
+   and confirm the declared artefacts materialise; confirm the host
+   doc routes them (`host_doc:` / `section_label:`).
+5. **Stop. Propose the vouch.** Tell the user the entry is ready for
+   judgment: "run `specthis vouch <entry> --as <you>`, or hand it to
+   a critic session." You authored this change; the pen is not yours.
 
 ### 4. Refresh memory at the start of a session
 
-When the user opens a new session and says something like "let's
-work on <topic>", do this before anything else:
-
-1. Read `specs/README.md`.
-2. Read `specs/AGENTS.md` (this file).
-3. Read the relevant paired spec(s) — typically
-   `specs/compute-<topic>.md` + `specs/report-<topic>.md` plus any
-   referenced vocab specs.
-4. Then ask the user what they want to do, or perform the audit if
-   they implicitly asked for it.
-
-This gives the agent a clean, durable starting context that does
-not depend on prior chat history.
-
-## Status interpretation
-
-Status is derived from an entry's **`implements` link** (in the index),
-not from the spec. Its vocabulary is intentionally narrow:
-
-- **unimplemented** — no code is registered for this entry, or none
-  exists yet.
-- **ready** — the code exists, satisfies the contract, has been
-  spot-checked (data loads, model builds, first inner step has finite
-  loss), and its authorship hash matches the current spec + code. This
-  makes no claim about whether the code has been *run* — that is the
-  artefact's freshness (the `produces` link).
-- **audit needed** — the authorship hash has drifted from what was
-  certified. The link is broken: something in the contract or the code
-  changed. Re-check and re-certify.
-
-Whether the result JSON exists, whether a fit was run, whether the
-paper section is up to date — none of these are status. They are the
-artefact's freshness, reported by the audit.
-
-### Contract drift is now automatic
-
-Previously the agent had to remember to hand-flip an entry's status
-whenever a spec edit changed the contract, because an mtime check
-could not see that the meaning had changed while the files stayed put.
-That manual convention is **gone**. A contract edit changes the spec's
-content, so the `implements` link's authorship hash no longer matches —
-the entry shows **audit needed** on the next `specthis check` / audit,
-automatically. The agent's remaining job is the honest one: after
-changing a contract, re-verify the code still satisfies it, then re-run
-`specthis lock record` to re-certify. No status field to forget.
+1. Read `specs/README.md`, then this file.
+2. Run `specthis check` for the live frontier.
+3. Read the spec(s) relevant to the user's topic plus their
+   `references:`.
+4. Then ask what they want, or audit if they implicitly asked.
 
 ## What NOT to do
 
-- Do **not** run the project's fitting scripts, the aggregator, or
-  any other code that mutates the result layer or burns compute.
-  Authoring includes a smoke-test (a handful of iterations);
-  running does not.
-- Do **not** edit a result JSON or a paper artefact under
-  `reports/`. The spec describes what should produce them; only
-  the user runs the producer.
-- Do **not** write a `Script:` or `Status:` field into a spec. That
-  state belongs on the links in the index; register it with
-  `specthis lock record`.
-- Do **not** describe figures, tables, palettes, or any
-  LaTeX-bound layout inside a `kind: compute` spec.
-- Do **not** paste result numbers (point estimates, SEs,
-  log-likelihoods) into any spec file. Those live in the result
-  JSON pointed to by the entry's `Output:` path.
+- Do **not** vouch for anything you (this session) authored or
+  edited. Propose; the pen belongs to a non-author.
+- Do **not** run fitting scripts or anything that burns compute.
+  Authoring includes a smoke-test; running does not.
+- Do **not** edit result files or artefacts under `reports/`.
+- Do **not** write `Script:`, `Status:`, or `depends_on:` into a
+  spec, and do not hand-edit `vouches.toml` or `runs.toml` — ledgers
+  are written by their verbs only.
+- Do **not** paste result numbers into a spec file.
+- Do **not** derive status from mtimes, or from anything other than
+  `specthis check` / `specthis status`.
 - Do **not** invent new conventions. If something is ambiguous,
-  propose an addition to the relevant `definitions` spec and let
-  the user decide.
-- Do **not** register an `implements` link as `ready` unless the
-  spot-check passed.
-</content>
+  propose an addition to the relevant `definitions` spec and let the
+  user decide.

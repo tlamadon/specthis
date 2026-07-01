@@ -1,14 +1,20 @@
 """S3-backed compute cache for spec entries.
 
-Status: **stub**. The reference implementation provides four
-operations keyed by a ``produces`` link's ``input_signature``
-(``hash(code + upstream artifact signatures + config)``):
+Status: **stub** — an explicitly deferred extension. git holds claims,
+caches hold bytes, digests join them: the cache is keyed by an entry's
+composed signature (the ``signature`` field of its ``runs.toml`` row),
+so a collaborator whose check says *stale* can fetch the exact bytes
+that signature certifies instead of recomputing. Nothing in the core
+ledger depends on this module; deleting every cached byte changes no
+answer ``specthis check`` gives.
 
-- ``push <entry>``: tar the entry's ``results/<entry>/`` directory and
-  upload to ``s3://<bucket>/cache/<input_sig>/<entry>.tar.gz``.
-- ``fetch <entry>``: download and unpack into ``results/<entry>/``.
-- ``has <entry>``: HEAD-check S3 for the artefact.
-- ``list``: list cached entries with their input signatures.
+Planned operations:
+
+- ``push <entry>``: tar the entry's output directory and upload to
+  ``s3://<bucket>/cache/<signature>/<entry>.tar.gz``.
+- ``fetch <entry>``: download and unpack, then verify the unpacked
+  output digest against the recorded ``output_sha``.
+- ``has <entry>`` / ``list``.
 
 Requires ``specthis[s3]`` extra (boto3) and AWS credentials available
 in the standard chain (env, profile, instance role).
@@ -20,8 +26,8 @@ from pathlib import Path
 
 
 def push(entry: str, bucket: str, specs_dir: Path) -> None:  # pragma: no cover - stub
-    raise NotImplementedError("specthis.cache is not yet ported.")
+    raise NotImplementedError("specthis.cache is not yet implemented.")
 
 
 def fetch(entry: str, bucket: str, specs_dir: Path) -> None:  # pragma: no cover - stub
-    raise NotImplementedError("specthis.cache is not yet ported.")
+    raise NotImplementedError("specthis.cache is not yet implemented.")

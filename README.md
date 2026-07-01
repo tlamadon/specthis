@@ -1,207 +1,237 @@
 # specthis
 
-A spec-driven coding pipeline. You describe *what the pipeline should
-be* in a clean set of specs; specthis keeps the code and the outputs
-provably in sync with that description, caches the expensive steps, and
-reproduces the cheap ones on demand.
+**A notary for a DAG it also knows how to build.** You describe *what
+the pipeline should be* in a clean set of specs; specthis keeps one
+ledger, versioned in git, of claims about the project — and answers,
+cheaply and at any moment: which claims are still true, and what kind
+of repair does each broken one need — a mind (re-judge), a machine
+(re-run), or patience (upstream will heal it).
 
-> Status: **early scaffold**. The CLI shell and the agent / spec
-> templates work. The dashboard renderer, lock manager, remote cache,
-> and refresh orchestrator are stubs awaiting porting from the
-> reference implementation. See [Roadmap](#roadmap).
+> Status: **core implemented**. `check` / `status` / `run` / `vouch` /
+> `migrate` and the scaffolding (`install` / `init`) work and are
+> tested. The dashboard renderer, live-reload server, and remote cache
+> are stubs. See [Roadmap](#roadmap).
 
-## Philosophy
+## The model
 
-A specthis project has four parts and one invariant.
+**The claim unit is the entry**: one script(-set), one output, one
+deliverable. A spec file is a bundle of entries plus the prose
+contract they are judged against.
 
-**Four parts:**
+**Two species of claim, verified in opposite directions:**
 
-| Part | What it is |
-|---|---|
-| **Spec** | The source of truth. A clean, declarative description of what the pipeline should be — every transformation, its inputs, and the artifact it produces. Specs carry contracts, not results, and never record *whether* or *where* they are implemented. |
-| **Package** | Reusable library code the scripts import (models, loaders, helpers). |
-| **Scripts** | The executable code that implements a spec, turning inputs into an artifact. |
-| **Outputs (artifacts)** | What the scripts produce — JSON, data files, `.tex`, tables, figures. They live next to the data, never inside the spec. |
+- **Attested** (spec ↔ code, in `specs/vouches.toml`): someone who did
+  *not* author the change judged that the code satisfies the contract,
+  at exact digests. Verified backward — are the blobs unchanged since
+  the vouch?
+- **Derived** (code → artifact, in `specs/runs.toml`): this artifact
+  came from this code on these exact inputs, captured as a **composed
+  signature** over scripts + package blob + upstream artifact digests
+  + workflow config. Verified forward — recompute, compare.
 
-**One invariant — the certificate.** specthis maintains a set of content
-hashes proving that **spec ↔ code ↔ outputs are mutually in sync**. The
-pipeline is a **chain of custody** from source data through
-transformations to final artifacts, and the certificate is a chain of
-**links** — one verified hash per link. It is cheap to check
-(`specthis check`), and when it is broken it names the **first broken
-link**. A certificate is only as strong as its weakest link; that is the
-whole point.
+Judgment cannot be computed; computation need not be judged.
 
-### Nodes and links
+**Claims are shallow; trust propagates.** A vouch covers only the
+entry's own blobs. When something upstream moves, downstream vouches
+don't expire — they get flagged. `specthis check` walks the DAG and
+reports the **frontier**: entries broken for local reasons itemized,
+everything merely downstream summarized. Per entry the diagnosis is
+one of:
 
-The DAG has three kinds of **node** — the actual things — and links
-between them. A node is a description, a file of code, or a file of
-output. A **link** is a single certified edge between two nodes.
+| status | meaning | repair |
+|---|---|---|
+| `unimplemented` | no code on disk | author it |
+| `audit needed` | your spec or code moved since the vouch (or was never judged) | a mind |
+| `rejected` | a judge said no at exactly these digests | a mind |
+| `stale` | inputs moved (or it never ran); the vouch stands | a machine |
+| `upstream-unverified` | your claim stands on ground that moved | patience |
+| `ready` | every claim checks out | — |
 
+**Two kinds of edge, only one carries trust.** `consumes:` edges are
+artifact flows — they enter signatures and propagate status.
+`references:` edges are vocabulary — visible to readers and agents,
+invisible to the ledger. A definitions hub can be edited without
+detonating the certificate graph.
+
+**The pen is guarded.** Attested claims are written only by
+`specthis vouch`, which requires a named attester (`--as`, no
+git-config default — friction is the feature) and must never be run
+by the author of the change, human or agent. A rejection binds at its
+exact digest pair: `vouch` refuses an `ok` over a standing rejection
+until something changes.
+
+**Executors are ingredients, never authorities.** Intensive entries
+dispatch to a configured runner (e.g. scripthut — its cache key is its
+own business); quick entries run locally. git holds claims, caches
+hold bytes, digests join them. No mtime appears anywhere in ledger
+logic: a fresh clone on another machine gives identical answers.
+
+## The five verbs
+
+```bash
+specthis check                 # the frontier; exit non-zero on any local break
+specthis status [entry]        # table / detail, incl. WHICH input moved
+specthis run <entry>           # resolve+record upstream digests -> dispatch -> runs.toml
+specthis run --stale           # rebuild every machine-repairable entry in dependency order
+specthis vouch <entry> --as NAME [--reject] [--note TEXT]
 ```
-   spec ──implements──▶ code ──produces──▶ artifact ──▶ (feeds next code) ...
-    │                    ╲ may stop here: library code, no artifact
-    └──provides──▶ artifact          source data: no code, hashed directly
+
+Boundaries are load-bearing: `check`/`status` never write, `run`
+never touches `vouches.toml`, `vouch` never touches `runs.toml`.
+
+## Use cases
+
+**Change a spec, implement, vouch, run.** The authoring loop. You
+tighten the contract in `specs/compute-alpha.md`; every entry in that
+file immediately reads *audit needed* — the old vouch bound different
+bytes. You (or the `spec-implementer` agent) update the script to
+match. Then the two claims are recorded, in order and by different
+hands:
+
+```bash
+vim specs/compute-alpha.md          # contract edit -> entries flagged: audit needed
+vim scripts/fit_alpha.py            # bring the code back in line
+specthis vouch fit-alpha --as ana   # a NON-author judges code vs contract
+specthis run fit-alpha              # execute, record the derived claim
+specthis check                      # ready — and downstream entries now
+                                    # show stale, ready for `run --stale`
 ```
 
-**Nodes:** `spec` (a hand-written contract), `code` (a script or module
-that implements a spec), `artifact` (an output file).
+**Did anything change?** The daily question — after a `git pull`,
+after an editing session, or when you come back to the project after a
+month. One read-only command answers it and names the repair:
 
-**Links — each carries exactly one certificate hash:**
+```bash
+$ specthis check
+frontier (broken for local reasons):
+  audit needed    fit-beta        spec or code moved since vouch
+  stale           fig-gamma       moved: upstream:fit-gamma
+waiting on the frontier: 3 upstream-unverified
+ready: 11/16
+```
 
-1. **implements** — `spec → code`. An **authorship hash** over
-   `(spec + code)` (the code plus what it imports). Certifies that the
-   code is a faithful implementation of the spec. If the spec's contract
-   or the code changes, the hash drifts and the link is **broken →
-   audit needed**. A spec with no `implements` link is **unimplemented**.
+Re-judge `fit-beta`, machine-rebuild `fig-gamma`, and the three
+downstream entries heal on their own. To see exactly what moved on one
+entry — which script, which workflow file, which upstream artifact —
+ask `specthis status fit-beta`.
 
-2. **produces** — `code → artifact`. An **input signature** over
-   `(code + upstream artifacts + config)`. Certifies that the artifact
-   was produced by this code from these inputs. If the code or any
-   upstream artifact changes, the signature changes and the artifact is
-   **stale**. A link that *stops at code* (no `produces`) is library
-   code that emits no output — perfectly valid.
+**Rebuild everything a machine can fix.** After an upstream fit
+re-ran, or after a migration, every downstream entry with a standing
+vouch is just compute:
 
-3. **provides** — `spec → artifact`. A **content hash** of the artifact
-   itself, for **source / external data that no code produces** (a
-   hand-dropped dataset, a download). No `code` node to hash, so the
-   artifact is certified directly against its spec.
+```bash
+specthis run --stale     # topo order; skips audit-needed entries
+                         # ("needs a mind, not a machine")
+```
 
-You never need a separate `spec → artifact` certificate for *derived*
-data: `implements` ∘ `produces` composes to "this artifact satisfies
-this spec." `specthis check` walks the chain, re-derives each link's
-hash from the working tree, compares against the lock, and reports
-**green** or the first broken link on each path.
+**Reject bad work.** A critic reads an implementation and disagrees
+with it. The rejection is a claim too — recorded, attributed, and
+binding at exactly those digests:
 
-### The certificate lives in the index
+```bash
+specthis vouch fit-beta --as ben --reject --note "loss ignores weights"
+```
 
-The spec is the only hand-written, stable part. Everything about the
-*current state* of the repo — which specs are implemented, where the
-code lives, whether each artifact is fresh — is derived and recorded in
-generated side files under `specs/`:
+The entry reads *rejected* until the spec or the code actually
+changes; `vouch` refuses an `ok` over the standing rejection at the
+same pair, so nobody can quietly re-stamp the same bytes.
 
-- **`_index.json`** — the materialised DAG: every node and link, joined
-  against the working tree (code path + existence, artifact freshness,
-  each spec's derived status).
-- **`_lock.json`** — the certificate: the authorship / input-signature /
-  content hash recorded for each link at the moment it was certified.
+**Onboard a machine (or a collaborator).** Clone the repo anywhere
+and run `specthis check`: same claims, same digests, same answer — no
+mtimes to confuse a fresh checkout. Vouches travel with git; artifacts
+don't have to. Whatever reads *stale* is one `specthis run --stale`
+away (or, later, a cache fetch keyed by the same signature).
 
-The `implements` link is **registered at certify time**: when the code
-is authored and spot-checked (by hand or by the `spec-implementer`
-subagent), `specthis lock record <spec>` writes the spec→code binding
-and its authorship hash into the lock. A naming convention supplies the
-default code path, but the binding is explicit, so a spec can be
-re-implemented elsewhere without touching the spec itself. The `produces`
-link's input signature is stamped when the artifact is built by
-`specthis refresh`; `provides` links are registered for source inputs.
+**Let agents work, keep the pen.** The `spec-auditor` runs the checks
+and judges contract-in-spirit but only ever *proposes* verdicts; the
+`spec-implementer` authors code, smoke-tests it, and stops at the
+vouch. Sessions end, the ledger remembers: what was judged, by whom,
+at which digests — and what still needs a mind, a machine, or
+patience.
 
-### Two tiers of links
+## State: three human-readable files, all in git
 
-Not every `produces` link deserves the same treatment. specthis splits
-them by cost:
+- **`specs/vouches.toml`** — attested claims:
+  `(spec_sha, code_sha, verdict, attester, when, note)` per entry.
+- **`specs/runs.toml`** — derived claims: the composed signature, the
+  output digest, the executor, and the full `[inputs]` table
+  (each script, workflow file, the package blob, and one
+  `upstream:<entry>` digest per consumed artifact — so an upstream
+  re-run is never invisible).
+- **`specs/bindings.toml`** — hand-edited vocabulary, not a claim:
+  entry → scripts, run command, workflow files, executor; plus
+  `[package]` globs for the shared library that every code manifest
+  covers. Unbound entries follow the `scripts/<entry>.py` convention.
 
-- **Intensive links** (a long fit, a big extract). Never rerun blindly.
-  The input signature is the cache key: specthis first tries a
-  **remote cache** (fetch the artifact instead of recomputing), and
-  only falls back to a local rerun on a miss. After a fresh run it can
-  push the artifact back so collaborators skip the compute entirely.
-  The certificate ties each cached artifact to the exact inputs that
-  produced it.
-
-- **Quick links** (an export, a table, a plot). Cheap enough to just
-  rebuild. These are handled **Makefile-style**: reproduced on demand,
-  driven by ordinary mtime dependencies, no remote cache required.
-
-The dividing line is declared in the spec, so `specthis refresh` knows
-which links to fetch-or-compute and which to simply remake.
-
-## The spec format in one paragraph
-
-Every spec file under `specs/` carries YAML frontmatter (`name`,
-`kind`, `depends_on`) and, for the executable kinds, one or more
-`### entry` blocks. Each entry is a **spec node**: it declares the
-contract (what the code must do) and the `Output:` it promises (the
-artifact's path + schema, the interface downstream links depend on).
-`depends_on` wires the dependency edges.
-
-An entry does **not** carry `Script:` or `Status:`. Where the code lives
-and whether it satisfies the contract are the `implements` link,
-recorded in `specs/_index.json` / `specs/_lock.json` and reported by the
-audit — never written into the spec by hand.
-
-The current templates ship a **research/paper instantiation** of this
-format (a `kind: compute` link producing JSON, a `kind: report` /
-`figure` link exporting `.tex` figures and tables and routing them into
-a host document). That is one concrete domain, not the only one — the
-certificate / chain model is domain-general, and generic (non-LaTeX)
-templates are planned. See
+The spec files themselves carry YAML frontmatter (`name`, `kind`,
+`tier`, `consumes`, `references`) and `### entry` blocks declaring
+each entry's `Output:` / `Export outputs:`. The whole file,
+frontmatter included, is the contract — any edit returns its entries
+to *audit needed*. No `Script:`, no `Status:`: bindings live in
+`bindings.toml`, status is derived. See
 [`src/specthis/templates/specs/README.md`](src/specthis/templates/specs/README.md)
-for the full convention as it stands today.
+for the full convention (the bundled templates ship a research/paper
+instantiation — compute entries producing JSON, report entries
+exporting `.tex` into a host document — but the ledger model is
+domain-general).
 
 ## Install
 
 ```bash
 pip install specthis          # core: CLI + agent templates
-pip install "specthis[s3]"    # adds the remote (S3) cache backend
+pip install "specthis[s3]"    # adds the remote (S3) cache backend (stub)
 ```
 
 ## Scaffold a project
-
-In any project directory:
 
 ```bash
 specthis install    # writes the Claude Code subagents into .claude/agents/
 specthis init       # creates specs/ with README.md + AGENTS.md templates
 ```
 
-After `init`, edit `specs/README.md` and add your first spec entry.
+Three Claude Code subagents cover the daily operations:
 
-Three Claude Code subagents cover the daily operations on a spec
-directory:
+- **`spec-auditor`** — runs `specthis check`/`status` for the
+  mechanical layer, judges contract-in-spirit for entries on the
+  frontier, and *proposes* verdicts. It never vouches.
+- **`spec-implementer`** — authors code for an unimplemented entry,
+  binds it, smoke-tests it, then stops and proposes the vouch. It
+  authored the change, so the pen is not its.
+- **`experiment-runner`** — launches a long run in the background
+  (preferring `specthis run <entry>` so the claim is recorded),
+  watches the log, reports completion.
 
-- **`spec-auditor`** — read-only consistency check: is each spec
-  implemented, does the code satisfy its contract, and is each artifact
-  fresh?
-- **`spec-implementer`** — author the code for an unimplemented spec and
-  register the `implements` link (path + authorship hash) at certify
-  time.
-- **`experiment-runner`** — launch a long intensive run in the
-  background, watch its log for milestones / errors, report completion.
+## Migrating from the old `_lock.json`
 
-## CLI
-
+```bash
+specthis migrate            # dry-run report
+specthis migrate --write    # import run rows
 ```
-specthis install    Copy the subagent templates into <cwd>/.claude/agents/
-specthis init       Create specs/ skeleton (README.md + AGENTS.md)
-specthis audit      Report per-entry code + artifact state (stub — port pending)
-specthis check      Verify the certificate: re-derive link hashes, report the broken link (planned)
-specthis lock       Register links / inspect the certificate (stub — port pending)
-specthis refresh    Fetch-or-compute intensive links, remake quick links (stub — port pending)
-specthis serve      Serve the specs.html dashboard with live reload (stub — port pending)
-```
+
+Old certified inputs import as derived claims only — **no vouches
+migrate**, by design: judgment does not transfer from a hash file.
+Post-migration everything reads *audit needed* or *stale*, and the
+humans work the queue with `specthis vouch` / `specthis run --stale`.
 
 ## Roadmap
 
-The reference implementation (a ~7000 LOC private codebase) is being
-ported one module at a time. Order:
+Done: spec/bindings parsing, content hashing + composed signatures,
+both ledgers, status derivation + frontier, the five verbs, migration,
+scaffolding, agent templates.
 
-1. **agent templates + spec format docs** — done (this scaffold).
-2. **`specthis install` / `specthis init`** — done.
-3. **`specthis audit`** — the index-based consistency audit.
-4. **`specthis serve`** — the HTML dashboard renderer +
-   `_index.json` / `_routing.json` exporter.
-5. **`specthis lock` / `specthis check`** — the chain-of-links
-   certificate: record, verify, and report the broken link.
-6. **`specthis refresh`** — the two-tier orchestrator (remote-cached
-   intensive links, Makefile-style quick links).
-7. **`specthis cache`** — the remote (S3) cache backend.
+Next, in order — each a small additive layer that the core neither
+needs nor precludes:
 
-Every module ships a config-driven surface (paths set via
-`specthis.toml`), with no hard-coded assumptions about the host
-project's layout beyond the documented defaults.
+1. **`specthis serve` / dashboards** — regenerated views
+   (`specs.html`, `_index.json`, `_routing.json`); `check` never reads
+   them.
+2. **Remote cache** — fetch-instead-of-recompute keyed by the composed
+   signature.
+3. **Known future extensions** — output-schema-into-signature,
+   quick-tier caching as an executor concern, section-scoped spec
+   hashing if whole-file contract hashing ever causes too much
+   re-judgment churn.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-</content>
-</invoke>

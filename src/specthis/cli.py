@@ -1,20 +1,381 @@
-"""specthis command-line entry point."""
+"""specthis command-line entry point.
+
+Verb boundaries are load-bearing: ``check``/``status`` never write,
+``run`` writes only runs.toml, ``vouch`` writes only vouches.toml.
+Executor dispatch (local subprocess vs a configured scripthut submit
+command) lives here and only here — everything below the CLI is pure.
+"""
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
-from . import __version__
-from .install import install_agents, init_specs_dir
+from . import __version__, hashing
+from .check import (
+    LOCAL_BREAKS,
+    Report,
+    Status,
+    check_project,
+    code_sha,
+    expected_inputs,
+    frontier,
+    topo_order,
+)
+from .install import init_specs_dir, install_agents
+from .ledger import (
+    RUNS_FILE,
+    LedgerError,
+    Run,
+    Vouch,
+    read_runs,
+    record_run,
+    record_vouch,
+)
+from .parse import Project, SpecError, load_project
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _load(project_path: Path) -> Project:
+    try:
+        return load_project(project_path)
+    except SpecError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _path_option(f):
+    return click.option(
+        "--path",
+        "project_path",
+        type=click.Path(file_okay=False, exists=True, path_type=Path),
+        default=Path.cwd(),
+        show_default="current directory",
+        help="Project root (the directory containing specs/).",
+    )(f)
+
+
+def _hint(report: Report, project: Project) -> str:
+    if report.status is Status.UNIMPLEMENTED:
+        scripts = project.entries[report.entry].binding.scripts
+        return "no code at " + ", ".join(scripts)
+    if report.status is Status.AUDIT_NEEDED:
+        return "spec or code moved since vouch" if report.vouch else "never vouched"
+    if report.status is Status.REJECTED and report.vouch is not None:
+        v = report.vouch
+        return f"rejected by {v.attester}" + (f": {v.note}" if v.note else "")
+    if report.status is Status.STALE:
+        if report.run is None:
+            return "never run"
+        return "moved: " + ", ".join(report.moved)
+    return ""
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(__version__, prog_name="specthis")
 def main() -> None:
-    """Spec-driven research workflow: dashboard, agents, refresh pipeline."""
+    """A notary for a DAG it also knows how to build."""
+
+
+# ---------------------------------------------------------------- check
+
+
+@main.command("check")
+@_path_option
+def check_cmd(project_path: Path) -> None:
+    """Report the frontier: local breaks itemized, downstream summarized.
+
+    Exits non-zero if any entry is broken for local reasons
+    (unimplemented / audit needed / rejected / stale).
+    """
+    project = _load(project_path)
+    reports = check_project(project)
+    local, waiting, ready = frontier(reports)
+    if local:
+        click.echo("frontier (broken for local reasons):")
+        for r in sorted(local, key=lambda r: r.entry):
+            click.echo(f"  {r.status.value:<15} {r.entry:<28} {_hint(r, project)}")
+    if waiting:
+        click.echo(f"waiting on the frontier: {waiting} upstream-unverified")
+    click.echo(f"ready: {ready}/{len(reports)}")
+    if local:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------- status
+
+
+@main.command("status")
+@click.argument("entry", required=False)
+@_path_option
+def status_cmd(entry: str | None, project_path: Path) -> None:
+    """Show every entry's derived status, or one entry in detail."""
+    project = _load(project_path)
+    reports = check_project(project)
+    if entry is None:
+        for name in topo_order(project):
+            r = reports[name]
+            e = project.entries[name]
+            click.echo(f"  {r.status.value:<20} {name:<28} {e.spec.kind}/{e.tier}")
+        return
+    if entry not in reports:
+        raise click.ClickException(f"unknown entry `{entry}`")
+    r = reports[entry]
+    e = project.entries[entry]
+    click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.spec.kind}/{e.tier})")
+    click.echo(f"status:    {r.status.value}")
+    click.echo(f"spec_sha:  {r.spec_sha}")
+    click.echo(f"code_sha:  {r.code_sha or '(code missing)'}")
+    click.echo(f"scripts:   {', '.join(e.binding.scripts)}")
+    click.echo(f"outputs:   {', '.join(e.outputs)}")
+    if e.consumes:
+        click.echo(f"consumes:  {', '.join(e.consumes)}")
+    if r.vouch:
+        v = r.vouch
+        note = f" — {v.note}" if v.note else ""
+        click.echo(f"vouch:     {v.verdict} by {v.attester} at {v.vouched}{note}")
+    else:
+        click.echo("vouch:     (none)")
+    if r.run:
+        click.echo(f"run:       {r.run.ran} via {r.run.executor}")
+    else:
+        click.echo("run:       (none)")
+    if r.moved:
+        click.echo("moved since last run:")
+        for k in r.moved:
+            click.echo(f"  - {k}")
+
+
+# ------------------------------------------------------------------ run
+
+
+def _execute_entry(project: Project, name: str) -> None:
+    """Resolve+record upstream digests -> dispatch -> write runs.toml."""
+    entry = project.entries[name]
+    runs = read_runs(project.specs_dir)
+
+    missing_up = [u for u in entry.consumes if u not in runs]
+    if missing_up:
+        raise click.ClickException(
+            f"`{name}` consumes entries with no recorded run: "
+            f"{', '.join(missing_up)} — run those first (or use --stale)"
+        )
+    inputs = expected_inputs(project, entry, runs)
+    missing_files = sorted(k for k, v in inputs.items() if v == hashing.MISSING)
+    if missing_files:
+        raise click.ClickException(
+            f"`{name}` has missing input files: {', '.join(missing_files)}"
+        )
+    if not entry.binding.run:
+        raise click.ClickException(f"`{name}` has no run command in specs/bindings.toml")
+
+    executor = entry.binding.executor or "local"
+    if entry.tier == "intensive" and executor == "local":
+        click.echo(
+            f"note: intensive entry `{name}` running locally; set "
+            "`executor` in specs/bindings.toml to dispatch to scripthut",
+            err=True,
+        )
+    click.echo(f"running `{name}` via {executor}: {entry.binding.run}")
+    result = subprocess.run(entry.binding.run, shell=True, cwd=project.root)
+    if result.returncode != 0:
+        raise click.ClickException(
+            f"`{name}` failed (exit {result.returncode}); nothing recorded"
+        )
+    out_sha = hashing.output_sha(project.root, entry.outputs)
+    if out_sha is None:
+        missing = [p for p in entry.outputs if not (project.root / p).is_file()]
+        raise click.ClickException(
+            f"`{name}` finished but declared output(s) missing: {', '.join(missing)}"
+        )
+    record_run(
+        project.specs_dir,
+        name,
+        Run(
+            signature=hashing.signature(inputs),
+            output=", ".join(entry.outputs),
+            output_sha=out_sha,
+            ran=_now(),
+            executor=executor,
+            inputs=inputs,
+        ),
+    )
+    click.echo(f"recorded run of `{name}` -> {out_sha[:12]}…")
+
+
+@main.command("run")
+@click.argument("entry", required=False)
+@click.option(
+    "--stale",
+    "run_stale",
+    is_flag=True,
+    help="Rebuild every machine-repairable entry in dependency order.",
+)
+@_path_option
+def run_cmd(entry: str | None, run_stale: bool, project_path: Path) -> None:
+    """Run one entry (or every stale one) and record the derived claim.
+
+    Writes runs.toml only; never touches vouches.toml.
+    """
+    project = _load(project_path)
+    if run_stale == (entry is not None):
+        raise click.ClickException("give exactly one of ENTRY or --stale")
+    if entry is not None:
+        if entry not in project.entries:
+            raise click.ClickException(f"unknown entry `{entry}`")
+        _execute_entry(project, entry)
+        return
+    ran, skipped = 0, []
+    for name in topo_order(project):
+        # Re-derive after every run: an upstream rebuild makes new entries stale.
+        report = check_project(project)[name]
+        if report.status is Status.STALE:
+            _execute_entry(project, name)
+            ran += 1
+        elif report.status in LOCAL_BREAKS:
+            skipped.append((name, report.status.value))
+    click.echo(f"rebuilt {ran} stale entr{'y' if ran == 1 else 'ies'}")
+    for name, why in skipped:
+        click.echo(f"  skipped {name}: {why} (needs a mind, not a machine)", err=True)
+
+
+# ---------------------------------------------------------------- vouch
+
+
+@main.command("vouch")
+@click.argument("entry")
+@click.option(
+    "--as",
+    "attester",
+    required=True,
+    help="Who is attesting. No git-config default on purpose — friction is the feature.",
+)
+@click.option(
+    "--reject",
+    is_flag=True,
+    help="Record that the code does NOT satisfy the contract at these digests.",
+)
+@click.option("--note", default="", help="Free-text note recorded with the verdict.")
+@_path_option
+def vouch_cmd(entry: str, attester: str, reject: bool, note: str, project_path: Path) -> None:
+    """Attest that the entry's code satisfies its contract at the current
+    digests. Only someone who did NOT author the change may vouch.
+
+    Writes vouches.toml only; never touches runs.toml.
+    """
+    project = _load(project_path)
+    if entry not in project.entries:
+        raise click.ClickException(f"unknown entry `{entry}`")
+    e = project.entries[entry]
+    c = code_sha(project, e)
+    if c is None:
+        raise click.ClickException(
+            f"`{entry}` has no code on disk ({', '.join(e.binding.scripts)}) — nothing to judge"
+        )
+    vouch = Vouch(
+        spec_sha=e.spec.spec_sha,
+        code_sha=c,
+        verdict="rejected" if reject else "ok",
+        attester=attester,
+        vouched=_now(),
+        note=note,
+    )
+    try:
+        record_vouch(project.specs_dir, entry, vouch)
+    except LedgerError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"recorded {vouch.verdict} for `{entry}` by {attester}")
+
+
+# -------------------------------------------------------------- migrate
+
+
+@main.command("migrate")
+@click.option(
+    "--lock",
+    "lock_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Old _lock.json to import (default: specs/_lock.json).",
+)
+@click.option(
+    "--write", "do_write", is_flag=True, help="Actually write runs.toml (default: dry-run)."
+)
+@click.option("--force", is_flag=True, help="Overwrite runs.toml rows that already exist.")
+@_path_option
+def migrate_cmd(
+    lock_path: Path | None, do_write: bool, force: bool, project_path: Path
+) -> None:
+    """One-time import of an old _lock.json into runs.toml.
+
+    Emits derived claims only — NEVER vouches: judgment does not
+    migrate. Rows import with their certified inputs as-is; package and
+    upstream digests fill in on the first real `run` (until then the
+    entry reads stale, which is honest).
+    """
+    project = _load(project_path)
+    lock_path = lock_path or project.specs_dir / "_lock.json"
+    if not lock_path.is_file():
+        raise click.ClickException(f"no lock file at {lock_path}")
+    data = json.loads(lock_path.read_text(encoding="utf-8"))
+    rows = data.get("entries", data)
+    existing = read_runs(project.specs_dir)
+
+    imported, skipped = [], []
+    for name, row in rows.items():
+        if not isinstance(row, dict):
+            continue
+        if name not in project.entries:
+            skipped.append((name, "no spec entry with this name"))
+            continue
+        if name in existing and not force:
+            skipped.append((name, "runs.toml row exists (use --force)"))
+            continue
+        inputs = {k: str(v) for k, v in (row.get("inputs_certified") or {}).items()}
+        e = project.entries[name]
+        out_sha = (
+            row.get("output_sha")
+            or row.get("content_hash")
+            or hashing.output_sha(project.root, e.outputs)
+            or hashing.MISSING
+        )
+        imported.append(
+            (
+                name,
+                Run(
+                    signature=hashing.signature(inputs),
+                    output=", ".join(e.outputs),
+                    output_sha=out_sha,
+                    ran=str(row.get("ts") or _now()),
+                    executor="migrated",
+                    inputs=inputs,
+                ),
+            )
+        )
+
+    verb = "importing" if do_write else "would import"
+    click.echo(f"{verb} {len(imported)} run row(s) from {lock_path.name}:")
+    for name, run in imported:
+        click.echo(f"  {name}  ({len(run.inputs)} certified inputs)")
+    for name, why in skipped:
+        click.echo(f"  skipped {name}: {why}", err=True)
+    click.echo("vouches imported: 0 (by design — judgment does not migrate)")
+    if do_write:
+        for name, run in imported:
+            record_run(project.specs_dir, name, run)
+        click.echo(f"wrote {project.specs_dir / RUNS_FILE}")
+    elif imported:
+        click.echo("dry run — re-run with --write to record")
+
+
+# ------------------------------------------------- scaffolding (kept)
 
 
 @main.command("install")
@@ -26,11 +387,7 @@ def main() -> None:
     show_default="current directory",
     help="Project root in which to install .claude/agents/.",
 )
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Overwrite existing agent files.",
-)
+@click.option("--force", is_flag=True, help="Overwrite existing agent files.")
 @click.option(
     "--agent",
     "selected",
@@ -63,11 +420,7 @@ def install_cmd(project_path: Path, force: bool, selected: tuple[str, ...]) -> N
     show_default="current directory",
     help="Project root in which to create specs/.",
 )
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Overwrite existing template files in specs/.",
-)
+@click.option("--force", is_flag=True, help="Overwrite existing template files in specs/.")
 def init_cmd(project_path: Path, force: bool) -> None:
     """Create specs/ with README.md and AGENTS.md spec-format templates."""
     created, skipped = init_specs_dir(project_path=project_path, force=force)
@@ -75,57 +428,6 @@ def init_cmd(project_path: Path, force: bool) -> None:
         click.echo(f"  created    {path}")
     for path, reason in skipped:
         click.echo(f"  skipped    {path}  ({reason})", err=True)
-
-
-@main.command("audit")
-@click.option(
-    "--specs",
-    "specs_dir",
-    type=click.Path(file_okay=False, exists=True, path_type=Path),
-    default=Path("specs"),
-    show_default=True,
-    help="specs/ directory to audit.",
-)
-def audit_cmd(specs_dir: Path) -> None:
-    """Run the consistency audit over specs/. (stub — port pending)"""
-    click.echo(
-        f"specthis audit: not yet implemented. Would audit {specs_dir}.\n"
-        "Until then, invoke the spec-auditor subagent in Claude Code.",
-        err=True,
-    )
-    sys.exit(2)
-
-
-@main.command("refresh")
-@click.option(
-    "--specs",
-    "specs_dir",
-    type=click.Path(file_okay=False, exists=True, path_type=Path),
-    default=Path("specs"),
-    show_default=True,
-)
-def refresh_cmd(specs_dir: Path) -> None:
-    """Re-run stale entries respecting the lock file. (stub — port pending)"""
-    click.echo("specthis refresh: not yet implemented.", err=True)
-    sys.exit(2)
-
-
-@main.command("serve")
-@click.option("--host", default="127.0.0.1", show_default=True)
-@click.option("--port", type=int, default=8765, show_default=True)
-def serve_cmd(host: str, port: int) -> None:
-    """Serve the specs.html dashboard with live reload. (stub — port pending)"""
-    click.echo("specthis serve: not yet implemented.", err=True)
-    sys.exit(2)
-
-
-@main.command("lock")
-@click.argument("subcommand", type=click.Choice(["status", "record", "clear"]))
-@click.argument("entry", required=False)
-def lock_cmd(subcommand: str, entry: str | None) -> None:
-    """Manage the spec inputs_certified content-hash lock. (stub — port pending)"""
-    click.echo(f"specthis lock {subcommand}: not yet implemented.", err=True)
-    sys.exit(2)
 
 
 if __name__ == "__main__":
