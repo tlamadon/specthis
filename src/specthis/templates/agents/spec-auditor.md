@@ -16,18 +16,22 @@ in queryable form, everything the audit needs from the spec files
 themselves:
 
 - `_index.json`: per spec file, frontmatter (`kind`, `depends_on`,
-  `host_doc`, `section_label`, `mtime`) and per entry: `name`, `kind`,
-  `status`, `export_status`, `script` + `script_exists`, `output` +
-  `output_exists`, `export_outputs` + `export_outputs_exist`,
-  `output_top_level_keys`, `workflows`.
+  `host_doc`, `section_label`, `mtime`) and per entry the joined
+  spec/implementation/artifact nodes: `name`, `kind`, `output` +
+  `output_exists`, `output_top_level_keys`, `export_outputs` +
+  `export_outputs_exist`, and — from the registered implementation
+  node — `impl_status` (`unimplemented` / `ready` / `audit needed`),
+  `code` (path) + `code_exists`, `authorship_ok` (live authorship hash
+  matches the certified one), `workflows`.
 - `_routing.json`: per host doc, per `\label{...}` found in that doc:
   `label_line`, `section_line`, `inputs` (all `\input{}` files in that
   section), `includegraphics`, `sectionversion_present_within_10_lines`.
 
 Treat the index as authoritative for the cheap mechanical checks
-(script existence, output existence, status, depends_on listing,
-routing presence, sectionversion proximity, top-level JSON keys). Only
-fall back to `Read` on the underlying spec/script/host-doc files when:
+(code existence, output existence, implementation status, authorship
+validity, depends_on listing, routing presence, sectionversion
+proximity, top-level JSON keys). Only fall back to `Read` on the
+underlying spec/script/host-doc files when:
 
 1. The contract docs themselves (`specs/README.md`,
    `specs/AGENTS.md`) — read once per session to know what to check.
@@ -60,12 +64,15 @@ step now leans on the index — only Read when noted):
 2. Read `specs/_index.json` and `specs/_routing.json`. (If either is
    missing or older than the youngest `specs/*.md`, flag stale-index
    and fall back to spec walking.)
-3. For each entry in `_index.json[spec][entries]` that declares
-   `Script:` / `Output:`:
-   - `script_exists` → ✓/✗ directly from the index.
-   - Contract-in-spirit: only Read the script body when the index
-     flags something off (e.g. `script ready` but
-     `script_exists=false`, or output exists but schema keys look
+3. For each entry in `_index.json[spec][entries]` that declares an
+   `Output:` / `Export outputs:`:
+   - `impl_status` (`unimplemented` / `ready` / `audit needed`),
+     `code_exists`, and `authorship_ok` → directly from the index.
+     `authorship_ok=false` (or `impl_status=audit needed`) means the
+     contract and code have drifted — flag it.
+   - Contract-in-spirit: only Read the code body when the index flags
+     something off (e.g. `ready` but `code_exists=false`,
+     `authorship_ok=false`, or output exists but schema keys look
      wrong).
    - `output_exists` and `output_top_level_keys` from the index → check
      against the schema declared in the entry contract without opening
@@ -87,7 +94,10 @@ step now leans on the index — only Read when noted):
    {meta, definitions, templates, compute, report, figure}, and every
    `depends_on` entry is a known spec filename (lookup against
    `_index.json` keys). Verifying that `depends_on` entries appear in
-   the body is a Read only if an entry looks suspicious.
+   the body is a Read only if an entry looks suspicious. Also flag any
+   entry that carries a `Script:` or `Status:` field in the spec body
+   as a **spec state leak** — that state belongs to the implementation
+   node in the index, not the spec.
 6. Document conventions: the project's report convention (declared in
    `specs/README.md` / `specs/AGENTS.md`) — version file presence,
    per-section `\sectionversion` proximity (already in the routing
@@ -99,18 +109,20 @@ step now leans on the index — only Read when noted):
 Return exactly one markdown table, one row per entry:
 
 ```
-| entry | spec status | script ✓ | contract ✓ | output ✓ | output schema ✓ | export status | export script ✓ | export output ✓ | report routing ✓ | notes |
+| entry | impl status | code ✓ | authorship ✓ | contract ✓ | output ✓ | output schema ✓ | export code ✓ | export output ✓ | report routing ✓ | notes |
 ```
 
 Use `✓`, `✗`, or `n/a`. Keep notes short ("required key missing",
-"schema mismatch on `<key>`", "spec lies: status says `script ready`
-but script does not exist", "export script writes outside `reports/`").
+"schema mismatch on `<key>`", "impl registered `ready` but code file
+missing", "authorship drifted — audit needed", "export script writes
+outside `reports/`").
 
 After the table, append at most a 5-line **summary** section listing:
-- count of entries with `script TBD`
+- count of `unimplemented` entries
+- count of `audit needed` entries (authorship drifted)
 - count of contract mismatches
 - count of orphaned exports / stale routings
-- any frontmatter or document-convention violations
+- any frontmatter, spec-state-leak, or document-convention violations
 
 Do not propose actions in the audit output unless the user explicitly
 asked for "audit + next steps" — in that case append a short

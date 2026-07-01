@@ -11,13 +11,40 @@ This directory is your project's source of truth for vocabulary and
 code contracts. Every file in here is a **specification**: a
 declarative description of either (a) what something is (a model
 family, an estimator algorithm, a data extract), or (b) what code
-must exist in the repo (per-script input/output contracts, naming,
-location).
+must exist in the repo (per-step input/output contracts, output
+schema, artefact layout).
+
+A spec describes *what the pipeline should be*. It does **not** record
+whether a step is implemented yet, where its code lives, whether it has
+run, or whether its output exists. Those are facts about the current
+state of the repo, tracked in the generated index/lock
+(`specs/_index.json` / `specs/_lock.json`) and reported by the audit —
+never written into a spec by hand.
 
 The agent's role (Claude, a subagent, or a future tool) is to author
-code that satisfies the contracts in this directory. The user is the
-one who runs that code. The spec is testable by reading the code; it
-is not testable by running the code.
+code that satisfies the contracts in this directory, and to register
+that code as an **implementation node** so the certificate can vouch
+that spec, code, and output are in sync. The user is the one who runs
+that code.
+
+## The three-node model
+
+specthis treats the pipeline as a DAG with three kinds of node:
+
+| Node | Where it lives | What certifies it |
+|---|---|---|
+| **spec** | a `.md` entry in this directory (hand-written, stable) | nothing — it is the contract everything else is checked against |
+| **implementation** | the lock/index (registered at certify time) | an **authorship hash** over `(spec contract + script + package deps)` — binds a spec to the code that satisfies it |
+| **artifact** | the output file on disk, tracked in the index | an **input signature** over `(implementation hash + upstream artifact signatures + config)` |
+
+A spec entry declares the contract and the artefact it promises
+(`Output:` — path + schema, the interface downstream steps depend on).
+It does **not** carry a `Script:` path or a `Status:` field. The
+implementing path and its status belong to the implementation node,
+which is written into `specs/_lock.json` by `specthis lock record`
+when the code is authored and spot-checked. A naming convention
+supplies the default code path; the binding is explicit, so a spec can
+be re-implemented elsewhere without editing the spec.
 
 ## File-naming convention
 
@@ -28,11 +55,11 @@ specification it carries.
 
 | File | Kind | Specifies |
 |---|---|---|
-| `AGENTS.md` | meta | What an agent should do when working with this directory: audit, propose next steps, author scripts for `script TBD` entries, refresh memory at session start. Read this first. |
+| `AGENTS.md` | meta | What an agent should do when working with this directory: audit, propose next steps, implement specs, register implementation nodes, refresh memory at session start. Read this first. |
 | `<topic>.md` | definitions | Reusable vocabulary other specs reference: model families, estimator algorithms, output schema conventions, cluster/runner conventions. |
-| `compute-<name>.md` | compute | A fit / data-extraction / analysis job that produces **a JSON file** (plus optional sidecar arrays in the same `results/<...>/` directory). Carries per-entry `Script:` / `Output:` / `Status:` contracts. Compute specs do **not** describe figures, tables, palettes, or LaTeX-bound layout — that prose belongs in the paired report spec. |
-| `report-<name>.md` | report | The exporter half of a workflow: consumes one or more compute specs' JSONs and builds figures (`reports/figures/*.tex` + `.dat`) and tables (`reports/tab_*.tex`). Carries `Export script:` / `Export outputs:` / `Status:` per entry; `host_doc:` and `section_label:` in frontmatter route the artefacts to a section of a top-level `.tex` document. Figure design (palette, axis labels, panel structure) and table layout live in the body. |
-| `figure-<name>.md` | figure | A **standalone** figure or table exporter: consumes JSON from one or more compute specs and writes a self-contained `.tex` file (table) or `.tex` + `.dat` pair (pgfplots figure) that compiles on its own — no host doc, no routing. Same per-entry contract shape as `report`, but no `host_doc:` / `section_label:`. Use this when the artefact is intended for one-off inspection or ad-hoc inclusion, not as part of a paper-bound document. |
+| `compute-<name>.md` | compute | A fit / data-extraction / analysis job that produces **a JSON file** (plus optional sidecar arrays in the same `results/<...>/` directory). Carries a per-entry `Output:` contract (path + schema). Compute specs do **not** describe figures, tables, palettes, or LaTeX-bound layout — that prose belongs in the paired report spec. These are the **intensive** steps. |
+| `report-<name>.md` | report | The exporter half of a workflow: consumes one or more compute specs' JSONs and builds figures (`reports/figures/*.tex` + `.dat`) and tables (`reports/tab_*.tex`). Carries `Export outputs:` per entry; `host_doc:` and `section_label:` in frontmatter route the artefacts to a section of a top-level `.tex` document. These are **quick** steps. |
+| `figure-<name>.md` | figure | A **standalone** figure or table exporter: consumes JSON from one or more compute specs and writes a self-contained `.tex` file (table) or `.tex` + `.dat` pair (pgfplots figure) that compiles on its own — no host doc, no routing. Same per-entry `Export outputs:` contract as `report`, but no `host_doc:` / `section_label:`. |
 
 Each workflow is split across **two** files: `compute-<name>.md` for
 the fit, and `report-<name>.md` for the export + routing. They pair
@@ -42,33 +69,35 @@ dashboard hops between paired halves with a `↔` link.
 ## What a specification looks like
 
 A spec is **an authoring contract on code**. It commits the agent
-(or a future tool) to producing a script at a declared path that,
-when run, produces a declared output. It does not say anything about
-whether the script has been run on this machine or whether its
-output currently exists on disk — those are observable facts the
-audit reports, not part of the spec.
+(or a future tool) to producing code that, when run, produces a
+declared output. It does not name where that code lives, nor whether
+it has been written — those facts are the implementation node's, not
+the spec's.
 
 Every compute / report spec is organised around two complementary
 sections:
 
-- **`## Script`** (compute) or the per-entry `Export script:` field
-  (report) — describes how the code is laid out: the data loader,
-  model factory, fit loop, exporter routines. This is *prose about
-  how to author the code*. It can be reorganised freely; it is not
-  what the dashboard tracks.
+- **`## Script`** (compute) or the per-entry export prose (report) —
+  describes how the code should be laid out: the data loader, model
+  factory, fit loop, exporter routines. This is *prose about how to
+  author the code*. It is part of the contract (the authorship hash
+  covers it), but it does not name a path.
 - **`## Entry`** / **`## Entries`** — the contract tuple(s) the
-  dashboard tracks. Each entry is one `### entry-name` block with:
-  - `Script:` (compute) or `Export script:` (report) — the path the
-    agent is contracted to author.
-  - `Output:` (compute, a single JSON path) or `Export outputs:`
-    (report, one or more `reports/...tex` paths) — the schema /
-    file the script must produce.
-  - `Status:` — `script TBD` or `script ready`. This is the
-    script's status, not the output's.
+  dashboard and audit track. Each entry is one `### entry-name` block
+  with:
+  - `Output:` (compute, a single JSON path under
+    `results/<section>-<entry>/`) or `Export outputs:` (report, one or
+    more `reports/...tex` paths) — the schema / files the code must
+    produce. This is the artefact node the spec promises: the public
+    interface downstream steps depend on.
 
   Single-entry specs use `## Entry` with one block. Multi-entry
   specs (catalogues / sweeps) use `## Entries` containing several
   `### entry-name` blocks.
+
+  Note: an entry carries **no** `Script:` and **no** `Status:`. The
+  code path and its status are the implementation node's, in
+  `specs/_index.json` / `specs/_lock.json`.
 
 On the report side, an entry additionally carries an
 **`## Artefact design`** block that pins the layout / palette /
@@ -104,9 +133,9 @@ Valid `kind:` values:
 | `meta`        | About specs themselves: index, agent behaviour.                                          |
 | `definitions` | Reusable vocabulary other specs reference (models, estimators, conventions, cluster).    |
 | `templates`   | Reusable table / figure patterns: palette, layout, reference implementation.             |
-| `compute`     | Named entries with a `Script:` / `Output:` / `Status:` contract that produce JSON / data |
-| `report`      | Named entries with an `Export script:` / `Export outputs:` contract that produce figures/tables; `host_doc:` + `section_label:` in frontmatter routes the artefacts. |
-| `figure`      | Standalone figure/table generator: same `Export script:` / `Export outputs:` / `Status:` contract as `report`, but produces a self-contained `.tex` that does NOT route into a host doc. |
+| `compute`     | Named entries with an `Output:` contract that produce JSON / data (intensive steps).     |
+| `report`      | Named entries with an `Export outputs:` contract that produce figures/tables; `host_doc:` + `section_label:` in frontmatter routes the artefacts (quick steps). |
+| `figure`      | Standalone figure/table generator: same `Export outputs:` contract as `report`, but produces a self-contained `.tex` that does NOT route into a host doc. |
 
 `depends_on:` is a single flat list — no distinction between "I
 reference for vocabulary" vs "I depend on the artefacts of". Every
@@ -120,9 +149,17 @@ mentioned anywhere in the body.
 2. Add the frontmatter block above. Pick the right `kind:` and list
    every other spec the body references in `depends_on:`.
 3. Decide whether the body carries vocabulary, code contracts, named
-   entries, or a mix; structure it accordingly.
+   entries, or a mix; structure it accordingly. For executable kinds,
+   give each entry a contract and an `Output:` — but no `Script:` /
+   `Status:`.
 4. Add it to the table above (if you maintain a per-project file
    table).
 5. If it introduces a new naming convention, document the convention
    near the top of the file itself, and cross-reference here if
    needed.
+
+Once the code that satisfies an entry exists and has been
+spot-checked, register it with `specthis lock record <entry>` — that
+creates the implementation node and its authorship hash. From then on
+the audit can tell you whether spec, code, and output are in sync.
+</content>

@@ -2,9 +2,10 @@
 
 Status: **stub**. The reference implementation is index-based: it
 reads ``specs/_index.json`` and ``specs/_routing.json`` (produced by
-:mod:`specthis.export`) and reports each entry's script existence,
-contract-in-spirit, output schema, export routing, and freshness in a
-single markdown table.
+:mod:`specthis.export`) and reports, per entry, the implementation
+node status (``unimplemented`` / ``ready`` / ``audit needed``),
+authorship validity, contract-in-spirit, output schema, export
+routing, and artifact freshness in a single markdown table.
 
 Port plan:
 - ``walk_index(specs_dir) -> list[EntryReport]``

@@ -1,14 +1,16 @@
 """Dashboard renderer: builds specs/specs.html + _index.json + _routing.json.
 
 Status: **stub**. The reference implementation walks ``specs/*.md``,
-parses each frontmatter + entry block, joins against the working tree
-(script existence, output existence + top-level keys, export
-artefacts, host-doc routing), and emits three artefacts:
+parses each frontmatter + entry block, joins each spec node against its
+implementation node (from ``specs/_lock.json``) and the working tree
+(code existence, authorship validity, output existence + top-level
+keys, export artefacts, host-doc routing), and emits three artefacts:
 
 - ``specs/specs.html`` — a single-file browsable dashboard of every
   spec, entry, and pairing.
-- ``specs/_index.json`` — per-spec frontmatter + per-entry facts,
-  consumed by :mod:`specthis.audit` and the auditor subagent.
+- ``specs/_index.json`` — per-spec frontmatter + per-entry facts (spec
+  node ⋈ implementation node ⋈ artifact node), consumed by
+  :mod:`specthis.audit` and the auditor subagent.
 - ``specs/_routing.json`` — per host-doc, per label section, the
   ``\\input{}`` / ``\\includegraphics{}`` lines found inside, plus
   ``\\sectionversion`` proximity flags.
