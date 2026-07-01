@@ -66,6 +66,26 @@ own business); quick entries run locally. git holds claims, caches
 hold bytes, digests join them. No mtime appears anywhere in ledger
 logic: a fresh clone on another machine gives identical answers.
 
+### Division of labor
+
+Three roles, three pens — and only one of them is free-form:
+
+| role | writes | via |
+|---|---|---|
+| **author** (you, or an implementer agent) | spec edits, code, and the binding in `specs/bindings.toml` (where the code lives, how to run it) | any editor |
+| **critic** (a non-author: a colleague, you-next-week, a designated critic session) | attested claims in `specs/vouches.toml` | `specthis vouch --as` — only |
+| **machine** | derived claims in `specs/runs.toml` | `specthis run` — only |
+
+The author's pen is unguarded because nothing it writes becomes
+trusted on its own: a binding edit changes which files the code
+manifest covers, which expires the standing vouch — it can revoke
+trust, never mint it. And when the critic vouches, the binding is
+swept up in the judgment anyway: the `code_sha` they attest is
+computed over exactly the files the binding names, and `run` executes
+exactly the command it gives. Author proposes, critic attests,
+machine executes — and `check` believes none of them without
+re-deriving the digests.
+
 ## The five verbs
 
 ```bash
@@ -78,6 +98,15 @@ specthis vouch <entry> --as NAME [--reject] [--note TEXT]
 
 Boundaries are load-bearing: `check`/`status` never write, `run`
 never touches `vouches.toml`, `vouch` never touches `runs.toml`.
+
+Two more verbs render **views** — regenerated, never read back by the
+ledger:
+
+```bash
+specthis export    # write specs/specs.html + specs/_index.json
+specthis serve     # live dashboard at localhost:8765; re-renders on any
+                   # spec / ledger / code / output change (writes nothing)
+```
 
 ## Use cases
 
@@ -217,14 +246,15 @@ humans work the queue with `specthis vouch` / `specthis run --stale`.
 
 Done: spec/bindings parsing, content hashing + composed signatures,
 both ledgers, status derivation + frontier, the five verbs, migration,
-scaffolding, agent templates.
+scaffolding, agent templates, and the dashboard (`specthis export` +
+`specthis serve` with live reload — stdlib only, no extras needed).
 
 Next, in order — each a small additive layer that the core neither
 needs nor precludes:
 
-1. **`specthis serve` / dashboards** — regenerated views
-   (`specs.html`, `_index.json`, `_routing.json`); `check` never reads
-   them.
+1. **Host-doc routing** — `_routing.json` and the
+   `\input{}`/`\label{}` cross-check between report entries and their
+   `host_doc:`, surfaced on the dashboard.
 2. **Remote cache** — fetch-instead-of-recompute keyed by the composed
    signature.
 3. **Known future extensions** — output-schema-into-signature,

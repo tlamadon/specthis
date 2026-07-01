@@ -294,6 +294,43 @@ def vouch_cmd(entry: str, attester: str, reject: bool, note: str, project_path: 
     click.echo(f"recorded {vouch.verdict} for `{entry}` by {attester}")
 
 
+# ------------------------------------------------------ export / serve
+
+
+@main.command("export")
+@_path_option
+def export_cmd(project_path: Path) -> None:
+    """Render the dashboard: specs/specs.html + specs/_index.json.
+
+    Both are regenerated views — `check` never reads them, and nothing
+    in them is hand-edited.
+    """
+    from .export import write_artefacts
+
+    try:
+        written = write_artefacts(project_path)
+    except SpecError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for path in written:
+        click.echo(f"  wrote  {path}")
+
+
+@main.command("serve")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", type=int, default=8765, show_default=True)
+@_path_option
+def serve_cmd(host: str, port: int, project_path: Path) -> None:
+    """Serve the dashboard with live reload (writes nothing).
+
+    Re-renders whenever specs, ledgers, bindings, scripts, or outputs
+    change; the page reloads itself.
+    """
+    from .serve import serve
+
+    _load(project_path)  # fail fast with a clear message if specs/ is absent/broken
+    serve(host, port, project_path)
+
+
 # -------------------------------------------------------------- migrate
 
 

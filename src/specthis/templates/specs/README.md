@@ -185,6 +185,8 @@ specthis run <entry>           # resolve + record upstream digests, dispatch
 specthis run --stale           # rebuild every machine-repairable entry in dependency order
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
                                # attest — someone other than the author, always named
+specthis serve                 # live dashboard (a regenerated view; writes nothing,
+                               #   and the ledger never reads it)
 ```
 
 `check` and `status` never write. `run` never touches `vouches.toml`.
