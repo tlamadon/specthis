@@ -6,12 +6,16 @@ keyed by an entry's composed signature (the ``signature`` field of its
 
 The load-bearing property: **the cache writes no ledger rows and mints
 no trust**. A collaborator's run row travels through git; on a fresh
-clone the entry reads *stale* only because the bytes are missing.
+clone the entry reads *ready* with the bytes marked non-materialized.
 ``fetch`` pulls the archive for the recorded signature, verifies the
 unpacked outputs against the recorded ``output_sha``, and only then
-moves them into place — after which ``check`` derives *ready* exactly
-as if the entry had been re-run. A poisoned or corrupt archive fails
-the digest check and nothing lands on disk.
+moves them into place. A poisoned or corrupt archive fails the digest
+check and nothing lands on disk.
+
+For entries whose bytes never land anywhere else (remote-compute runs
+certified via :mod:`specthis.remote`), the cache is not an optimization
+but the home of record: next to each archive sits a
+``<entry>.manifest.json`` sidecar carrying the claim metadata.
 
 Backends (chosen by URL scheme, from ``[cache] url`` in
 ``specs/bindings.toml`` or the ``SPECTHIS_CACHE_URL`` env var):
@@ -136,6 +140,20 @@ def _key(entry: str, signature: str) -> str:
     return f"cache/{signature}/{entry}.tar.gz"
 
 
+def _manifest_key(entry: str, signature: str) -> str:
+    return f"cache/{signature}/{entry}.manifest.json"
+
+
+def _upload_archive(project: Project, entry: Entry, key: str) -> None:
+    """Tar the entry's declared outputs (repo-relative names) and upload."""
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / "out.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            for rel in entry.outputs:
+                tf.add(project.root / rel, arcname=rel)
+        _store(project).put(key, archive)
+
+
 def _row(project: Project, name: str) -> Run:
     row = read_runs(project.specs_dir).get(name)
     if row is None:
@@ -158,12 +176,7 @@ def push(project: Project, name: str) -> str:
             "(re-run before pushing — the cache only holds certified bytes)"
         )
     key = _key(name, row.signature)
-    with tempfile.TemporaryDirectory() as tmp:
-        archive = Path(tmp) / "out.tar.gz"
-        with tarfile.open(archive, "w:gz") as tf:
-            for rel in entry.outputs:
-                tf.add(project.root / rel, arcname=rel)
-        _store(project).put(key, archive)
+    _upload_archive(project, entry, key)
     return key
 
 
@@ -188,7 +201,7 @@ def _extract_verified(archive: Path, entry: Entry, row: Run, tmp: Path) -> dict[
                 out.write(src.read())
             staged[rel] = dest
     pairs = [(rel, hashing.file_sha(p)) for rel, p in staged.items()]
-    fetched_sha = pairs[0][1] if len(pairs) == 1 else hashing.manifest_sha(pairs)  # type: ignore[arg-type]
+    fetched_sha = hashing.composed_output_sha(pairs)  # type: ignore[arg-type]
     if fetched_sha != row.output_sha:
         raise CacheError(
             "cached bytes do not match the recorded output digest — refusing to unpack"

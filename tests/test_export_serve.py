@@ -105,7 +105,7 @@ def test_export_view_is_pure_join(root: Path) -> None:
 
 def test_index_matches_check(root: Path) -> None:
     make_ready(root)
-    (root / "reports/fig_beta.dat").unlink()  # fig-beta -> stale
+    (root / "reports/fig_beta.dat").unlink()  # fig-beta -> ready, bytes remote
     project = load_project(root)
     reports = check_project(project)
     index = build_index(project, reports)

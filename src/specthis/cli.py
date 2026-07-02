@@ -132,6 +132,12 @@ def check_cmd(project_path: Path) -> None:
             click.echo(f"  {r.status.value:<15} {r.entry:<28} {_hint(r, project)}")
     if waiting:
         click.echo(f"waiting on the frontier: {waiting} upstream-unverified")
+    remote = sorted(r.entry for r in reports.values() if not r.materialized)
+    if remote:
+        click.echo(
+            f"bytes not local (claim stands; `specthis cache fetch` materializes): "
+            f"{', '.join(remote)}"
+        )
     skipped = f" (+{len(project.skipped_entries)} skipped)" if project.skipped_entries else ""
     click.echo(f"ready: {ready}/{len(reports)}{skipped}")
 
@@ -194,7 +200,8 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
             r = reports[name]
             e = project.entries[name]
             kind = e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}"
-            click.echo(f"  {r.status.value:<20} {name:<28} {kind}")
+            marker = "" if r.materialized else "   [bytes remote]"
+            click.echo(f"  {r.status.value:<20} {name:<28} {kind}{marker}")
         return
     _require_active(project, entry)
     r = reports[entry]
@@ -217,6 +224,11 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
         click.echo(f"run:       {r.run.ran} via {r.run.executor}")
     else:
         click.echo("run:       (none)")
+    if not r.materialized:
+        click.echo(
+            f"bytes:     not local — claim stands; `specthis cache fetch {entry}` "
+            "materializes (verified)"
+        )
     if r.moved:
         click.echo("moved since last run:")
         for k in r.moved:
@@ -325,19 +337,40 @@ def _try_fetch(project: Project, name: str) -> bool:
     is_flag=True,
     help="Push outputs to the remote cache after each successful run.",
 )
+@click.option(
+    "--adopt",
+    "do_adopt",
+    is_flag=True,
+    help=(
+        "Record the row for a remotely-certified entry (see `specthis manifest`) "
+        "without running anything or holding the bytes."
+    ),
+)
 @_path_option
 def run_cmd(
-    entry: str | None, run_stale: bool, do_fetch: bool, do_push: bool, project_path: Path
+    entry: str | None,
+    run_stale: bool,
+    do_fetch: bool,
+    do_push: bool,
+    do_adopt: bool,
+    project_path: Path,
 ) -> None:
     """Run one entry (or every stale one) and record the derived claim.
 
     Writes runs.toml only; never touches vouches.toml. With --fetch,
     an entry whose recorded claim already matches today's inputs is
-    materialized from the cache instead of recomputed.
+    materialized from the cache instead of recomputed. With --adopt,
+    nothing runs and no bytes move: the claim certified where the
+    entry ran (`specthis manifest`) is recorded here.
     """
     project = _load(project_path)
     if run_stale == (entry is not None):
         raise click.ClickException("give exactly one of ENTRY or --stale")
+    if do_adopt and (run_stale or do_fetch or do_push):
+        raise click.ClickException(
+            "--adopt records a remote claim for one entry; it does not run, "
+            "fetch, or push bytes"
+        )
     if entry is not None:
         _require_active(project, entry)
         if is_library(project.entries[entry]):
@@ -345,6 +378,20 @@ def run_cmd(
                 f"`{entry}` is a library entry — the chain stops at code; "
                 "there is nothing to run, only to vouch"
             )
+        if do_adopt:
+            from .cache import CacheError
+            from .remote import RemoteError, adopt
+
+            try:
+                run = adopt(project, entry)
+            except (RemoteError, CacheError) as exc:
+                raise click.ClickException(str(exc)) from exc
+            click.echo(
+                f"adopted remote run of `{entry}` -> {run.output_sha[:12]}… "
+                f"(via {run.executor}; bytes stay remote — "
+                f"`specthis cache fetch {entry}` materializes)"
+            )
+            return
         if do_fetch and _try_fetch(project, entry):
             return
         _execute_entry(project, entry, push_after=do_push)
@@ -359,6 +406,11 @@ def run_cmd(
                 continue
             _execute_entry(project, name, push_after=do_push)
             ran += 1
+        elif do_fetch and not report.materialized and _try_fetch(project, name):
+            # Claim stands, bytes elsewhere: --fetch is the explicit demand
+            # to materialize; without it the entry is left alone (never
+            # recomputed just because the bytes are not local).
+            fetched += 1
         elif report.status in LOCAL_BREAKS:
             skipped.append((name, report.status.value))
     summary = f"rebuilt {ran} stale entr{'y' if ran == 1 else 'ies'}"
@@ -367,6 +419,45 @@ def run_cmd(
     click.echo(summary)
     for name, why in skipped:
         click.echo(f"  skipped {name}: {why} (needs a mind, not a machine)", err=True)
+
+
+# ------------------------------------------------------------- manifest
+
+
+@main.command("manifest")
+@click.argument("entry")
+@click.option(
+    "--executor",
+    default="remote",
+    show_default=True,
+    help="Executor label recorded in the claim (e.g. scripthut:mercury).",
+)
+@_path_option
+def manifest_cmd(entry: str, executor: str, project_path: Path) -> None:
+    """Certify THIS machine's bytes for ENTRY and upload them to the cache.
+
+    Run where the repo checkout and the output bytes coexist — an HPC
+    task's last step. Uploads the outputs tarball plus a manifest
+    sidecar under the entry's composed signature, and records the
+    derived row in this clone's runs.toml (so later entries in the same
+    workflow compose fresh signatures) — the tool never commits it.
+    The git pen stays wherever `specthis run --adopt` is used.
+    """
+    project = _load(project_path)
+    _require_active(project, entry)
+    from .cache import CacheError
+    from .remote import RemoteError, certify
+
+    try:
+        m = certify(project, entry, executor=executor)
+    except (RemoteError, CacheError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    n = len(m.outputs)
+    click.echo(
+        f"certified `{entry}` at signature {m.signature[:12]}… "
+        f"({n} output{'s' if n != 1 else ''}, output_sha {m.output_sha[:12]}…)"
+    )
+    click.echo(f"adopt on the ledger machine with: specthis run {entry} --adopt")
 
 
 # ---------------------------------------------------------------- vouch

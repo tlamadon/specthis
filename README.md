@@ -149,6 +149,23 @@ that don't match the recorded run; `fetch` verifies digests before
 anything lands on disk; neither writes a ledger row — git carries the
 claim, the cache carries the bytes.
 
+When an entry runs **where the bytes should stay** (an HPC cluster, a
+collaborator's machine), the claim still travels without them:
+
+```bash
+specthis manifest <entry>       # ON THE MACHINE THAT RAN IT: certify + upload
+                                #   tarball + manifest under the composed signature
+specthis run <entry> --adopt    # ON YOUR MACHINE: record the runs.toml row
+                                #   from that manifest — no bytes move
+```
+
+Adoption is self-verifying: your machine composes the expected
+signature from its own tree and looks the manifest up at exactly that
+key — a drifted tree finds nothing. The adopted entry reads *ready*
+with its bytes marked remote (`check` names it; absence is not
+staleness — only edited bytes or moved inputs are stale), and anyone
+who actually needs the bytes is one verified `cache fetch` away.
+
 ## Use cases
 
 **Change a spec, implement, vouch, run.** The authoring loop. You

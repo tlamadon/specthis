@@ -106,10 +106,18 @@ def test_output_edited_on_disk_is_stale(root: Path) -> None:
     assert "output" in r.moved[0]
 
 
-def test_output_deleted_is_stale(root: Path) -> None:
+def test_output_deleted_reads_ready_bytes_remote(root: Path) -> None:
+    # Absent is not edited: the claim stands, the bytes are elsewhere.
+    # (One of two declared outputs gone counts as absent — partial bytes
+    # cannot be verified per-file against the composed digest.)
     make_ready(root)
     (root / "reports/fig_beta.dat").unlink()
-    assert statuses(root)["fig-beta"] is Status.STALE
+    r = report(root, "fig-beta")
+    assert r.status is Status.READY
+    assert not r.materialized
+    local, _waiting, ready = frontier(check_project(load_project(root)))
+    assert "fig-beta" not in {x.entry for x in local}
+    assert ready == 3
 
 
 def test_upstream_rerun_makes_downstream_stale(root: Path) -> None:

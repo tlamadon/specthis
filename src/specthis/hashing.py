@@ -70,16 +70,26 @@ def files_manifest(root: Path, paths: Sequence[str]) -> dict[str, str]:
     return {p: file_sha(root / p) or MISSING for p in paths}
 
 
-def output_sha(root: Path, outputs: Sequence[str]) -> str | None:
-    """Digest of an entry's declared output(s).
+def composed_output_sha(pairs: Sequence[tuple[str, str]]) -> str:
+    """Compose per-file ``(path, sha)`` digests into an entry-level one.
 
-    A single output hashes to its raw file digest (readable in the
-    ledger); multiple outputs hash to a manifest over them. ``None``
-    if any declared output is absent.
+    A single output keeps its raw file digest (readable in the ledger);
+    multiple outputs compose to a manifest over them. This is the one
+    composition shared by ``run``, cache verification, and remote
+    manifests — per-file digests are sufficient, bytes are not needed.
+    """
+    if len(pairs) == 1:
+        return pairs[0][1]
+    return manifest_sha(pairs)
+
+
+def output_sha(root: Path, outputs: Sequence[str]) -> str | None:
+    """Digest of an entry's declared output(s), read from disk.
+
+    ``None`` if any declared output is absent — absence is a
+    byte-locality fact, distinguishable from edited bytes.
     """
     shas = [file_sha(root / p) for p in outputs]
     if any(s is None for s in shas):
         return None
-    if len(outputs) == 1:
-        return shas[0]
-    return manifest_sha(zip(outputs, shas))  # type: ignore[arg-type]
+    return composed_output_sha(list(zip(outputs, shas)))  # type: ignore[arg-type]

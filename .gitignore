@@ -26,3 +26,8 @@ venv/
 # specthis dev artefacts
 /tmp_specs/
 *.local.toml
+
+# specthis generated views (self-check artifacts)
+specs/specs.html
+specs/_index.json
+specs/_routing.json

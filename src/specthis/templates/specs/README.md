@@ -50,9 +50,17 @@ is needed:
   re-judge, then vouch.
 - **rejected** — a judge said no at exactly these digests; something
   must change.
-- **stale** — inputs moved; re-run. Machine work, no judgment.
+- **stale** — inputs moved, or output bytes were edited in place;
+  re-run. Machine work, no judgment.
 - **upstream-unverified** — your claim stands but rests on ground that
   moved; fix upstream and this heals for free.
+
+Absent bytes are none of these. An entry whose claim stands but whose
+declared outputs are not on this disk reads **ready** marked *bytes
+remote* — a byte-locality fact, not a break. Nothing recomputes it,
+downstream signatures still compose (they read the recorded digest),
+and `specthis cache fetch <entry>` materializes the bytes — verified
+against the claim — if and when they are actually needed.
 
 Re-judge, re-run, or look upstream — and the tool never confuses the
 three.
@@ -212,6 +220,24 @@ specthis vouch <entry> --as NAME [--reject] [--note TEXT]
 specthis serve                 # live dashboard (a regenerated view; writes nothing,
                                #   and the ledger never reads it)
 ```
+
+Two more verbs cover **remote compute whose bytes should stay put**
+(HPC results too big to bring home). Requires a configured `[cache]`:
+
+```bash
+specthis manifest <entry>      # ON THE MACHINE THAT RAN IT: certify the bytes —
+                               #   upload tarball + manifest under the composed signature
+specthis run <entry> --adopt   # ON THE LEDGER MACHINE: record the runs.toml row
+                               #   from that manifest; no bytes move
+```
+
+Adoption is self-verifying: the ledger machine composes the expected
+signature from its own tree and looks the manifest up at exactly that
+key, so a drifted tree (unpushed edits, wrong branch) finds nothing.
+The adopted entry reads *ready (bytes remote)*; consumers fetch on
+demand. For chains run remotely in one workflow, `manifest` each
+entry in dependency order there, then `--adopt` in the same order
+here.
 
 `check` and `status` never write. `run` never touches `vouches.toml`.
 `vouch` never touches `runs.toml`. A rejection binds at its exact

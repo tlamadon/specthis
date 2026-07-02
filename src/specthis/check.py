@@ -44,6 +44,10 @@ class Report:
     vouch: Vouch | None
     run: Run | None
     moved: list[str] = field(default_factory=list)  # inputs that drifted since the run
+    #: False when the claim stands but the declared output bytes are not
+    #: on this disk (they live in the cache / on the machine that ran) —
+    #: ready-but-fetchable, never a local break.
+    materialized: bool = True
 
 
 def code_present(project: Project, entry: Entry) -> bool:
@@ -150,9 +154,15 @@ def check_project(
                     if expected.get(k) != r.inputs.get(k)
                 )
             continue
-        if hashing.output_sha(project.root, entry.outputs) != r.output_sha:
+        disk_sha = hashing.output_sha(project.root, entry.outputs)
+        if disk_sha is None:
+            # Absent is not edited: the row is a claim, not an observation.
+            # The claim stands with the bytes elsewhere (fetch verifies on
+            # materialization); only present-but-different bytes are stale.
+            report.materialized = False
+        elif disk_sha != r.output_sha:
             report.status = Status.STALE
-            report.moved = ["output (edited or deleted on disk)"]
+            report.moved = ["output (edited on disk)"]
             continue
         if any(reports[up].status is not Status.READY for up in entry.consumes):
             report.status = Status.UPSTREAM_UNVERIFIED

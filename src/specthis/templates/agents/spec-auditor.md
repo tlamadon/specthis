@@ -28,6 +28,9 @@ That replaces every existence / freshness / hash check. What remains —
 the part that needs you — is judgment:
 
 4. **stale** entries: machine work. Report them; nothing to judge.
+   (Ready entries marked *bytes remote* are NOT stale and NOT on the
+   frontier: the claim stands, the bytes live in the byte cache —
+   absence is not a break. Do not flag them and do not fetch them.)
 5. **audit needed / rejected** entries: open the entry's spec section
    and its scripts (paths are in `specthis status <entry>` and
    `specs/bindings.toml`) and judge **contract in spirit**: does the

@@ -59,6 +59,21 @@ completion.
    path the spec declared. Report the path and the file size (and,
    if launched via `specthis run`, that the run row was recorded).
    Do NOT open the JSON to inspect numbers — that is the parent's job.
+7. **Remote executors whose bytes stay put** (the binding sets
+   `executor` and results are too big to bring home): `specthis run`
+   cannot record the row here — it hashes local bytes. The finishing
+   move is split across the two machines:
+   - where the bytes are (typically the last line of the scripthut
+     workflow task itself): `specthis manifest <entry>` certifies the
+     outputs and uploads bytes + claim metadata to the byte cache;
+   - here, once the job reports complete: `specthis run <entry>
+     --adopt` records the `runs.toml` row from that manifest — no
+     bytes move.
+   After adoption the entry reads `ready [bytes remote]`; that IS the
+   success state. Report it as such and do NOT `cache fetch` the
+   outputs just to look at them. If adoption refuses with "no remote
+   claim", the local tree drifted from what ran (unpushed edits?) —
+   report that to the parent instead of retrying.
 
 ## Hard rules
 

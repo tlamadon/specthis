@@ -18,6 +18,13 @@ runs.toml is the only ledger touched.
      `specs/bindings.toml` or `SPECTHIS_CACHE_URL` is set) — verified
      bytes beat recompute. Add `--push` too if the user asked to
      share results.
+   - Entries reading `ready` with `bytes not local` are NOT stale and
+     need nothing: the claim stands, the bytes live in the cache.
+     `--fetch` materializes them only if a local step actually needs
+     the files; never re-run an entry just to get bytes back.
+   - An entry that ran remotely and was certified there
+     (`specthis manifest` on the compute machine) is recorded here
+     with `specthis run <entry> --adopt` — no execution, no bytes.
 3. **Respect the tiers.** If the stale queue contains
    `tier: intensive` entries (check the spec frontmatter or
    `specs/_index.json`), do not block on them casually:

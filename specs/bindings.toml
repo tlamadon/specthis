@@ -1,0 +1,13 @@
+# entry -> code vocabulary (hand-edited; not a claim)
+#
+# remote-status lives where status is derived today; the manifest/adopt
+# protocol is expected in a new module (rebind here if it lands elsewhere).
+
+[entries.remote-status]
+scripts = ["src/specthis/check.py"]
+
+[entries.remote-manifest]
+scripts = ["src/specthis/remote.py"]
+
+[entries.remote-adopt]
+scripts = ["src/specthis/remote.py"]

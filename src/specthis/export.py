@@ -181,6 +181,7 @@ section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
 .badge.unimplemented { background: #ebe8e2; color: #5a5a5a; }
 .badge.upstream      { background: #dce9f5; color: #23629c; }
 .badge.skipped       { background: #eeece6; color: #8a857a; }
+.badge.remote-bytes  { background: #e8e4f4; color: #4b3d8f; }
 .frontier { background: #fff; border: 1px solid var(--border);
   border-left: 4px solid #a04100; border-radius: 8px; padding: 12px 16px;
   margin-bottom: 20px; }
@@ -344,6 +345,16 @@ def _badge(status: Status) -> str:
     return f'<span class="badge {_STATUS_CLASS[status]}">{_e(status.value)}</span>'
 
 
+def _bytes_badge(report: Report) -> str:
+    """A second chip when the claim stands but the bytes are elsewhere."""
+    if report.materialized:
+        return ""
+    return (
+        ' <span class="badge remote-bytes" title="claim recorded; outputs not on '
+        'this disk — cache fetch materializes (verified)">bytes remote</span>'
+    )
+
+
 def _hint(report: Report, project: Project) -> str:
     if report.status is Status.UNIMPLEMENTED:
         return "no code at " + ", ".join(project.entries[report.entry].binding.scripts)
@@ -409,7 +420,7 @@ def _entry_rows(spec: SpecFile, reports: dict[str, Report]) -> str:
         rows.append(
             f'<tr id="{_e(_entry_anchor(entry.name))}">'
             f"<td><b>{_e(entry.name)}</b></td>"
-            f"<td>{_badge(r.status)}{moved}</td>"
+            f"<td>{_badge(r.status)}{_bytes_badge(r)}{moved}</td>"
             f"<td>{outputs}</td>"
             f"<td>{vouch}</td>"
             f"<td>{run}</td></tr>"
@@ -616,6 +627,9 @@ def _status_section(
         chips += (
             f'<span class="chip"><b>{len(project.skipped_entries)}</b> skipped</span>'
         )
+    remote_bytes = sum(1 for r in reports.values() if not r.materialized)
+    if remote_bytes:
+        chips += f'<span class="chip"><b>{remote_bytes}</b> bytes remote</span>'
 
     frontier_html = ""
     if local:
@@ -660,7 +674,7 @@ def _status_section(
     all_rows = "".join(
         f'<tr><td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
         f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
-        f"<td>{_badge(reports[name].status)}</td>"
+        f"<td>{_badge(reports[name].status)}{_bytes_badge(reports[name])}</td>"
         f"<td>{_e(e.spec.kind if e.spec.kind == 'library' else f'{e.spec.kind}/{e.tier}')}</td></tr>"
         for name, e in sorted(project.entries.items())
     )

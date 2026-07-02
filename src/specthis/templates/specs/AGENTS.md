@@ -53,6 +53,15 @@ reports, per entry: **unimplemented** / **audit needed** /
 Status is never written anywhere; it is derived. Nothing consults
 mtime.
 
+A ready entry may additionally be marked **bytes remote** (in `check`
+output, `status`, and the dashboard): its claim stands but the output
+bytes are not on this disk — they live in the byte cache, certified
+there by `specthis manifest` on the machine that ran the entry. This
+is a byte-locality fact, NOT a break: never re-run an entry to "fix"
+it, never treat it as stale, and never flag it in an audit.
+`specthis cache fetch <entry>` materializes the bytes (verified
+against the claim) if a local step actually needs them.
+
 ## Spec anatomy: contract + promised output
 
 - **`## Script`** (compute) / export prose (report) — *prose about how
@@ -101,7 +110,9 @@ Start mechanical, end judgmental:
    Never re-derive status yourself; never infer it from mtimes.
 2. For each entry on the frontier, characterise the repair:
    - **stale** — machine work. Report it; `specthis run --stale` (or
-     the user) fixes it. Nothing to judge.
+     the user) fixes it. Nothing to judge. (An entry that is *ready
+     (bytes remote)* is NOT on the frontier and needs no repair —
+     absent bytes are not staleness.)
    - **audit needed / rejected** — a mind's work. Open the entry's
      spec section and its scripts (paths are in `specthis status
      <entry>` / `specs/bindings.toml`) and judge **contract in

@@ -67,10 +67,12 @@ def test_push_fetch_roundtrip_restores_ready(root: Path, cached: Path) -> None:
     ledgers = [root / "specs/vouches.toml", root / "specs/runs.toml"]
     before = [p.read_bytes() for p in ledgers]
     (root / "results/alpha/fit.json").unlink()
-    assert status_of(root, "fit-alpha") is Status.STALE  # fresh-clone shape
+    r = check_project(load_project(root))["fit-alpha"]  # fresh-clone shape:
+    assert r.status is Status.READY and not r.materialized  # claim stands, bytes elsewhere
 
     fetch(project, "fit-alpha")
-    assert status_of(root, "fit-alpha") is Status.READY
+    r = check_project(load_project(root))["fit-alpha"]
+    assert r.status is Status.READY and r.materialized
     assert [p.read_bytes() for p in ledgers] == before  # zero ledger writes
 
 
