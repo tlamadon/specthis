@@ -111,10 +111,20 @@ Two more verbs render **views** — regenerated, never read back by the
 ledger:
 
 ```bash
+specthis lint      # grammar check: EVERY problem across all files at once
 specthis export    # write specs/specs.html + _index.json + _routing.json
 specthis serve     # live dashboard at localhost:8765; re-renders on any
                    # spec / ledger / code / output / host-doc change (writes nothing)
 ```
+
+Readers are lenient, writers are strict: `check`, `lint`, and the
+dashboard load whatever parses and *surface* the grammar problems (in
+the page, in a red "does not parse" sidebar group with the broken
+file's markdown still rendered best-effort, and in `check`'s output —
+which exits non-zero on problems). `run`, `vouch`, and `migrate`
+refuse to write ledgers against a tree that doesn't parse. The
+`/specthis-lint` slash command explains each problem and fixes the
+mechanical ones.
 
 The views include **host-doc routing**: for each report spec declaring
 `host_doc:` + `section_label:`, is every exported `.tex` actually
@@ -331,6 +341,18 @@ Known future extensions — each additive, none precluded by the core:
 output-schema-into-signature, quick-tier caching as an executor
 concern, section-scoped spec hashing if whole-file contract hashing
 ever causes too much re-judgment churn.
+
+**Journal entries** (proven in the POC, to be ported): a committed
+`journal/` directory of date-prefixed narrative entries
+(`journal/YYYY-MM-DD-slug.md`) plus sidecar artifacts (e.g. JSON
+bundles) that serve as durable download links even when the results
+directory itself is gitignored. Journals are their own `kind` in the
+dashboard: a dedicated nav group, a date-sorted index, and on the
+main page a card grid (date + title) with a client-side text filter
+and match count. Entries and journals cross-link — each entry page
+gets a "Related entries and journal" section pointing at the
+narrative and its bundles, and journal entries link back to the
+entries they narrate.
 
 ## License
 

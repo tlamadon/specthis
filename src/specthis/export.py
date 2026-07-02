@@ -28,7 +28,7 @@ from pathlib import Path
 import markdown as _markdown
 
 from .check import LOCAL_BREAKS, Report, Status, check_project, frontier
-from .parse import Project, SpecFile, load_project
+from .parse import _FRONTMATTER, Problem, Project, SpecFile, load_project_lenient
 from .routing import RoutingReport, build_routing_json, check_routing
 
 _KIND_ORDER = {
@@ -124,6 +124,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
 .kind-templates { color: var(--kind-templates); } .kind-compute { color: var(--kind-compute); }
 .kind-report { color: var(--kind-report); }   .kind-figure { color: var(--kind-figure); }
 .kind-library { color: var(--kind-library); }
+.kind-broken { color: #a40e26; }
 .nav-file { margin-bottom: 0.55rem; padding: 0.1rem 0 0.1rem 0.5rem;
   border-left: 3px solid transparent; }
 html.js-routed .nav-file.active { border-left-color: var(--accent);
@@ -166,6 +167,7 @@ section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
 .warnings { background: #fff; border: 1px solid var(--border);
   border-left: 4px solid #b85a1e; border-radius: 8px; padding: 12px 16px;
   margin-bottom: 20px; font-size: 0.9rem; }
+.warnings.problems { border-left-color: #a40e26; }
 table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.9rem; }
 th { text-align: left; font-size: 0.72rem; text-transform: uppercase;
   letter-spacing: .04em; color: var(--muted); font-weight: 600;
@@ -390,19 +392,45 @@ def _worst_dot(spec: SpecFile, reports: dict[str, Report]) -> str:
     return '<span class="dot dot-ready"></span>'
 
 
-def _sidebar(project: Project, reports: dict[str, Report], generated: str) -> str:
+def _broken_files(project: Project, problems: list[Problem]) -> list[str]:
+    """Problem files with no parsed SpecFile — they need their own sections."""
+    parsed = {s.path.name for s in project.specs}
+    return sorted({p.file for p in problems if p.file.endswith(".md") and p.file not in parsed})
+
+
+def _sidebar(
+    project: Project,
+    reports: dict[str, Report],
+    problems: list[Problem],
+    generated: str,
+) -> str:
     groups: dict[str, list[SpecFile]] = {}
     for spec in sorted(project.specs, key=lambda s: s.name):
         groups.setdefault(spec.kind, []).append(spec)
+    broken = _broken_files(project, problems)
+    problem_files = {p.file for p in problems}
 
     parts = [
         '<nav class="sidebar">',
         f"<h1>{_e(project.root.name)} &middot; specs/</h1>",
-        f'<div class="meta-line">{len(project.specs)} files &middot; generated {_e(generated[:10])}</div>',
+        f'<div class="meta-line">{len(project.specs) + len(broken)} files &middot; generated {_e(generated[:10])}</div>',
         '<div class="nav-group">'
         '<div class="nav-file" data-file-anchor="status">'
         '<a href="#status">Status dashboard</a></div></div>',
     ]
+    if broken:
+        parts.append(
+            '<div class="nav-group"><div class="nav-group-header">'
+            '<span class="kind kind-broken">does not parse</span></div>'
+        )
+        for filename in broken:
+            anchor = _spec_anchor(Path(filename).stem)
+            parts.append(
+                f'<div class="nav-file" data-file-anchor="{_e(anchor)}">'
+                f'<span class="dot dot-break"></span>'
+                f'<a href="#{_e(anchor)}" title="{_e(filename)}">{_e(filename)}</a></div>'
+            )
+        parts.append("</div>")
     for kind in sorted(groups, key=lambda k: _KIND_ORDER.get(k, 9)):
         parts.append(
             f'<div class="nav-group"><div class="nav-group-header">'
@@ -410,9 +438,14 @@ def _sidebar(project: Project, reports: dict[str, Report], generated: str) -> st
         )
         for spec in groups[kind]:
             anchor = _spec_anchor(spec.name)
+            dot = (
+                '<span class="dot dot-break"></span>'
+                if spec.path.name in problem_files
+                else _worst_dot(spec, reports)
+            )
             parts.append(
                 f'<div class="nav-file" data-file-anchor="{_e(anchor)}">'
-                f"{_worst_dot(spec, reports)}"
+                f"{dot}"
                 f'<a href="#{_e(anchor)}" title="{_e(spec.path.name)}">{_e(spec.title)}</a></div>'
             )
         parts.append("</div>")
@@ -420,10 +453,42 @@ def _sidebar(project: Project, reports: dict[str, Report], generated: str) -> st
     return "".join(parts)
 
 
+def _problems_box(problems: list[Problem]) -> str:
+    if not problems:
+        return ""
+    items = "".join(f"<li>{_e(p.message)}</li>" for p in problems)
+    return (
+        '<div class="warnings problems"><b>Spec problems</b> — grammar, '
+        f"fix before trusting anything below (`specthis lint`):<ul>{items}</ul></div>"
+    )
+
+
+def _broken_section(root: Path, filename: str, problems: list[Problem]) -> str:
+    """Best-effort page for a file that failed to parse: the errors, then
+    the markdown rendered anyway (minus any frontmatter block)."""
+    messages = "".join(f"<li>{_e(p.message)}</li>" for p in problems if p.file == filename)
+    body_html = ""
+    path = root / "specs" / filename
+    if path.is_file():
+        text = path.read_text(encoding="utf-8")
+        m = _FRONTMATTER.match(text)
+        rendered = _markdown.markdown(
+            text[m.end():] if m else text, extensions=["tables", "fenced_code"]
+        )
+        body_html = f'<div class="md">{rendered}</div>'
+    return (
+        f'<section class="spec" id="{_e(_spec_anchor(Path(filename).stem))}">'
+        f'<h2 class="spec-title">{_e(filename)}</h2>'
+        f'<div class="warnings problems"><b>Does not parse</b><ul>{messages}</ul></div>'
+        f"{body_html}</section>"
+    )
+
+
 def _status_section(
     project: Project,
     reports: dict[str, Report],
     routing: dict[str, RoutingReport],
+    problems: list[Problem],
 ) -> str:
     local, waiting, _ready = frontier(reports)
     counts: dict[Status, int] = {}
@@ -494,7 +559,7 @@ def _status_section(
         '<section class="spec" id="status">'
         '<h2 class="spec-title">Status dashboard</h2>'
         f'<div class="chips">{chips}</div>'
-        f"{frontier_html}{warnings_html}{all_table}</section>"
+        f"{_problems_box(problems)}{frontier_html}{warnings_html}{all_table}</section>"
     )
 
 
@@ -553,11 +618,22 @@ def render_html(
     reports: dict[str, Report],
     routing: dict[str, RoutingReport],
     generated: str,
+    problems: list[Problem] | None = None,
 ) -> str:
-    sections = [_status_section(project, reports, routing)] + [
-        _spec_section(spec, project, reports, routing)
-        for spec in sorted(project.specs, key=lambda s: (_KIND_ORDER.get(s.kind, 9), s.name))
-    ]
+    problems = problems or []
+    sections = (
+        [_status_section(project, reports, routing, problems)]
+        + [
+            _broken_section(project.root, filename, problems)
+            for filename in _broken_files(project, problems)
+        ]
+        + [
+            _spec_section(spec, project, reports, routing)
+            for spec in sorted(
+                project.specs, key=lambda s: (_KIND_ORDER.get(s.kind, 9), s.name)
+            )
+        ]
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -566,7 +642,7 @@ def render_html(
 <style>{_CSS}</style>
 {_MATHJAX}</head>
 <body><div class="layout">
-{_sidebar(project, reports, generated)}
+{_sidebar(project, reports, problems, generated)}
 <main class="content">
 {"".join(sections)}
 </main></div>
@@ -575,22 +651,24 @@ def render_html(
 """
 
 
-def render(project: Project) -> tuple[str, dict, dict]:
+def render(project: Project, problems: list[Problem] | None = None) -> tuple[str, dict, dict]:
     """One joined view: (specs.html text, _index.json data, _routing.json data)."""
     reports = check_project(project)
     routing = {r.spec: r for r in check_routing(project)}
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return (
-        render_html(project, reports, routing, generated),
+        render_html(project, reports, routing, generated, problems),
         build_index(project, reports),
         build_routing_json(project),
     )
 
 
 def write_artefacts(root: Path) -> list[Path]:
-    """Render and write specs/specs.html + _index.json + _routing.json."""
-    project = load_project(root)
-    html_text, index, routing = render(project)
+    """Render and write specs/specs.html + _index.json + _routing.json.
+
+    Lenient: grammar problems land in the page, not on stderr."""
+    project, problems = load_project_lenient(root)
+    html_text, index, routing = render(project, problems)
     targets = {
         project.specs_dir / "specs.html": html_text,
         project.specs_dir / "_index.json": json.dumps(index, indent=2) + "\n",

@@ -38,7 +38,7 @@ from .ledger import (
     record_run,
     record_vouch,
 )
-from .parse import Project, SpecError, load_project
+from .parse import Problem, Project, SpecError, load_project, load_project_lenient
 
 
 def _now() -> str:
@@ -50,6 +50,20 @@ def _load(project_path: Path) -> Project:
         return load_project(project_path)
     except SpecError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _load_lenient(project_path: Path) -> tuple[Project, list[Problem]]:
+    try:
+        return load_project_lenient(project_path)
+    except SpecError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _echo_problems(problems: list[Problem]) -> None:
+    if problems:
+        click.echo("spec problems (grammar — fix before trusting anything below):", err=True)
+        for p in problems:
+            click.echo(f"  {p.message}", err=True)
 
 
 def _path_option(f):
@@ -94,9 +108,11 @@ def check_cmd(project_path: Path) -> None:
     """Report the frontier: local breaks itemized, downstream summarized.
 
     Exits non-zero if any entry is broken for local reasons
-    (unimplemented / audit needed / rejected / stale).
+    (unimplemented / audit needed / rejected / stale) or the spec
+    directory has grammar problems (see `specthis lint`).
     """
-    project = _load(project_path)
+    project, problems = _load_lenient(project_path)
+    _echo_problems(problems)
     reports = check_project(project)
     local, waiting, ready = frontier(reports)
     if local:
@@ -125,8 +141,30 @@ def check_cmd(project_path: Path) -> None:
         for w in warnings:
             click.echo(f"  {w}", err=True)
 
-    if local:
+    if local or problems:
         sys.exit(1)
+
+
+# ----------------------------------------------------------------- lint
+
+
+@main.command("lint")
+@_path_option
+def lint_cmd(project_path: Path) -> None:
+    """Check the spec directory's grammar and list EVERY problem.
+
+    Frontmatter, entry blocks, bindings, consumes/references edges —
+    all files, all problems at once (the other verbs stop at the
+    first). Exits non-zero if anything is wrong. Reads only.
+    """
+    _, problems = _load_lenient(project_path)
+    if not problems:
+        click.echo("specs are clean")
+        return
+    for p in problems:
+        click.echo(f"  {p.message}")
+    click.echo(f"{len(problems)} problem(s)", err=True)
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------- status

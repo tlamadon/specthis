@@ -50,6 +50,18 @@ class SpecError(Exception):
 
 
 @dataclass
+class Problem:
+    """One grammar violation, attributed to a file.
+
+    ``message`` is self-describing (it already names the file);
+    ``file`` exists so views can group problems per file.
+    """
+
+    file: str
+    message: str
+
+
+@dataclass
 class Binding:
     scripts: list[str]
     run: str | None
@@ -243,47 +255,80 @@ def _default_binding(entry_name: str) -> Binding:
     return Binding(scripts=[script], run=f"python {script}")
 
 
-def load_project(root: Path) -> Project:
-    """Parse every spec under ``<root>/specs/`` into a validated DAG."""
+def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
+    """Parse ``<root>/specs/``, collecting grammar problems instead of dying.
+
+    Unparseable files are excluded from the project; invalid edges are
+    dropped; an unbound library entry keeps an empty binding (deriving
+    *unimplemented*). Every accommodation is recorded as a
+    :class:`Problem` so callers can surface the full list. Only a
+    missing ``specs/`` directory still raises.
+    """
     specs_dir = root / "specs"
     if not specs_dir.is_dir():
         raise SpecError(f"no specs/ directory under {root}")
 
-    specs = [parse_spec(p) for p in sorted(specs_dir.glob("*.md"))]
-    bindings, package_globs, cache_url = _load_bindings(specs_dir)
+    problems: list[Problem] = []
+    specs: list[SpecFile] = []
+    for path in sorted(specs_dir.glob("*.md")):
+        try:
+            specs.append(parse_spec(path))
+        except SpecError as exc:
+            problems.append(Problem(path.name, str(exc)))
+
+    try:
+        bindings, package_globs, cache_url = _load_bindings(specs_dir)
+    except SpecError as exc:
+        problems.append(Problem("bindings.toml", str(exc)))
+        bindings, package_globs, cache_url = {}, [], None
 
     entries: dict[str, Entry] = {}
     for spec in specs:
-        for entry in spec.entries:
+        for entry in list(spec.entries):
             if entry.name in entries:
-                raise SpecError(
-                    f"duplicate entry name `{entry.name}` "
-                    f"({entries[entry.name].spec.path.name} and {spec.path.name})"
+                problems.append(
+                    Problem(
+                        spec.path.name,
+                        f"duplicate entry name `{entry.name}` "
+                        f"({entries[entry.name].spec.path.name} and {spec.path.name})",
+                    )
                 )
+                spec.entries.remove(entry)
+                continue
             if spec.kind == "library":
                 # Modules live at arbitrary package paths; no naming
                 # convention can guess them, so the binding is mandatory.
                 binding = bindings.get(entry.name)
                 if binding is None or not binding.scripts:
-                    raise SpecError(
-                        f"{spec.path.name}: library entry `{entry.name}` needs "
-                        "`scripts` in specs/bindings.toml (no convention default)"
+                    problems.append(
+                        Problem(
+                            spec.path.name,
+                            f"{spec.path.name}: library entry `{entry.name}` needs "
+                            "`scripts` in specs/bindings.toml (no convention default)",
+                        )
                     )
-                entry.binding = binding
+                    entry.binding = Binding(scripts=[], run=None)
+                else:
+                    entry.binding = binding
             else:
                 entry.binding = bindings.get(entry.name, _default_binding(entry.name))
             entries[entry.name] = entry
 
     spec_names = {s.name for s in specs}
     for spec in specs:
-        for up in spec.consumes:
+        for up in list(spec.consumes):
             if up not in entries:
-                raise SpecError(f"{spec.path.name}: consumes unknown entry `{up}`")
+                problems.append(
+                    Problem(spec.path.name, f"{spec.path.name}: consumes unknown entry `{up}`")
+                )
+                spec.consumes.remove(up)
         for ref in spec.references:
             if Path(ref).stem not in spec_names:
-                raise SpecError(f"{spec.path.name}: references unknown spec `{ref}`")
+                problems.append(
+                    Problem(spec.path.name, f"{spec.path.name}: references unknown spec `{ref}`")
+                )
 
-    return Project(
+    project = Project(
         root=root,
         specs_dir=specs_dir,
         specs=specs,
@@ -297,3 +342,18 @@ def load_project(root: Path) -> Project:
             for s in e.binding.scripts
         ),
     )
+    return project, problems
+
+
+def load_project(root: Path) -> Project:
+    """Parse ``<root>/specs/`` into a validated DAG; any problem raises.
+
+    The strict form, used by the writing verbs (run/vouch/migrate) —
+    a ledger should never be written against a tree that doesn't
+    parse. Readers (check/lint/export/serve) use
+    :func:`load_project_lenient` and surface the problems instead.
+    """
+    project, problems = load_project_lenient(root)
+    if problems:
+        raise SpecError("\n".join(p.message for p in problems))
+    return project

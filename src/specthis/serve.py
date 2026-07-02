@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .export import render
-from .parse import Project, SpecError, load_project
+from .parse import Project, SpecError, load_project_lenient
 
 POLL_SECONDS = 1.0
 
@@ -90,8 +90,10 @@ class Dashboard:
             return False
         error = ""
         try:
-            project = load_project(self.root)
-            page, _index, _routing = render(project)
+            # Lenient: grammar problems render into the page; only a
+            # missing specs/ directory falls through to the error page.
+            project, problems = load_project_lenient(self.root)
+            page, _index, _routing = render(project, problems)
             self._project = project
             # the watch list may have grown (new scripts/outputs) — re-stat it
             fingerprint = _stat_fingerprint(_watched_paths(self.root, project))
