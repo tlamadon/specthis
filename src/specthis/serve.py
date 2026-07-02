@@ -29,6 +29,7 @@ POLL_SECONDS = 1.0
 def _watched_paths(root: Path, project: Project | None) -> list[Path]:
     """Everything the rendered view depends on."""
     paths = sorted((root / "specs").glob("*.md")) + sorted((root / "specs").glob("*.toml"))
+    paths += sorted((root / "journal").glob("*.md"))
     if project is not None:
         rel: set[str] = set()
         for entry in project.entries.values():

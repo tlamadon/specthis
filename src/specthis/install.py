@@ -6,7 +6,7 @@ from importlib import resources
 from pathlib import Path
 
 AGENT_NAMES = ("spec-auditor", "spec-implementer", "experiment-runner", "spec-critic")
-COMMAND_NAMES = ("specthis-vouch", "specthis-run", "specthis-lint")
+COMMAND_NAMES = ("specthis-vouch", "specthis-run", "specthis-lint", "specthis-journal")
 SPEC_TEMPLATE_NAMES = ("README.md", "AGENTS.md")
 
 

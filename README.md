@@ -10,8 +10,8 @@ of repair does each broken one need — a mind (re-judge), a machine
 > Status: **implemented and tested** — the ledger verbs (`check` /
 > `status` / `run` / `vouch` / `migrate`), the scaffolding (`install` /
 > `init`), the live dashboard (`export` / `serve`) with spec browsing
-> and host-doc routing, and the remote cache. See [Roadmap](#roadmap)
-> for the deliberately-deferred extensions.
+> and host-doc routing, the journal view, and the remote cache. See
+> [Roadmap](#roadmap) for the deliberately-deferred extensions.
 
 ## The model
 
@@ -280,6 +280,38 @@ builds the local source and runs it.
 The dashboard serves on `127.0.0.1:8765` by default; pass
 `--port`/`--host` to `specthis serve` if that port is taken.
 
+## Journal
+
+Alongside the claims lives the narrative: `journal/` at the project
+root holds dated entries, one markdown file per story —
+
+```
+journal/2026-06-30-smc-ffbs-resampling-fix.md
+journal/2026-06-10-abb-calibration-and-lom-fits.md
+```
+
+A journal entry is prose, not a claim: the ledger neither reads nor
+hashes it, no status depends on it, and there is nothing to vouch.
+It records what the ledger cannot — why a result looks the way it
+does, which alternatives died and how, the numbers behind a decision.
+Small shareable artefacts (a JSON bundle, a figure) can be committed
+next to their entry so they stay downloadable even when the results
+directory is gitignored.
+
+The dashboard picks the directory up automatically: a journal group
+in the sidebar, a filterable card index (date + title), and one page
+per entry with the narrative rendered. Markdown links cross the two
+worlds in both directions — a spec linking
+`journal/2026-06-30-….md` and an entry linking
+`../specs/compute-alpha.md` both become hash-routed links in the
+page. The date comes from the filename prefix, the title from the
+first `#` heading (or frontmatter `title:`).
+
+The `/specthis-journal [topic]` slash command (installed by
+`specthis install`) writes an entry from the current Claude Code
+session: what was attempted, what was decided and why, the dead ends
+worth remembering, with links to the specs involved.
+
 ## Scaffold a project
 
 ```bash
@@ -287,7 +319,7 @@ specthis install    # writes the Claude Code subagents into .claude/agents/
 specthis init       # creates specs/ with README.md + AGENTS.md templates
 ```
 
-Four Claude Code subagents and two slash commands cover the daily
+Four Claude Code subagents and the slash commands cover the daily
 operations:
 
 - **`spec-auditor`** — runs `specthis check`/`status` for the
@@ -315,6 +347,10 @@ operations:
   skipped as needing a mind. Together the two commands split the
   frontier by repair kind: `/specthis-vouch` for minds,
   `/specthis-run` for machines.
+- **`/specthis-journal [topic]`** — the narrative pen: writes a dated
+  entry into `journal/` from the current session (see
+  [Journal](#journal)). No ledger is touched — the journal records
+  the why, the ledgers record the what.
 
 ## Migrating from the old `_lock.json`
 
@@ -334,25 +370,28 @@ Done: spec/bindings parsing, content hashing + composed signatures,
 both ledgers, status derivation + frontier, the five verbs, migration,
 scaffolding, agent templates, the dashboard (`export` + `serve` with
 live reload, stdlib only), host-doc routing (`_routing.json` +
-orphaned-export checks), and the remote cache (`file://` and `s3://`
-backends, digest-verified fetch keyed by the composed signature).
+orphaned-export checks), the remote cache (`file://` and `s3://`
+backends, digest-verified fetch keyed by the composed signature), and
+the journal (`journal/` narratives rendered into the dashboard, plus
+`/specthis-journal`).
 
 Known future extensions — each additive, none precluded by the core:
-output-schema-into-signature, quick-tier caching as an executor
-concern, section-scoped spec hashing if whole-file contract hashing
-ever causes too much re-judgment churn.
 
-**Journal entries** (proven in the POC, to be ported): a committed
-`journal/` directory of date-prefixed narrative entries
-(`journal/YYYY-MM-DD-slug.md`) plus sidecar artifacts (e.g. JSON
-bundles) that serve as durable download links even when the results
-directory itself is gitignored. Journals are their own `kind` in the
-dashboard: a dedicated nav group, a date-sorted index, and on the
-main page a card grid (date + title) with a client-side text filter
-and match count. Entries and journals cross-link — each entry page
-gets a "Related entries and journal" section pointing at the
-narrative and its bundles, and journal entries link back to the
-entries they narrate.
+- **`skip: true` in frontmatter** — comment a spec out while
+  developing. ("Skip" over "ignore"/"draft": it covers both a
+  half-written spec and a finished one temporarily taken out of play,
+  and says what the tools do, not why.) Semantics to honor when built:
+  skipped entries leave the frontier and every count (`check` neither
+  itemizes nor tallies them); `run`/`vouch` refuse them; their ledger
+  rows are kept but dormant; consuming a skipped entry is a lint
+  problem (skip downstream too, or unwire the edge); the dashboard
+  still renders the spec, greyed, marked *skipped*. Toggling the flag
+  edits the frontmatter and therefore moves `spec_sha` — so a
+  re-enabled spec honestly returns to *audit needed*.
+- **Output-schema-into-signature.**
+- **Quick-tier caching** as an executor concern.
+- **Section-scoped spec hashing** if whole-file contract hashing ever
+  causes too much re-judgment churn.
 
 ## License
 

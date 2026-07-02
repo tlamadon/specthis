@@ -6,8 +6,9 @@ full markdown contract, rendered), and a "Status dashboard" section
 carries the frontier and the cross-project entry table. Everything is
 a *regenerated view*, never a source of truth: it joins the parsed
 specs (:mod:`specthis.parse`), the derived statuses
-(:mod:`specthis.check`), and the host-doc routing scan
-(:mod:`specthis.routing`) — and nothing else. ``specthis check``
+(:mod:`specthis.check`), the host-doc routing scan
+(:mod:`specthis.routing`), and the journal narratives
+(:mod:`specthis.journal`) — and nothing else. ``specthis check``
 never reads these artefacts; deleting them changes no answer.
 
 Spec files are the user's own repo content, so their markdown renders
@@ -28,6 +29,7 @@ from pathlib import Path
 import markdown as _markdown
 
 from .check import LOCAL_BREAKS, Report, Status, check_project, frontier
+from .journal import JournalEntry, load_journal
 from .parse import _FRONTMATTER, Problem, Project, SpecFile, load_project_lenient
 from .routing import RoutingReport, build_routing_json, check_routing
 
@@ -51,7 +53,11 @@ _STATUS_CLASS = {
 }
 
 
-def build_index(project: Project, reports: dict[str, Report]) -> dict:
+def build_index(
+    project: Project,
+    reports: dict[str, Report],
+    journal: list[JournalEntry] | None = None,
+) -> dict:
     """The queryable JSON view: per spec, frontmatter + per-entry facts."""
     specs = []
     for spec in project.specs:
@@ -87,7 +93,13 @@ def build_index(project: Project, reports: dict[str, Report]) -> dict:
                 "entries": entries,
             }
         )
-    return {"specs": specs}
+    return {
+        "specs": specs,
+        "journal": [
+            {"file": f"journal/{j.path.name}", "date": j.date, "title": j.title}
+            for j in (journal or [])
+        ],
+    }
 
 
 _CSS = """
@@ -98,7 +110,7 @@ _CSS = """
   --kind-meta: #6e6e6e; --kind-definitions: #2e7d5b;
   --kind-templates: #6a3d8a; --kind-compute: #2e6e9e;
   --kind-report: #b85a1e; --kind-figure: #1f7a7a;
-  --kind-library: #8a6d1f;
+  --kind-library: #8a6d1f; --kind-journal: #335c81;
 }
 * { box-sizing: border-box; }
 html { font-size: 16px; scroll-behavior: smooth; }
@@ -124,6 +136,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
 .kind-templates { color: var(--kind-templates); } .kind-compute { color: var(--kind-compute); }
 .kind-report { color: var(--kind-report); }   .kind-figure { color: var(--kind-figure); }
 .kind-library { color: var(--kind-library); }
+.kind-journal { color: var(--kind-journal); }
 .kind-broken { color: #a40e26; }
 .nav-file { margin-bottom: 0.55rem; padding: 0.1rem 0 0.1rem 0.5rem;
   border-left: 3px solid transparent; }
@@ -194,6 +207,34 @@ td a { color: var(--accent); text-decoration: none; }
 .md blockquote { border-left: 3px solid var(--border); margin: 6px 0;
   padding: 0 12px; color: var(--muted); }
 
+/* journal: dates, filter box, card grid (mirrors the POC dashboard) */
+.journal-date { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em; color: var(--muted); margin-right: 0.4rem; }
+.nav-file .journal-date { font-size: 0.78em; margin-right: 0.3rem; }
+.journal-filter { display: flex; align-items: center; gap: 0.6rem;
+  margin: 0.4rem 0 1rem; }
+.journal-filter input { flex: 1 1 auto; padding: 0.5rem 0.7rem;
+  font-size: 0.95rem; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: inherit; min-width: 0; }
+.journal-filter input:focus { outline: none; border-color: var(--kind-journal);
+  box-shadow: 0 0 0 2px rgba(51, 92, 129, 0.18); }
+.journal-filter-count { font-family: ui-monospace, monospace;
+  font-size: 0.8em; color: var(--muted); white-space: nowrap; }
+.journal-cards { display: grid; gap: 0.7rem;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  margin: 0 0 1.4rem; }
+.journal-card { display: flex; flex-direction: column; gap: 0.3rem;
+  padding: 0.7rem 0.85rem; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg); color: inherit; text-decoration: none;
+  transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s; }
+.journal-card:hover { border-color: var(--kind-journal);
+  box-shadow: 0 2px 6px rgba(51, 92, 129, 0.15); transform: translateY(-1px); }
+.journal-card-date { font-family: ui-monospace, monospace; font-size: 0.78em;
+  color: var(--muted); letter-spacing: 0.02em; }
+.journal-card-title { font-size: 0.95em; font-weight: 600; line-height: 1.3;
+  color: inherit; }
+.journal-card.is-hidden { display: none; }
+
 .back-to-status { position: fixed; bottom: 1rem; right: 1rem;
   background: var(--accent); color: #fff; padding: 0.5rem 0.85rem;
   border-radius: 999px; font-size: 0.75rem; font-weight: 600;
@@ -232,6 +273,25 @@ _ROUTER_JS = """
 
   window.addEventListener('hashchange', route);
   route();
+
+  // Journal index: client-side text filter over the cards.
+  const filterInput = document.getElementById('journal-filter-input');
+  if (filterInput) {
+    const cards = Array.from(document.querySelectorAll('.journal-card'));
+    const count = document.getElementById('journal-filter-count');
+    const apply = () => {
+      const q = filterInput.value.trim().toLowerCase();
+      let shown = 0;
+      for (const c of cards) {
+        const hit = !q || (c.dataset.search || '').includes(q);
+        c.classList.toggle('is-hidden', !hit);
+        if (hit) shown += 1;
+      }
+      if (count) count.textContent = shown + ' / ' + cards.length;
+    };
+    filterInput.addEventListener('input', apply);
+    apply();
+  }
 
   // Live reload (when served): poll the state token, preserve scroll.
   if (location.protocol.startsWith('http')) {
@@ -294,6 +354,10 @@ def _entry_anchor(name: str) -> str:
 
 def _spec_anchor(name: str) -> str:
     return f"spec-{name}"
+
+
+def _journal_anchor(stem: str) -> str:
+    return f"journal-{stem}"
 
 
 def _entry_rows(spec: SpecFile, reports: dict[str, Report]) -> str:
@@ -363,19 +427,26 @@ def _routing_line(spec: SpecFile, rr: RoutingReport | None) -> str:
 _MD_HREF = re.compile(r'href="(?!(?:[a-z][a-z0-9+.-]*:|//|#))([^"]+?\.md)(#[^"]*)?"')
 
 
-def _rewrite_spec_links(rendered: str, spec_names: set[str]) -> str:
-    """Point markdown links at sibling specs to their hash-routed section.
+def _rewrite_spec_links(
+    rendered: str, spec_names: set[str], journal_stems: set[str] | None = None
+) -> str:
+    """Point markdown links at sibling specs/journal to their hash-routed section.
 
     Authors write ``[models](models.md)`` (or ``./models.md``,
-    ``specs/models.md``); in the single-page viewer those must become
-    ``#spec-models`` or they 404. Links whose stem is not a known spec
-    (external URLs, other repo files) are left untouched.
+    ``specs/models.md``) and ``[narrative](journal/2026-06-30-fix.md)``;
+    in the single-page viewer those must become ``#spec-models`` /
+    ``#journal-2026-06-30-fix`` or they 404. Links whose stem is neither
+    a known spec nor a journal entry (external URLs, other repo files)
+    are left untouched.
     """
+    journal_stems = journal_stems or set()
 
     def repl(m: re.Match[str]) -> str:
         stem = Path(m.group(1)).stem
         if stem in spec_names:
             return f'href="#{_spec_anchor(stem)}"'
+        if stem in journal_stems:
+            return f'href="#{_journal_anchor(stem)}"'
         return m.group(0)
 
     return _MD_HREF.sub(repl, rendered)
@@ -403,6 +474,7 @@ def _sidebar(
     reports: dict[str, Report],
     problems: list[Problem],
     generated: str,
+    journal: list[JournalEntry],
 ) -> str:
     groups: dict[str, list[SpecFile]] = {}
     for spec in sorted(project.specs, key=lambda s: s.name):
@@ -447,6 +519,22 @@ def _sidebar(
                 f'<div class="nav-file" data-file-anchor="{_e(anchor)}">'
                 f"{dot}"
                 f'<a href="#{_e(anchor)}" title="{_e(spec.path.name)}">{_e(spec.title)}</a></div>'
+            )
+        parts.append("</div>")
+    if journal:
+        parts.append(
+            '<div class="nav-group nav-journal"><div class="nav-group-header">'
+            '<span class="kind kind-journal">journal</span></div>'
+            '<div class="nav-file" data-file-anchor="journal">'
+            f'<a href="#journal">Journal</a> <span class="journal-date">({len(journal)})</span></div>'
+        )
+        for entry in journal:
+            anchor = _journal_anchor(entry.stem)
+            date = f'<span class="journal-date">{_e(entry.date)}</span>' if entry.date else ""
+            parts.append(
+                f'<div class="nav-file" data-file-anchor="{_e(anchor)}">'
+                f'{date}<a href="#{_e(anchor)}" title="{_e(entry.path.name)}">'
+                f"{_e(entry.title)}</a></div>"
             )
         parts.append("</div>")
     parts.append("</nav>")
@@ -568,6 +656,7 @@ def _spec_section(
     project: Project,
     reports: dict[str, Report],
     routing: dict[str, RoutingReport],
+    journal_stems: set[str] | None = None,
 ) -> str:
     spec_names = {s.name for s in project.specs}
     pair = ""
@@ -601,7 +690,9 @@ def _spec_section(
     body_html = ""
     if spec.body.strip():
         rendered = _markdown.markdown(spec.body, extensions=["tables", "fenced_code"])
-        body_html = f'<div class="md">{_rewrite_spec_links(rendered, spec_names)}</div>'
+        body_html = (
+            f'<div class="md">{_rewrite_spec_links(rendered, spec_names, journal_stems)}</div>'
+        )
 
     return (
         f'<section class="spec" id="{_e(_spec_anchor(spec.name))}">'
@@ -613,14 +704,63 @@ def _spec_section(
     )
 
 
+def _journal_index_section(journal: list[JournalEntry]) -> str:
+    """The filterable card grid over every journal entry, newest first."""
+    cards = []
+    for entry in journal:
+        search = _e(f"{entry.date} {entry.stem} {entry.title}".lower())
+        date = f'<span class="journal-card-date">{_e(entry.date)}</span>' if entry.date else ""
+        cards.append(
+            f'<a class="journal-card" href="#{_e(_journal_anchor(entry.stem))}" '
+            f'data-search="{search}">{date}'
+            f'<span class="journal-card-title">{_e(entry.title)}</span></a>'
+        )
+    return (
+        '<section class="spec" id="journal">'
+        '<h2 class="spec-title">Journal</h2>'
+        '<div class="spec-meta"><span class="kind kind-journal">journal</span> '
+        "<code>journal/</code></div>"
+        '<div class="journal-filter">'
+        '<input id="journal-filter-input" type="search" '
+        'placeholder="filter entries&hellip;" autocomplete="off">'
+        f'<span class="journal-filter-count" id="journal-filter-count">'
+        f"{len(journal)} / {len(journal)}</span></div>"
+        f'<div class="journal-cards">{"".join(cards)}</div></section>'
+    )
+
+
+def _journal_section(
+    entry: JournalEntry, spec_names: set[str], journal_stems: set[str]
+) -> str:
+    date = f'<span class="journal-date">{_e(entry.date)}</span> ' if entry.date else ""
+    meta = (
+        '<div class="spec-meta"><span class="kind kind-journal">journal</span> '
+        f"<code>journal/{_e(entry.path.name)}</code></div>"
+    )
+    body_html = ""
+    if entry.body.strip():
+        rendered = _markdown.markdown(entry.body, extensions=["tables", "fenced_code"])
+        body_html = (
+            f'<div class="md">{_rewrite_spec_links(rendered, spec_names, journal_stems)}</div>'
+        )
+    return (
+        f'<section class="spec journal-entry" id="{_e(_journal_anchor(entry.stem))}">'
+        f'<h2 class="spec-title">{date}{_e(entry.title)}</h2>{meta}{body_html}</section>'
+    )
+
+
 def render_html(
     project: Project,
     reports: dict[str, Report],
     routing: dict[str, RoutingReport],
     generated: str,
     problems: list[Problem] | None = None,
+    journal: list[JournalEntry] | None = None,
 ) -> str:
     problems = problems or []
+    journal = journal or []
+    spec_names = {s.name for s in project.specs}
+    journal_stems = {j.stem for j in journal}
     sections = (
         [_status_section(project, reports, routing, problems)]
         + [
@@ -628,11 +768,13 @@ def render_html(
             for filename in _broken_files(project, problems)
         ]
         + [
-            _spec_section(spec, project, reports, routing)
+            _spec_section(spec, project, reports, routing, journal_stems)
             for spec in sorted(
                 project.specs, key=lambda s: (_KIND_ORDER.get(s.kind, 9), s.name)
             )
         ]
+        + ([_journal_index_section(journal)] if journal else [])
+        + [_journal_section(j, spec_names, journal_stems) for j in journal]
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -642,7 +784,7 @@ def render_html(
 <style>{_CSS}</style>
 {_MATHJAX}</head>
 <body><div class="layout">
-{_sidebar(project, reports, problems, generated)}
+{_sidebar(project, reports, problems, generated, journal)}
 <main class="content">
 {"".join(sections)}
 </main></div>
@@ -655,10 +797,11 @@ def render(project: Project, problems: list[Problem] | None = None) -> tuple[str
     """One joined view: (specs.html text, _index.json data, _routing.json data)."""
     reports = check_project(project)
     routing = {r.spec: r for r in check_routing(project)}
+    journal = load_journal(project.root)
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return (
-        render_html(project, reports, routing, generated, problems),
-        build_index(project, reports),
+        render_html(project, reports, routing, generated, problems, journal),
+        build_index(project, reports, journal),
         build_routing_json(project),
     )
 
