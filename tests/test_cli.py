@@ -73,6 +73,25 @@ def test_vouch_ok_refused_over_standing_rejection(root: Path) -> None:
     assert "standing rejection" in result.output
 
 
+def test_vouch_notes_unverified_upstream(root: Path) -> None:
+    result = run_cli("vouch", "fit-beta", "--as", "reviewer", "--path", str(root))
+    assert result.exit_code == 0
+    assert "recorded ok" in result.output
+    assert "upstream not yet verified (fit-alpha)" in result.output
+
+
+def test_vouch_no_upstream_note_when_chain_ready(root: Path) -> None:
+    make_ready(root)
+    result = run_cli("vouch", "fit-beta", "--as", "reviewer", "--path", str(root))
+    assert result.exit_code == 0
+    assert "upstream" not in result.output
+
+    # entries without consumes never get the note
+    result = run_cli("vouch", "fit-alpha", "--as", "another", "--path", str(root))
+    assert result.exit_code == 0
+    assert "upstream" not in result.output
+
+
 def test_run_records_derived_claim_only(root: Path) -> None:
     vouch_before = None  # no vouches file yet
     result = run_cli("run", "fit-alpha", "--path", str(root))

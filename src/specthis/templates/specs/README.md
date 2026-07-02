@@ -138,11 +138,18 @@ Valid `kind:` values:
 | kind          | meaning |
 |---------------|---------|
 | `meta`        | About specs themselves: index, agent behaviour. |
-| `definitions` | Reusable vocabulary other specs reference (models, estimators, conventions, cluster). |
+| `definitions` | Pure vocabulary other specs reference (conventions, notation). No entries — and therefore invisible to the ledger; use `library` when the vocabulary is implemented by code. |
+| `library`     | Contracts on **package code with no artefact** — the chain stops at code. Entries carry no `Output:`; each MUST be bound to its module(s) in `bindings.toml` (no convention default). Status ladder stops at the vouch: a library entry is *ready* when a non-author vouched it at the current digests. Consumable: downstream `consumes:` edges take its code manifest as the upstream digest, so a module edit flags the entry *audit needed* and makes its consumers *stale*. Library-bound modules are carved out of the `[package]` blob. |
 | `templates`   | Reusable table / figure patterns: palette, layout, reference implementation. |
 | `compute`     | Named entries with an `Output:` contract that produce JSON / data. Usually `tier: intensive`. |
 | `report`      | Named entries with an `Export outputs:` contract that produce figures/tables; `host_doc:` + `section_label:` in frontmatter route the artefacts. Quick. |
 | `figure`      | Standalone figure/table generator: same `Export outputs:` contract as `report`, but self-contained — no host doc, no routing. Quick. |
+
+The `definitions` / `library` split answers "when does an edit get
+picked up?": a `definitions` edit is picked up only when a human next
+reads the file; a `library` edit is picked up by the ledger — the
+entry returns to *audit needed* and everything consuming it waits on
+the re-vouch.
 
 ## What a specification looks like
 

@@ -36,8 +36,8 @@ else:  # pragma: no cover
 
 from .hashing import sha256_text
 
-KINDS = {"meta", "definitions", "templates", "compute", "report", "figure"}
-ENTRY_KINDS = {"compute", "report", "figure"}
+KINDS = {"meta", "definitions", "templates", "library", "compute", "report", "figure"}
+ENTRY_KINDS = {"library", "compute", "report", "figure"}
 TIERS = {"intensive", "quick"}
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -97,6 +97,9 @@ class Project:
     entries: dict[str, Entry]
     package_globs: list[str]
     cache_url: str | None = None
+    #: scripts bound to library entries — excluded from the package blob,
+    #: so a module edit flags only its own entry and its consumers.
+    library_scripts: frozenset[str] = frozenset()
 
 
 def _field_paths(block: str, label: str) -> list[str]:
@@ -186,15 +189,26 @@ def parse_spec(path: Path) -> SpecFile:
             entry_name = block_match.group(1).strip()
             if not _ENTRY_NAME.match(entry_name):
                 raise SpecError(f"{path.name}: bad entry name `{entry_name}`")
-            outputs = _field_paths(block_match.group(2), label)
-            if not outputs:
-                raise SpecError(
-                    f"{path.name}: entry `{entry_name}` declares no `{label}:` path"
-                )
-            if kind == "compute" and len(outputs) > 1:
-                raise SpecError(
-                    f"{path.name}: compute entry `{entry_name}` must declare exactly one output"
-                )
+            if kind == "library":
+                # A library entry is judged code with no artifact: the
+                # chain stops at code, so an Output: is a contradiction.
+                if _field_paths(block_match.group(2), "Output") or _field_paths(
+                    block_match.group(2), "Export outputs"
+                ):
+                    raise SpecError(
+                        f"{path.name}: library entry `{entry_name}` must not declare an output"
+                    )
+                outputs: list[str] = []
+            else:
+                outputs = _field_paths(block_match.group(2), label)
+                if not outputs:
+                    raise SpecError(
+                        f"{path.name}: entry `{entry_name}` declares no `{label}:` path"
+                    )
+                if kind == "compute" and len(outputs) > 1:
+                    raise SpecError(
+                        f"{path.name}: compute entry `{entry_name}` must declare exactly one output"
+                    )
             spec.entries.append(
                 Entry(name=entry_name, spec=spec, outputs=outputs, binding=None)  # type: ignore[arg-type]
             )
@@ -246,7 +260,18 @@ def load_project(root: Path) -> Project:
                     f"duplicate entry name `{entry.name}` "
                     f"({entries[entry.name].spec.path.name} and {spec.path.name})"
                 )
-            entry.binding = bindings.get(entry.name, _default_binding(entry.name))
+            if spec.kind == "library":
+                # Modules live at arbitrary package paths; no naming
+                # convention can guess them, so the binding is mandatory.
+                binding = bindings.get(entry.name)
+                if binding is None or not binding.scripts:
+                    raise SpecError(
+                        f"{spec.path.name}: library entry `{entry.name}` needs "
+                        "`scripts` in specs/bindings.toml (no convention default)"
+                    )
+                entry.binding = binding
+            else:
+                entry.binding = bindings.get(entry.name, _default_binding(entry.name))
             entries[entry.name] = entry
 
     spec_names = {s.name for s in specs}
@@ -265,4 +290,10 @@ def load_project(root: Path) -> Project:
         entries=entries,
         package_globs=package_globs,
         cache_url=cache_url,
+        library_scripts=frozenset(
+            s
+            for e in entries.values()
+            if e.spec.kind == "library"
+            for s in e.binding.scripts
+        ),
     )

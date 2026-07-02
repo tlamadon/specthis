@@ -31,7 +31,15 @@ from .check import LOCAL_BREAKS, Report, Status, check_project, frontier
 from .parse import Project, SpecFile, load_project
 from .routing import RoutingReport, build_routing_json, check_routing
 
-_KIND_ORDER = {"meta": 0, "definitions": 1, "templates": 2, "compute": 3, "report": 4, "figure": 5}
+_KIND_ORDER = {
+    "meta": 0,
+    "definitions": 1,
+    "library": 2,
+    "templates": 3,
+    "compute": 4,
+    "report": 5,
+    "figure": 6,
+}
 
 _STATUS_CLASS = {
     Status.READY: "ready",
@@ -90,6 +98,7 @@ _CSS = """
   --kind-meta: #6e6e6e; --kind-definitions: #2e7d5b;
   --kind-templates: #6a3d8a; --kind-compute: #2e6e9e;
   --kind-report: #b85a1e; --kind-figure: #1f7a7a;
+  --kind-library: #8a6d1f;
 }
 * { box-sizing: border-box; }
 html { font-size: 16px; scroll-behavior: smooth; }
@@ -114,6 +123,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
 .kind-meta { color: var(--kind-meta); }       .kind-definitions { color: var(--kind-definitions); }
 .kind-templates { color: var(--kind-templates); } .kind-compute { color: var(--kind-compute); }
 .kind-report { color: var(--kind-report); }   .kind-figure { color: var(--kind-figure); }
+.kind-library { color: var(--kind-library); }
 .nav-file { margin-bottom: 0.55rem; padding: 0.1rem 0 0.1rem 0.5rem;
   border-left: 3px solid transparent; }
 html.js-routed .nav-file.active { border-left-color: var(--accent);
@@ -300,7 +310,9 @@ def _entry_rows(spec: SpecFile, reports: dict[str, Report]) -> str:
             run = f'<span class="who">{_e(r.run.ran[:10])} via {_e(r.run.executor)}</span>'
         else:
             run = '<span class="empty">—</span>'
-        outputs = "<br>".join(f"<code>{_e(o)}</code>" for o in entry.outputs)
+        outputs = "<br>".join(f"<code>{_e(o)}</code>" for o in entry.outputs) or (
+            '<span class="empty">code-only</span>'
+        )
         moved = (
             f'<div class="moved">moved: {_e(", ".join(r.moved))}</div>'
             if r.moved and r.status is Status.STALE
@@ -467,7 +479,7 @@ def _status_section(
         f'<tr><td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
         f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
         f"<td>{_badge(reports[name].status)}</td>"
-        f"<td>{_e(e.spec.kind)}/{_e(e.tier)}</td></tr>"
+        f"<td>{_e(e.spec.kind if e.spec.kind == 'library' else f'{e.spec.kind}/{e.tier}')}</td></tr>"
         for name, e in sorted(project.entries.items())
     )
     all_table = (

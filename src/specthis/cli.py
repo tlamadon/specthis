@@ -25,6 +25,7 @@ from .check import (
     code_sha,
     expected_inputs,
     frontier,
+    is_library,
     topo_order,
 )
 from .install import init_specs_dir, install_agents, install_commands
@@ -142,7 +143,8 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
         for name in topo_order(project):
             r = reports[name]
             e = project.entries[name]
-            click.echo(f"  {r.status.value:<20} {name:<28} {e.spec.kind}/{e.tier}")
+            kind = e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}"
+            click.echo(f"  {r.status.value:<20} {name:<28} {kind}")
         return
     if entry not in reports:
         raise click.ClickException(f"unknown entry `{entry}`")
@@ -153,7 +155,7 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
     click.echo(f"spec_sha:  {r.spec_sha}")
     click.echo(f"code_sha:  {r.code_sha or '(code missing)'}")
     click.echo(f"scripts:   {', '.join(e.binding.scripts)}")
-    click.echo(f"outputs:   {', '.join(e.outputs)}")
+    click.echo(f"outputs:   {', '.join(e.outputs) or '(none — library: chain stops at code)'}")
     if e.consumes:
         click.echo(f"consumes:  {', '.join(e.consumes)}")
     if r.vouch:
@@ -180,7 +182,11 @@ def _execute_entry(project: Project, name: str, push_after: bool = False) -> Non
     entry = project.entries[name]
     runs = read_runs(project.specs_dir)
 
-    missing_up = [u for u in entry.consumes if u not in runs]
+    missing_up = [
+        u
+        for u in entry.consumes
+        if u not in runs and not is_library(project.entries[u])
+    ]
     if missing_up:
         raise click.ClickException(
             f"`{name}` consumes entries with no recorded run: "
@@ -286,6 +292,11 @@ def run_cmd(
     if entry is not None:
         if entry not in project.entries:
             raise click.ClickException(f"unknown entry `{entry}`")
+        if is_library(project.entries[entry]):
+            raise click.ClickException(
+                f"`{entry}` is a library entry — the chain stops at code; "
+                "there is nothing to run, only to vouch"
+            )
         if do_fetch and _try_fetch(project, entry):
             return
         _execute_entry(project, entry, push_after=do_push)
@@ -356,6 +367,17 @@ def vouch_cmd(entry: str, attester: str, reject: bool, note: str, project_path: 
     except LedgerError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"recorded {vouch.verdict} for `{entry}` by {attester}")
+    # Informational, never a gate: a vouch is a local claim, so it is
+    # recorded regardless of upstream state — just say why the entry
+    # won't read `ready` yet.
+    if vouch.verdict == "ok" and e.consumes:
+        reports = check_project(project)
+        pending = sorted(up for up in e.consumes if reports[up].status is not Status.READY)
+        if pending:
+            click.echo(
+                f"note: upstream not yet verified ({', '.join(pending)}) — "
+                f"`{entry}` cannot show ready until its upstream chain is"
+            )
 
 
 # ------------------------------------------------------ export / serve
@@ -512,6 +534,9 @@ def migrate_cmd(
             continue
         if name not in project.entries:
             skipped.append((name, "no spec entry with this name"))
+            continue
+        if is_library(project.entries[name]):
+            skipped.append((name, "library entry — nothing derived to import"))
             continue
         if name in existing and not force:
             skipped.append((name, "runs.toml row exists (use --force)"))

@@ -17,7 +17,14 @@ of repair does each broken one need — a mind (re-judge), a machine
 
 **The claim unit is the entry**: one script(-set), one output, one
 deliverable. A spec file is a bundle of entries plus the prose
-contract they are judged against.
+contract they are judged against. The exception is `kind: library` —
+entries whose chain *stops at code* (package modules with no
+artifact): they carry only the attested claim, are `ready` once
+vouched at the current digests, and contribute their code manifest as
+the upstream digest to whatever consumes them — so editing a library
+spec or module flags exactly that entry for re-judgment and exactly
+its consumers for re-run, instead of detonating every vouch through
+the package blob.
 
 **Two species of claim, verified in opposite directions:**
 

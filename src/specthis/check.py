@@ -52,13 +52,24 @@ def code_present(project: Project, entry: Entry) -> bool:
     )
 
 
+def is_library(entry: Entry) -> bool:
+    return entry.spec.kind == "library"
+
+
 def code_sha(project: Project, entry: Entry) -> str | None:
     """Manifest over the entry's scripts plus the package blob digest."""
     if not code_present(project, entry):
         return None
     pairs = [(s, hashing.file_sha(project.root / s)) for s in entry.binding.scripts]
     if project.package_globs:
-        pairs.append(("package", hashing.package_sha(project.root, project.package_globs)))
+        pairs.append(
+            (
+                "package",
+                hashing.package_sha(
+                    project.root, project.package_globs, project.library_scripts
+                ),
+            )
+        )
     return hashing.manifest_sha(pairs)  # type: ignore[arg-type]
 
 
@@ -69,15 +80,23 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
     ``upstream:<entry>`` digest is the upstream's *recorded* output_sha
     (the claim, not the bytes) — an upstream that re-ran therefore
     changes this table, which is exactly the composed-signature fix.
+    A library upstream has no output: its code manifest stands in, so
+    a module edit makes its consumers stale (rerun with the new code).
     """
     inputs = hashing.files_manifest(
         project.root, [*entry.binding.scripts, *entry.binding.workflows]
     )
     if project.package_globs:
-        inputs["package"] = hashing.package_sha(project.root, project.package_globs)
+        inputs["package"] = hashing.package_sha(
+            project.root, project.package_globs, project.library_scripts
+        )
     for up in entry.consumes:
-        r = runs.get(up)
-        inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
+        up_entry = project.entries[up]
+        if is_library(up_entry):
+            inputs[f"upstream:{up}"] = code_sha(project, up_entry) or hashing.MISSING
+        else:
+            r = runs.get(up)
+            inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
     return inputs
 
 
@@ -114,6 +133,12 @@ def check_project(
             continue
         if v.verdict == "rejected":
             report.status = Status.REJECTED
+            continue
+        if is_library(entry):
+            # The chain stops at code: no run, no output. A vouch at the
+            # current digests is the whole claim.
+            if any(reports[up].status is not Status.READY for up in entry.consumes):
+                report.status = Status.UPSTREAM_UNVERIFIED
             continue
         expected = expected_inputs(project, entry, runs)
         if r is None or r.signature != hashing.signature(expected):

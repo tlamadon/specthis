@@ -48,15 +48,20 @@ def signature(inputs: Mapping[str, str]) -> str:
     return manifest_sha(inputs.items())
 
 
-def package_sha(root: Path, globs: Sequence[str]) -> str:
-    """Blob digest of the shared package: manifest over glob matches."""
+def package_sha(root: Path, globs: Sequence[str], exclude: frozenset[str] = frozenset()) -> str:
+    """Blob digest of the shared package: manifest over glob matches.
+
+    ``exclude`` lists relative paths carved out of the blob — scripts
+    bound to library entries, which carry their own claims.
+    """
     pairs: list[tuple[str, str]] = []
     for pattern in globs:
         for path in root.glob(pattern):
-            if path.is_file():
+            rel = path.relative_to(root).as_posix()
+            if path.is_file() and rel not in exclude:
                 digest = file_sha(path)
                 assert digest is not None
-                pairs.append((path.relative_to(root).as_posix(), digest))
+                pairs.append((rel, digest))
     return manifest_sha(pairs)
 
 

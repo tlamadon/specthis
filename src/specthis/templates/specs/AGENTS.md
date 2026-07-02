@@ -60,8 +60,10 @@ mtime.
 - **`## Entry`** / **`## Entries`** — the claim unit(s). Each
   `### entry-name` block carries `Output:` (compute, one path under
   `results/`) or `Export outputs:` (report/figure, files under
-  `reports/`). No `Script:`, no `Status:` — flag either as **spec
-  state leak**.
+  `reports/`). `library` entries carry NO output — they are contracts
+  on package modules (bound in `bindings.toml`), the chain stops at
+  code, and their ladder ends at the vouch. No `Script:`, no
+  `Status:` — flag either as **spec state leak**.
 - Frontmatter: `name`, `kind`, `tier` (compute), `consumes:` (upstream
   entry names — signature-bearing), `references:` (vocabulary spec
   files — ledger-invisible). `depends_on:` is retired; flag it.
