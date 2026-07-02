@@ -96,6 +96,7 @@ class SpecFile:
     spec_sha: str  # sha256 of the FULL file text, frontmatter included
     body: str  # markdown after the frontmatter (the contract prose)
     title: str = ""  # display title: frontmatter `title:`, else first heading, else name
+    skip: bool = False  # commented out: entries dormant, body not grammar-checked
     entries: list[Entry] = field(default_factory=list)
     host_doc: str | None = None
     section_label: str | None = None
@@ -112,6 +113,8 @@ class Project:
     #: scripts bound to library entries — excluded from the package blob,
     #: so a module edit flags only its own entry and its consumers.
     library_scripts: frozenset[str] = frozenset()
+    #: entry name -> spec filename, for entries dormant under `skip: true`.
+    skipped_entries: dict[str, str] = field(default_factory=dict)
 
 
 def _field_paths(block: str, label: str) -> list[str]:
@@ -177,6 +180,10 @@ def parse_spec(path: Path) -> SpecFile:
     if tier not in TIERS:
         raise SpecError(f"{path.name}: `tier: {tier}` is not one of {sorted(TIERS)}")
 
+    skip = meta.get("skip", False)
+    if not isinstance(skip, bool):
+        raise SpecError(f"{path.name}: `skip: {skip}` must be true or false")
+
     body = text[m.end() :]
     heading = re.search(r"^# +(.+?)\s*$", body, re.MULTILINE)
     spec = SpecFile(
@@ -189,6 +196,7 @@ def parse_spec(path: Path) -> SpecFile:
         spec_sha=sha256_text(text),
         body=body,
         title=str(meta.get("title") or (heading.group(1) if heading else name)),
+        skip=skip,
         host_doc=meta.get("host_doc"),
         section_label=meta.get("section_label"),
     )
@@ -201,7 +209,12 @@ def parse_spec(path: Path) -> SpecFile:
             entry_name = block_match.group(1).strip()
             if not _ENTRY_NAME.match(entry_name):
                 raise SpecError(f"{path.name}: bad entry name `{entry_name}`")
-            if kind == "library":
+            if spec.skip:
+                # Commented out: keep the entry names (for views and for
+                # "consumes skipped entry" diagnostics) but grammar-check
+                # nothing — a half-written body is the point of skipping.
+                outputs = _field_paths(block_match.group(2), label) if kind != "library" else []
+            elif kind == "library":
                 # A library entry is judged code with no artifact: the
                 # chain stops at code, so an Output: is a contradiction.
                 if _field_paths(block_match.group(2), "Output") or _field_paths(
@@ -210,7 +223,7 @@ def parse_spec(path: Path) -> SpecFile:
                     raise SpecError(
                         f"{path.name}: library entry `{entry_name}` must not declare an output"
                     )
-                outputs: list[str] = []
+                outputs = []
             else:
                 outputs = _field_paths(block_match.group(2), label)
                 if not outputs:
@@ -283,7 +296,22 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         bindings, package_globs, cache_url = {}, [], None
 
     entries: dict[str, Entry] = {}
+    skipped_entries: dict[str, str] = {}
     for spec in specs:
+        if spec.skip:
+            # Dormant: entries stay out of the DAG, bindings are
+            # best-effort for the views, and nothing is validated —
+            # skipping is how you silence a spec mid-development.
+            for entry in spec.entries:
+                entry.binding = bindings.get(entry.name) or (
+                    # no convention fallback for library modules: an
+                    # invented path must not be carved out of the blob
+                    Binding(scripts=[], run=None)
+                    if spec.kind == "library"
+                    else _default_binding(entry.name)
+                )
+                skipped_entries.setdefault(entry.name, spec.path.name)
+            continue
         for entry in list(spec.entries):
             if entry.name in entries:
                 problems.append(
@@ -316,12 +344,25 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
 
     spec_names = {s.name for s in specs}
     for spec in specs:
+        if spec.skip:
+            continue  # dormant edges are nobody's problem
         for up in list(spec.consumes):
-            if up not in entries:
+            if up in entries:
+                continue
+            if up in skipped_entries:
+                problems.append(
+                    Problem(
+                        spec.path.name,
+                        f"{spec.path.name}: consumes skipped entry `{up}` "
+                        f"({skipped_entries[up]} has skip: true) — skip this spec "
+                        "too, or unwire the edge",
+                    )
+                )
+            else:
                 problems.append(
                     Problem(spec.path.name, f"{spec.path.name}: consumes unknown entry `{up}`")
                 )
-                spec.consumes.remove(up)
+            spec.consumes.remove(up)
         for ref in spec.references:
             if Path(ref).stem not in spec_names:
                 problems.append(
@@ -335,12 +376,17 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         entries=entries,
         package_globs=package_globs,
         cache_url=cache_url,
+        # Skipped library modules stay carved out of the blob: their
+        # claims are dormant, not deleted, and re-enabling the spec
+        # must not shift every other entry's code manifest.
         library_scripts=frozenset(
             s
-            for e in entries.values()
-            if e.spec.kind == "library"
+            for spec in specs
+            if spec.kind == "library"
+            for e in spec.entries
             for s in e.binding.scripts
         ),
+        skipped_entries=skipped_entries,
     )
     return project, problems
 

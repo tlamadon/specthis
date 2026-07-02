@@ -63,7 +63,12 @@ def build_index(
     for spec in project.specs:
         entries = []
         for entry in spec.entries:
-            r = reports[entry.name]
+            r = reports.get(entry.name)
+            if r is None:  # dormant under skip: true
+                entries.append(
+                    {"name": entry.name, "status": "skipped", "outputs": entry.outputs}
+                )
+                continue
             entries.append(
                 {
                     "name": entry.name,
@@ -85,6 +90,7 @@ def build_index(
                 "file": spec.path.name,
                 "title": spec.title,
                 "kind": spec.kind,
+                "skip": spec.skip,
                 "tier": spec.tier,
                 "consumes": spec.consumes,
                 "references": spec.references,
@@ -147,7 +153,9 @@ html.js-routed .nav-file.active { border-left-color: var(--accent);
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   margin-right: 0.35rem; vertical-align: baseline; }
 .dot-break { background: #c5573a; } .dot-wait { background: #4a7fb5; }
-.dot-ready { background: #4d9367; }
+.dot-ready { background: #4d9367; } .dot-skip { background: #b9b3a7; }
+.nav-file.skipped a { color: var(--muted); font-weight: 400; font-style: italic; }
+section.spec.skipped .md, section.spec.skipped table { opacity: 0.65; }
 
 .content { max-width: 52rem; padding: 1.5rem 2rem 4rem; }
 html.js-routed section.spec { display: none; }
@@ -172,6 +180,7 @@ section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
 .badge.rejected      { background: #f7d9d5; color: #a40e26; }
 .badge.unimplemented { background: #ebe8e2; color: #5a5a5a; }
 .badge.upstream      { background: #dce9f5; color: #23629c; }
+.badge.skipped       { background: #eeece6; color: #8a857a; }
 .frontier { background: #fff; border: 1px solid var(--border);
   border-left: 4px solid #a04100; border-radius: 8px; padding: 12px 16px;
   margin-bottom: 20px; }
@@ -363,7 +372,20 @@ def _journal_anchor(stem: str) -> str:
 def _entry_rows(spec: SpecFile, reports: dict[str, Report]) -> str:
     rows = []
     for entry in spec.entries:
-        r = reports[entry.name]
+        r = reports.get(entry.name)
+        if r is None:  # dormant under skip: true — no claims to show
+            outputs = "<br>".join(f"<code>{_e(o)}</code>" for o in entry.outputs) or (
+                '<span class="empty">—</span>'
+            )
+            rows.append(
+                f'<tr id="{_e(_entry_anchor(entry.name))}">'
+                f"<td><b>{_e(entry.name)}</b></td>"
+                f'<td><span class="badge skipped">skipped</span></td>'
+                f"<td>{outputs}</td>"
+                f'<td><span class="empty">—</span></td>'
+                f'<td><span class="empty">—</span></td></tr>'
+            )
+            continue
         if r.vouch:
             note = f" — {r.vouch.note}" if r.vouch.note else ""
             vouch = (
@@ -453,6 +475,8 @@ def _rewrite_spec_links(
 
 
 def _worst_dot(spec: SpecFile, reports: dict[str, Report]) -> str:
+    if spec.skip:
+        return '<span class="dot dot-skip"></span>'
     statuses = {reports[e.name].status for e in spec.entries}
     if not statuses:
         return ""
@@ -515,8 +539,9 @@ def _sidebar(
                 if spec.path.name in problem_files
                 else _worst_dot(spec, reports)
             )
+            skipped_cls = " skipped" if spec.skip else ""
             parts.append(
-                f'<div class="nav-file" data-file-anchor="{_e(anchor)}">'
+                f'<div class="nav-file{skipped_cls}" data-file-anchor="{_e(anchor)}">'
                 f"{dot}"
                 f'<a href="#{_e(anchor)}" title="{_e(spec.path.name)}">{_e(spec.title)}</a></div>'
             )
@@ -587,6 +612,10 @@ def _status_section(
         for s in Status
         if counts.get(s)
     ) or '<span class="chip">no entries yet</span>'
+    if project.skipped_entries:
+        chips += (
+            f'<span class="chip"><b>{len(project.skipped_entries)}</b> skipped</span>'
+        )
 
     frontier_html = ""
     if local:
@@ -668,9 +697,12 @@ def _spec_section(
                 f"&#8596; {_e(other)}</a></span>"
             )
     tier = f"&middot; {_e(spec.tier)}" if spec.kind == "compute" else ""
+    skipped_badge = (
+        ' <span class="badge skipped">skipped — entries dormant</span>' if spec.skip else ""
+    )
     meta = (
         f'<div class="spec-meta"><span class="kind kind-{_e(spec.kind)}">{_e(spec.kind)}</span> '
-        f"{tier} <code>{_e(spec.path.name)}</code> {pair}</div>"
+        f"{tier} <code>{_e(spec.path.name)}</code> {pair}{skipped_badge}</div>"
     )
     deps = []
     if spec.consumes:
@@ -695,7 +727,8 @@ def _spec_section(
         )
 
     return (
-        f'<section class="spec" id="{_e(_spec_anchor(spec.name))}">'
+        f'<section class="spec{" skipped" if spec.skip else ""}" '
+        f'id="{_e(_spec_anchor(spec.name))}">'
         f'<h2 class="spec-title">{_e(spec.title)}</h2>{meta}'
         + "".join(deps)
         + _entry_rows(spec, reports)

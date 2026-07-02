@@ -375,19 +375,17 @@ backends, digest-verified fetch keyed by the composed signature), and
 the journal (`journal/` narratives rendered into the dashboard, plus
 `/specthis-journal`).
 
+Also done: **`skip: true` in frontmatter** — comment a spec out while
+developing. Skipped entries leave the frontier and every count;
+`run`/`vouch` refuse them; their ledger rows stay dormant; the body is
+not grammar-checked; consuming a skipped entry is a lint problem; the
+dashboard renders the spec greyed and marked *skipped*. Honesty is
+content-addressed: a spec edited while skipped comes back as *audit
+needed* (its bytes moved), while a pure skip/un-skip round-trip
+restores the exact vouched bytes and trust returns with them.
+
 Known future extensions — each additive, none precluded by the core:
 
-- **`skip: true` in frontmatter** — comment a spec out while
-  developing. ("Skip" over "ignore"/"draft": it covers both a
-  half-written spec and a finished one temporarily taken out of play,
-  and says what the tools do, not why.) Semantics to honor when built:
-  skipped entries leave the frontier and every count (`check` neither
-  itemizes nor tallies them); `run`/`vouch` refuse them; their ledger
-  rows are kept but dormant; consuming a skipped entry is a lint
-  problem (skip downstream too, or unwire the edge); the dashboard
-  still renders the spec, greyed, marked *skipped*. Toggling the flag
-  edits the frontmatter and therefore moves `spec_sha` — so a
-  re-enabled spec honestly returns to *audit needed*.
 - **Output-schema-into-signature.**
 - **Quick-tier caching** as an executor concern.
 - **Section-scoped spec hashing** if whole-file contract hashing ever

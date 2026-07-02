@@ -121,6 +121,7 @@ Every `.md` file in this directory begins with YAML frontmatter:
 name: <spec-name>          # filename stem, no extension
 kind: <kind>               # see below
 tier: intensive | quick    # compute specs; intensive is the default
+skip: true                 # optional: comment this spec out (see below)
 consumes:                  # upstream ENTRY names whose artefacts this
   - <entry-name>           #   spec's code reads — enters signatures
 references:                # other spec FILES read for vocabulary —
@@ -132,6 +133,17 @@ The entire file — frontmatter included — is the contract: any edit
 returns the file's entries to *audit needed*. There is no `depends_on:`
 (retired: it conflated the two edge kinds) and no `Status:` anywhere —
 status is derived, never authored.
+
+`skip: true` comments a spec out while developing: its entries leave
+the frontier and every count, `run`/`vouch` refuse them, their ledger
+rows stay but go dormant, and the body is not grammar-checked (a
+half-written entry block is fine). The dashboard still renders the
+spec, greyed and marked *skipped*. Anything that `consumes:` a skipped
+entry becomes a lint problem — skip downstream too, or unwire the
+edge. Honesty is content-addressed: a spec edited while skipped comes
+back as *audit needed* (its bytes moved), while a pure skip/un-skip
+round-trip restores the exact vouched bytes and trust returns with
+them.
 
 Valid `kind:` values:
 

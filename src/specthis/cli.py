@@ -66,6 +66,17 @@ def _echo_problems(problems: list[Problem]) -> None:
             click.echo(f"  {p.message}", err=True)
 
 
+def _require_active(project: Project, entry: str) -> None:
+    """Reject verbs aimed at unknown or skipped entries, with the right hint."""
+    if entry in project.skipped_entries:
+        raise click.ClickException(
+            f"`{entry}` is skipped ({project.skipped_entries[entry]} has "
+            "skip: true) — remove the flag to work on it"
+        )
+    if entry not in project.entries:
+        raise click.ClickException(f"unknown entry `{entry}`")
+
+
 def _path_option(f):
     return click.option(
         "--path",
@@ -121,7 +132,8 @@ def check_cmd(project_path: Path) -> None:
             click.echo(f"  {r.status.value:<15} {r.entry:<28} {_hint(r, project)}")
     if waiting:
         click.echo(f"waiting on the frontier: {waiting} upstream-unverified")
-    click.echo(f"ready: {ready}/{len(reports)}")
+    skipped = f" (+{len(project.skipped_entries)} skipped)" if project.skipped_entries else ""
+    click.echo(f"ready: {ready}/{len(reports)}{skipped}")
 
     # Routing findings are view-layer warnings, not claims: informational,
     # never part of the exit code.
@@ -184,8 +196,7 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
             kind = e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}"
             click.echo(f"  {r.status.value:<20} {name:<28} {kind}")
         return
-    if entry not in reports:
-        raise click.ClickException(f"unknown entry `{entry}`")
+    _require_active(project, entry)
     r = reports[entry]
     e = project.entries[entry]
     click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.spec.kind}/{e.tier})")
@@ -328,8 +339,7 @@ def run_cmd(
     if run_stale == (entry is not None):
         raise click.ClickException("give exactly one of ENTRY or --stale")
     if entry is not None:
-        if entry not in project.entries:
-            raise click.ClickException(f"unknown entry `{entry}`")
+        _require_active(project, entry)
         if is_library(project.entries[entry]):
             raise click.ClickException(
                 f"`{entry}` is a library entry — the chain stops at code; "
@@ -384,8 +394,7 @@ def vouch_cmd(entry: str, attester: str, reject: bool, note: str, project_path: 
     Writes vouches.toml only; never touches runs.toml.
     """
     project = _load(project_path)
-    if entry not in project.entries:
-        raise click.ClickException(f"unknown entry `{entry}`")
+    _require_active(project, entry)
     e = project.entries[entry]
     c = code_sha(project, e)
     if c is None:
@@ -471,8 +480,8 @@ def _cache_op(project_path: Path, entry: str | None = None):
     from . import cache as cache_mod
 
     project = _load(project_path)
-    if entry is not None and entry not in project.entries:
-        raise click.ClickException(f"unknown entry `{entry}`")
+    if entry is not None:
+        _require_active(project, entry)
     return cache_mod, project
 
 

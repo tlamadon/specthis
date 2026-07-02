@@ -133,12 +133,15 @@ def _spec_report(spec: SpecFile, project: Project, scans: dict[str, dict[str, Se
 
 
 def check_routing(project: Project) -> list[RoutingReport]:
-    """One report per spec that declares a ``host_doc:``. Pure, no writes."""
+    """One report per spec that declares a ``host_doc:``. Pure, no writes.
+
+    Skipped specs are exempt: their artefacts are dormant, so their
+    routing is nobody's warning."""
     scans: dict[str, dict[str, Section]] = {}
     return [
         _spec_report(spec, project, scans)
         for spec in project.specs
-        if spec.host_doc
+        if spec.host_doc and not spec.skip
     ]
 
 
