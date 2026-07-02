@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -345,6 +346,27 @@ def _routing_line(spec: SpecFile, rr: RoutingReport | None) -> str:
     return f'<div class="dep">{head} {marks}{extra}</div>'
 
 
+_MD_HREF = re.compile(r'href="(?!(?:[a-z][a-z0-9+.-]*:|//|#))([^"]+?\.md)(#[^"]*)?"')
+
+
+def _rewrite_spec_links(rendered: str, spec_names: set[str]) -> str:
+    """Point markdown links at sibling specs to their hash-routed section.
+
+    Authors write ``[models](models.md)`` (or ``./models.md``,
+    ``specs/models.md``); in the single-page viewer those must become
+    ``#spec-models`` or they 404. Links whose stem is not a known spec
+    (external URLs, other repo files) are left untouched.
+    """
+
+    def repl(m: re.Match[str]) -> str:
+        stem = Path(m.group(1)).stem
+        if stem in spec_names:
+            return f'href="#{_spec_anchor(stem)}"'
+        return m.group(0)
+
+    return _MD_HREF.sub(repl, rendered)
+
+
 def _worst_dot(spec: SpecFile, reports: dict[str, Report]) -> str:
     statuses = {reports[e.name].status for e in spec.entries}
     if not statuses:
@@ -502,7 +524,7 @@ def _spec_section(
     body_html = ""
     if spec.body.strip():
         rendered = _markdown.markdown(spec.body, extensions=["tables", "fenced_code"])
-        body_html = f'<div class="md">{rendered}</div>'
+        body_html = f'<div class="md">{_rewrite_spec_links(rendered, spec_names)}</div>'
 
     return (
         f'<section class="spec" id="{_e(_spec_anchor(spec.name))}">'

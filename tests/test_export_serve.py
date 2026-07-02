@@ -56,6 +56,23 @@ def test_spec_markdown_is_rendered_for_browsing(root: Path) -> None:
     assert "<h2>The beta fit</h2>" not in page  # host docs are not specs
 
 
+def test_markdown_spec_links_are_hash_routed(root: Path) -> None:
+    from .conftest import COMPUTE_ALPHA
+
+    text = COMPUTE_ALPHA.replace(
+        "Fit the alpha model per models.md.",
+        "Per [models](models.md), [also](./models.md), [again](specs/models.md); "
+        "see [ext](https://example.org/doc.md) and [gone](missing.md).",
+    )
+    write(root, "specs/compute-alpha.md", text)
+    page, _, _ = render(load_project(root))
+    for raw in ('href="models.md"', 'href="./models.md"', 'href="specs/models.md"'):
+        assert raw not in page  # every sibling-spec form rewritten...
+    assert 'href="#spec-models"' in page  # ...to the hash-routed section
+    assert 'href="https://example.org/doc.md"' in page  # external untouched
+    assert 'href="missing.md"' in page  # unknown stem untouched
+
+
 def test_sidebar_and_hash_routing(root: Path) -> None:
     project = load_project(root)
     page, _, _ = render(project)
