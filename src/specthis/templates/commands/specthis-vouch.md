@@ -5,10 +5,11 @@ description: Audit the audit-needed spec entries with a fresh spec-critic subage
 The user ran `/specthis-vouch $ARGUMENTS` — an explicit commission to
 hand the vouching pen to a fresh critic session.
 
-1. **Commissioning name.** The first token of the arguments is the
-   human's name; any remaining tokens are entry names restricting the
-   queue. If no name was given, ask for it before doing anything —
-   the critic refuses to vouch anonymously.
+1. **Commissioning name.** Run `git config user.name` and use its
+   output as the commissioning human's name. If it is empty, ask the
+   user for their name before doing anything — the critic refuses to
+   vouch anonymously. Any arguments are entry names restricting the
+   queue.
 2. Run `specthis check`. If there are no `audit needed` entries, say
    so and stop — nothing needs a mind.
 3. **Do not judge or vouch anything yourself.** Even if this session

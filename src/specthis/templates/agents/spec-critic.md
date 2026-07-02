@@ -21,8 +21,9 @@ the parent session's summary of the code substitute for reading it.
 
 ## Inputs you need from the parent
 
-- **The commissioning human's name** (e.g. from `/specthis-vouch
-  <name>`). Refuse to write any verdict without it.
+- **The commissioning human's name** (the `/specthis-vouch` command
+  reads it from `git config user.name`). Refuse to write any verdict
+  without it.
 - Optionally, a list of entries to judge. Otherwise judge every
   `audit needed` entry on the frontier.
 

@@ -270,7 +270,7 @@ specthis install    # writes the Claude Code subagents into .claude/agents/
 specthis init       # creates specs/ with README.md + AGENTS.md templates
 ```
 
-Four Claude Code subagents and one slash command cover the daily
+Four Claude Code subagents and two slash commands cover the daily
 operations:
 
 - **`spec-auditor`** — runs `specthis check`/`status` for the
@@ -282,14 +282,22 @@ operations:
 - **`experiment-runner`** — launches a long run in the background
   (preferring `specthis run <entry>` so the claim is recorded),
   watches the log, reports completion.
-- **`spec-critic`** + **`/specthis-vouch <name>`** — the one
+- **`spec-critic`** + **`/specthis-vouch [entries…]`** — the one
   sanctioned agent pen. The slash command is your explicit
-  commission: it spawns the critic as a *fresh* session that authored
-  nothing, which re-reads spec and code from disk, vouches clear
-  passes as `spec-critic (for <name>)` (so the ledger shows the
-  judgment was agent-made and who asked for it), rejects clear
-  violations, and leaves every doubt unvouched for you. Independence
-  here is contextual, not personal — the ledger records exactly that.
+  commission (your name comes from `git config user.name`): it spawns
+  the critic as a *fresh* session that authored nothing, which
+  re-reads spec and code from disk, vouches clear passes as
+  `spec-critic (for <name>)` (so the ledger shows the judgment was
+  agent-made and who asked for it), rejects clear violations, and
+  leaves every doubt unvouched for you. Independence here is
+  contextual, not personal — the ledger records exactly that.
+- **`/specthis-run [entries…]`** — the machine half: rebuilds the
+  stale queue in dependency order (`run --stale`, with `--fetch` when
+  a cache is configured), backgrounds and monitors intensive entries
+  instead of blocking, and reports what was rebuilt, fetched, and
+  skipped as needing a mind. Together the two commands split the
+  frontier by repair kind: `/specthis-vouch` for minds,
+  `/specthis-run` for machines.
 
 ## Migrating from the old `_lock.json`
 
