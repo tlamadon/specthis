@@ -28,6 +28,14 @@ The ledger's value is that every attested claim was judged by someone
 who did not author the change. An author-stamped vouch is worse than
 no vouch: it looks like verification and isn't.
 
+The one sanctioned critic session is the `spec-critic` subagent,
+commissioned explicitly by the human (normally via `/specthis-vouch
+<name>`). It is freshly spawned, authored nothing, re-derives every
+judgment from disk, vouches as `spec-critic (for <name>)` so the
+ledger shows the judgment was agent-made, and leaves every doubt
+unvouched. No other agent — and no session that edited the code —
+ever holds the pen.
+
 ## The model in one breath
 
 Each spec entry promises one deliverable. Two ledgers record claims

@@ -5,7 +5,8 @@ from __future__ import annotations
 from importlib import resources
 from pathlib import Path
 
-AGENT_NAMES = ("spec-auditor", "spec-implementer", "experiment-runner")
+AGENT_NAMES = ("spec-auditor", "spec-implementer", "experiment-runner", "spec-critic")
+COMMAND_NAMES = ("specthis-vouch",)
 SPEC_TEMPLATE_NAMES = ("README.md", "AGENTS.md")
 
 
@@ -40,6 +41,30 @@ def install_agents(
             skipped.append((name, "already exists; use --force"))
             continue
         body = _read_template("agents", f"{name}.md")
+        target.write_text(body, encoding="utf-8")
+        installed.append(name)
+    return installed, skipped
+
+
+def install_commands(
+    project_path: Path,
+    force: bool = False,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Copy slash-command templates into ``<project_path>/.claude/commands/``.
+
+    Returns ``(installed, skipped)`` like :func:`install_agents`.
+    """
+    target_dir = project_path / ".claude" / "commands"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    installed: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    for name in COMMAND_NAMES:
+        target = target_dir / f"{name}.md"
+        if target.exists() and not force:
+            skipped.append((name, "already exists; use --force"))
+            continue
+        body = _read_template("commands", f"{name}.md")
         target.write_text(body, encoding="utf-8")
         installed.append(name)
     return installed, skipped

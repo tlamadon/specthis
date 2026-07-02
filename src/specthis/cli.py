@@ -27,7 +27,7 @@ from .check import (
     frontier,
     topo_order,
 )
-from .install import init_specs_dir, install_agents
+from .install import init_specs_dir, install_agents, install_commands
 from .ledger import (
     RUNS_FILE,
     LedgerError,
@@ -565,21 +565,28 @@ def migrate_cmd(
     show_default="current directory",
     help="Project root in which to install .claude/agents/.",
 )
-@click.option("--force", is_flag=True, help="Overwrite existing agent files.")
+@click.option("--force", is_flag=True, help="Overwrite existing agent/command files.")
 @click.option(
     "--agent",
     "selected",
     multiple=True,
-    type=click.Choice(["spec-auditor", "spec-implementer", "experiment-runner"]),
-    help="Install only the named agent(s). Repeatable. Default: all three.",
+    type=click.Choice(
+        ["spec-auditor", "spec-implementer", "experiment-runner", "spec-critic"]
+    ),
+    help="Install only the named agent(s), and no slash commands. Repeatable. Default: everything.",
 )
 def install_cmd(project_path: Path, force: bool, selected: tuple[str, ...]) -> None:
-    """Copy the specthis subagent templates into <project>/.claude/agents/."""
+    """Copy the specthis subagents into <project>/.claude/agents/ and the
+    slash commands (e.g. /specthis-vouch) into <project>/.claude/commands/."""
     installed, skipped = install_agents(
         project_path=project_path,
         force=force,
         agents=list(selected) if selected else None,
     )
+    if not selected:
+        cmd_installed, cmd_skipped = install_commands(project_path=project_path, force=force)
+        installed += [f"/{name} (command)" for name in cmd_installed]
+        skipped += cmd_skipped
     for name in installed:
         click.echo(f"  installed  {name}")
     for name, reason in skipped:

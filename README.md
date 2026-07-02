@@ -204,6 +204,18 @@ vouch. Sessions end, the ledger remembers: what was judged, by whom,
 at which digests — and what still needs a mind, a machine, or
 patience.
 
+**Route the audit queue: humans judge intent, agents read drift.**
+A vouch binds an exact `(spec_sha, code_sha)` pair, so *audit needed*
+on a previously-vouched entry splits into two lanes. If the **spec**
+moved, the contract itself changed — re-judging the code against new
+intent is human work. If only the **code** moved, the contract is
+stable and the question is drift against a fixed target — exactly
+what the `spec-auditor` is built to read; its proposal gets stamped
+cheaply with `vouch --as`, attention reserved for the contract lane.
+Never-vouched entries (a fresh migration, say) have no pair to diff,
+so the first pass through the queue is all human-grade judgment —
+and it's that baseline that makes later drift legible and delegable.
+
 ## State: three human-readable files, all in git
 
 - **`specs/vouches.toml`** — attested claims:
@@ -258,7 +270,8 @@ specthis install    # writes the Claude Code subagents into .claude/agents/
 specthis init       # creates specs/ with README.md + AGENTS.md templates
 ```
 
-Three Claude Code subagents cover the daily operations:
+Four Claude Code subagents and one slash command cover the daily
+operations:
 
 - **`spec-auditor`** — runs `specthis check`/`status` for the
   mechanical layer, judges contract-in-spirit for entries on the
@@ -269,6 +282,14 @@ Three Claude Code subagents cover the daily operations:
 - **`experiment-runner`** — launches a long run in the background
   (preferring `specthis run <entry>` so the claim is recorded),
   watches the log, reports completion.
+- **`spec-critic`** + **`/specthis-vouch <name>`** — the one
+  sanctioned agent pen. The slash command is your explicit
+  commission: it spawns the critic as a *fresh* session that authored
+  nothing, which re-reads spec and code from disk, vouches clear
+  passes as `spec-critic (for <name>)` (so the ledger shows the
+  judgment was agent-made and who asked for it), rejects clear
+  violations, and leaves every doubt unvouched for you. Independence
+  here is contextual, not personal — the ledger records exactly that.
 
 ## Migrating from the old `_lock.json`
 
