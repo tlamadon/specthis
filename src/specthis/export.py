@@ -25,6 +25,7 @@ import re
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import markdown as _markdown
 
@@ -166,6 +167,11 @@ section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
 .spec-meta code, .dep code, td code, .md code { font-size: 0.8rem;
   background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
 .pair a, .dep a { color: var(--accent); text-decoration: none; }
+.output-link[href] { text-decoration: none; }
+.output-link[href] code { cursor: pointer;
+  text-decoration: underline dotted var(--muted); text-underline-offset: 2px; }
+.output-link[href]:hover code { color: var(--accent);
+  text-decoration-color: var(--accent); }
 .dep { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
 .dep .lbl { margin-right: 4px; }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 18px; }
@@ -256,6 +262,15 @@ td a { color: var(--accent); text-decoration: none; }
 
 _ROUTER_JS = """
 (function () {
+  // Output chips link to the dev server's /view/ pages; opened from
+  // file:// there is no server, so degrade them back to plain chips.
+  if (!location.protocol.startsWith('http')) {
+    document.querySelectorAll('a.output-link').forEach((a) => {
+      a.removeAttribute('href');
+      a.title = 'outputs are viewable when served: specthis serve';
+    });
+  }
+
   const sections = Array.from(document.querySelectorAll('section.spec'));
   const navFiles = Array.from(document.querySelectorAll('.nav-file'));
   if (sections.length === 0) return;
@@ -341,6 +356,62 @@ def _e(text: object) -> str:
     return html.escape(str(text), quote=True)
 
 
+_TEXT_SNIFF_BYTES = 8192
+
+#: extension -> highlight.js language for the dev server's /view/ pages.
+#: Unknown extensions fall back to plaintext — viewability is decided by
+#: the byte sniff, never by this map.
+_VIEW_LANGS = {
+    ".csv": "plaintext", ".tsv": "plaintext", ".dat": "plaintext",
+    ".log": "plaintext", ".txt": "plaintext",
+    ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "ini",
+    ".md": "markdown", ".tex": "latex", ".py": "python", ".r": "r",
+    ".jl": "julia", ".sh": "bash", ".sql": "sql",
+    ".html": "xml", ".htm": "xml", ".xml": "xml", ".svg": "xml",
+}
+
+
+def output_lang(rel: str) -> str:
+    """highlight.js language for an output path (plaintext when unknown)."""
+    return _VIEW_LANGS.get(Path(rel).suffix.lower(), "plaintext")
+
+
+def is_text_file(path: Path) -> bool:
+    """True when the leading bytes decode as UTF-8 with no NULs.
+
+    A sniff, not a proof — it only decides whether the dashboard links
+    an output chip and whether the dev server agrees to render the
+    bytes as text."""
+    try:
+        with path.open("rb") as fh:
+            chunk = fh.read(_TEXT_SNIFF_BYTES)
+    except OSError:
+        return False
+    if b"\x00" in chunk:
+        return False
+    try:
+        chunk.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # a char split at the sniff boundary is fine; garbage earlier is not
+        return exc.start >= len(chunk) - 3
+    return True
+
+
+def _output_chip(root: Path, rel: str) -> str:
+    """The output cell chip, linked to the dev server's /view/ page when
+    the bytes are on disk and look like text. Binary or remote bytes stay
+    plain chips — there is nothing readable to open. From file:// there
+    is no server either; the router JS strips these hrefs."""
+    chip = f"<code>{_e(rel)}</code>"
+    path = root / rel
+    if path.is_file() and is_text_file(path):
+        return (
+            f'<a class="output-link" href="/view/{_e(quote(rel))}" '
+            f'target="_blank" title="view output">{chip}</a>'
+        )
+    return chip
+
+
 def _badge(status: Status) -> str:
     return f'<span class="badge {_STATUS_CLASS[status]}">{_e(status.value)}</span>'
 
@@ -380,12 +451,12 @@ def _journal_anchor(stem: str) -> str:
     return f"journal-{stem}"
 
 
-def _entry_rows(spec: SpecFile, reports: dict[str, Report]) -> str:
+def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) -> str:
     rows = []
     for entry in spec.entries:
         r = reports.get(entry.name)
         if r is None:  # dormant under skip: true — no claims to show
-            outputs = "<br>".join(f"<code>{_e(o)}</code>" for o in entry.outputs) or (
+            outputs = "<br>".join(_output_chip(project.root, o) for o in entry.outputs) or (
                 '<span class="empty">—</span>'
             )
             rows.append(
@@ -409,7 +480,7 @@ def _entry_rows(spec: SpecFile, reports: dict[str, Report]) -> str:
             run = f'<span class="who">{_e(r.run.ran[:10])} via {_e(r.run.executor)}</span>'
         else:
             run = '<span class="empty">—</span>'
-        outputs = "<br>".join(f"<code>{_e(o)}</code>" for o in entry.outputs) or (
+        outputs = "<br>".join(_output_chip(project.root, o) for o in entry.outputs) or (
             '<span class="empty">code-only</span>'
         )
         moved = (
@@ -745,7 +816,7 @@ def _spec_section(
         f'id="{_e(_spec_anchor(spec.name))}">'
         f'<h2 class="spec-title">{_e(spec.title)}</h2>{meta}'
         + "".join(deps)
-        + _entry_rows(spec, reports)
+        + _entry_rows(spec, project, reports)
         + body_html
         + "</section>"
     )

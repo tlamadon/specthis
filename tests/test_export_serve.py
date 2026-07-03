@@ -1,8 +1,11 @@
 import json
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
+
+import pytest
 
 from click.testing import CliRunner
 
@@ -111,6 +114,69 @@ def test_index_matches_check(root: Path) -> None:
     index = build_index(project, reports)
     flat = {e["name"]: e["status"] for s in index["specs"] for e in s["entries"]}
     assert flat == {n: r.status.value for n, r in reports.items()}
+
+
+def test_text_output_chips_link_to_viewer(root: Path) -> None:
+    make_ready(root)
+    (root / "reports/fig_beta.dat").unlink()  # ready, bytes remote
+    page, _, _ = render(load_project(root))
+    assert 'href="/view/results/alpha/fit.json"' in page
+    assert 'href="/view/reports/fig_beta.tex"' in page
+    assert 'href="/view/reports/fig_beta.dat"' not in page  # nothing to open
+    assert "<code>reports/fig_beta.dat</code>" in page  # still listed plain
+    assert "output-link" in page  # the file:// degradation JS has a target
+
+
+def test_binary_outputs_are_not_clickable(root: Path) -> None:
+    make_ready(root)
+    (root / "results/alpha/fit.json").write_bytes(b"\x00\x01PNGish")
+    page, _, _ = render(load_project(root))
+    assert 'href="/view/results/alpha/fit.json"' not in page
+    assert "<code>results/alpha/fit.json</code>" in page
+
+
+def test_view_route_serves_declared_text_outputs(root: Path) -> None:
+    from http.server import ThreadingHTTPServer
+
+    make_ready(root)
+    (root / "reports/fig_beta.dat").unlink()
+    dash = Dashboard(root)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(dash))
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        def get(path: str) -> tuple[int, bytes]:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as resp:
+                return resp.status, resp.read()
+
+        status, body = get("/view/results/alpha/fit.json")
+        assert status == 200
+        assert b"&quot;loss&quot;" in body  # file content, escaped, in the page
+        assert b"language-json" in body and b"highlight.min.js" in body
+
+        # existing repo files that no entry claims are never served
+        for path in ("/view/specs/vouches.toml", "/view/scripts/fit_alpha.py"):
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                get(path)
+            assert exc.value.code == 404
+
+        # declared but bytes-remote -> 404, matching the unlinked chip
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            get("/view/reports/fig_beta.dat")
+        assert exc.value.code == 404
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+        time.sleep(0)
+
+
+def test_output_path_never_escapes_the_root(root: Path) -> None:
+    dash = Dashboard(root)
+    assert dash.output_path("results/alpha/fit.json") is not None
+    for rel in ("../etc/passwd", "specs/runs.toml", "/etc/passwd", ""):
+        assert dash.output_path(rel) is None
 
 
 def test_export_cli(root: Path) -> None:

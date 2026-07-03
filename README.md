@@ -126,6 +126,13 @@ refuse to write ledgers against a tree that doesn't parse. The
 `/specthis-lint` slash command explains each problem and fixes the
 mechanical ones.
 
+When served, **text outputs are clickable**: an output chip whose bytes
+are on disk and look like text opens at `/view/<path>` in a new tab —
+escaped, syntax-highlighted (highlight.js from CDN, plain text
+offline), and restricted to declared outputs. In the static
+`specs.html` opened from disk there is no server, so the chips degrade
+back to plain text.
+
 The views include **host-doc routing**: for each report spec declaring
 `host_doc:` + `section_label:`, is every exported `.tex` actually
 `\input` into that labelled section? Orphaned exports and missing
