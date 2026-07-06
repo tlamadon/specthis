@@ -45,7 +45,6 @@ def _watched_paths(root: Path, project: Project | None) -> list[Path]:
             rel.update(entry.binding.scripts)
             rel.update(entry.binding.workflows)
             rel.update(entry.outputs)
-        rel.update(s.host_doc for s in project.specs if s.host_doc)
         paths += [root / r for r in sorted(rel)]
         for pattern in project.package_globs:
             paths += sorted(p for p in root.glob(pattern) if p.is_file())
@@ -205,7 +204,7 @@ class Dashboard:
             # Lenient: grammar problems render into the page; only a
             # missing specs/ directory falls through to the error page.
             project, problems = load_project_lenient(self.root)
-            page, _index, _routing = render(project, problems)
+            page, _index = render(project, problems)
             self._project = project
             # the watch list may have grown (new scripts/outputs) — re-stat it
             fingerprint = _stat_fingerprint(_watched_paths(self.root, project))

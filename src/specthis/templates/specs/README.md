@@ -133,14 +133,15 @@ inputs), and never read back by the ledger.
 
 ```toml
 [preview.".tex"]
-command = "scripts/preview_tex.sh {input} {host_doc} {out}"  # runs at the project root
+command = "scripts/preview_tex.sh {input} paper/main.tex {out}"  # runs at the project root
 format  = "pdf"                                   # what lands at {out} (default pdf)
 inputs  = ["paper/preamble.tex", "scripts/preview_tex.sh"]  # part of the cache key
 ```
 
 The command must place its artifact at `{out}`; `{input}` is the
-output file (project-relative) and `{host_doc}` is the owning spec's
-`host_doc:` (empty if none). Declare in `inputs` everything else the
+output file (project-relative). Anything else the render needs —
+which document's preamble to compile inside, say — is spelled out in
+the command itself. Declare in `inputs` everything else the
 render reads — the preamble, the recipe script itself — so editing
 them invalidates exactly the affected previews. Successful renders are
 cached; failures are not (the log shows in the browser; fix and
@@ -204,8 +205,7 @@ Valid `kind:` values:
 | `library`     | Contracts on **package code with no artefact** — the chain stops at code. Entries carry no `Output:`; each MUST be bound to its module(s) in `bindings.toml` (no convention default). Status ladder stops at the vouch: a library entry is *ready* when a non-author vouched it at the current digests. Consumable: downstream `consumes:` edges take its code manifest as the upstream digest, so a module edit flags the entry *audit needed* and makes its consumers *stale*. Library-bound modules are carved out of the `[package]` blob. |
 | `templates`   | Reusable table / figure patterns: palette, layout, reference implementation. |
 | `compute`     | Named entries with an `Output:` contract that produce JSON / data. Usually `tier: intensive`. |
-| `report`      | Named entries with an `Export outputs:` contract that produce figures/tables; `host_doc:` + `section_label:` in frontmatter route the artefacts. Quick. |
-| `figure`      | Standalone figure/table generator: same `Export outputs:` contract as `report`, but self-contained — no host doc, no routing. Quick. |
+| `report`      | Named entries with an `Export outputs:` contract that produce figures/tables. Quick. |
 
 The `definitions` / `library` split answers "when does an edit get
 picked up?": a `definitions` edit is picked up only when a human next
@@ -215,8 +215,8 @@ the re-vouch.
 
 ## What a specification looks like
 
-A spec is **an authoring contract on code**. Every compute / report /
-figure spec is organised around two complementary parts:
+A spec is **an authoring contract on code**. Every compute / report
+spec is organised around two complementary parts:
 
 - **`## Script`** (compute) or the per-entry export prose (report) —
   *prose about how to author the code*: the data loader, model
@@ -226,7 +226,7 @@ figure spec is organised around two complementary parts:
   unit(s). Each `### entry-name` block carries:
   - `Output:` (compute — exactly one path, e.g.
     `` Output: `results/alpha/fit.json` ``) or `Export outputs:`
-    (report/figure — one or more paths, inline or as a `- ` list).
+    (report — one or more paths, inline or as a `- ` list).
     This is the artefact the entry promises: the public interface
     downstream `consumes:` edges depend on.
 
@@ -245,7 +245,7 @@ contract; the results layer evolves independently.
 Files are named after the noun being specified: `models.md`,
 `estimators.md`, `compute-<job>.md`, `report-<job>.md`. Each workflow
 is split across two files — `compute-<name>.md` for the fit,
-`report-<name>.md` for the export + routing — paired by shared stem.
+`report-<name>.md` for the export — paired by shared stem.
 
 ## The five verbs
 

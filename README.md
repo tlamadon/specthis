@@ -9,8 +9,8 @@ of repair does each broken one need — a mind (re-judge), a machine
 
 > Status: **implemented and tested** — the ledger verbs (`check` /
 > `status` / `run` / `vouch` / `migrate`), the scaffolding (`install` /
-> `init`), the live dashboard (`export` / `serve`) with spec browsing
-> and host-doc routing, the journal view, and the remote cache. See
+> `init`), the live dashboard (`export` / `serve`) with spec browsing,
+> the journal view, and the remote cache. See
 > [Roadmap](#roadmap) for the deliberately-deferred extensions.
 
 ## The model
@@ -112,9 +112,9 @@ ledger:
 
 ```bash
 specthis lint      # grammar check: EVERY problem across all files at once
-specthis export    # write specs/specs.html + _index.json + _routing.json
+specthis export    # write specs/specs.html + _index.json
 specthis serve     # live dashboard at localhost:8765; re-renders on any
-                   # spec / ledger / code / output / host-doc change (writes nothing)
+                   # spec / ledger / code / output change (writes nothing)
 ```
 
 Readers are lenient, writers are strict: `check`, `lint`, and the
@@ -140,29 +140,21 @@ specthis provides the plumbing, the project provides the how.
 
 ```toml
 [preview.".tex"]
-command = "scripts/preview_tex.sh {input} {host_doc} {out}"
+command = "scripts/preview_tex.sh {input} {out}"
 inputs  = ["paper/preamble.tex", "scripts/preview_tex.sh"]
 ```
 
 The command runs at the project root and must place its artifact
 (`format`, default `pdf`) at `{out}`; specthis substitutes `{input}`
-(the output file) and `{host_doc}` (from the owning spec's
-frontmatter) — so a ten-line wrapper can compile a fragment inside
-the very preamble that will host it (the bundled `specs/README.md`
-ships one). Previews are a view, never a claim: artifacts are
+(the output file) — so a ten-line wrapper can compile a fragment
+inside the very preamble that will host it (the bundled
+`specs/README.md` ships one). Previews are a view, never a claim: artifacts are
 content-addressed by (output bytes, recipe, declared inputs), cached
 *outside* the repo, rendered on first view at `/preview/<path>`
 (linked from the `/view/` page), and never read back by the ledger.
 Editing the preamble invalidates exactly the previews that read it. A
 failing recipe shows its compile log in the browser — failures are
 not cached, so fixing and reloading retries.
-
-The views include **host-doc routing**: for each report spec declaring
-`host_doc:` + `section_label:`, is every exported `.tex` actually
-`\input` into that labelled section? Orphaned exports and missing
-labels show on the dashboard and as warnings in `check` — warnings
-only, never the exit code, because routing is a view concern, not a
-claim.
 
 And the **remote cache** moves bytes without ever touching claims:
 
@@ -417,8 +409,7 @@ humans work the queue with `specthis vouch` / `specthis run --stale`.
 Done: spec/bindings parsing, content hashing + composed signatures,
 both ledgers, status derivation + frontier, the five verbs, migration,
 scaffolding, agent templates, the dashboard (`export` + `serve` with
-live reload, stdlib only), host-doc routing (`_routing.json` +
-orphaned-export checks), the remote cache (`file://` and `s3://`
+live reload, stdlib only), the remote cache (`file://` and `s3://`
 backends, digest-verified fetch keyed by the composed signature), the
 journal (`journal/` narratives rendered into the dashboard, plus
 `/specthis-journal`), and output previews (`[preview]` recipes in

@@ -2,19 +2,18 @@
 
 A ``[preview]`` table in ``specs/bindings.toml`` maps an output suffix
 to a shell command that turns those bytes into something a browser
-shows — typically a ``.tex`` fragment compiled inside its host
-document's preamble:
+shows — typically a ``.tex`` fragment compiled inside the paper's
+preamble:
 
     [preview.".tex"]
-    command = "scripts/preview_tex.sh {input} {host_doc} {out}"
+    command = "scripts/preview_tex.sh {input} {out}"
     inputs  = ["paper/preamble.tex", "scripts/preview_tex.sh"]
 
-The command runs at the project root with three substitutions:
-``{input}`` (the output, project-relative), ``{out}`` (the cache path
-its artifact must land at, suffixed per the recipe's ``format``), and
-``{host_doc}`` (the owning spec's host document, or empty). specthis
-contributes what only it knows — which host doc, which files — and
-the project contributes what only it knows: how to compile them.
+The command runs at the project root with two substitutions:
+``{input}`` (the output, project-relative) and ``{out}`` (the cache
+path its artifact must land at, suffixed per the recipe's ``format``).
+specthis contributes the plumbing — which files, when to rerender —
+and the project contributes what only it knows: how to compile them.
 
 Everything here is a view concern, same trust story as executors: the
 recipe is a configured ingredient, never an authority. Artifacts are
@@ -39,7 +38,7 @@ from typing import TYPE_CHECKING
 from . import hashing
 
 if TYPE_CHECKING:  # import cycle: parse.py validates formats against us
-    from .parse import PreviewRecipe, Project, SpecFile
+    from .parse import PreviewRecipe, Project
 
 #: recipe ``format`` -> Content-Type the artifact is served with.
 CONTENT_TYPES = {
@@ -71,23 +70,11 @@ def find_recipe(project: Project, rel: str) -> PreviewRecipe | None:
     return project.previews.get(Path(rel).suffix.lower())
 
 
-def _owning_spec(project: Project, rel: str) -> SpecFile | None:
-    for entry in project.entries.values():
-        if rel in entry.outputs:
-            return entry.spec
-    return None
-
-
-def _host_doc(project: Project, rel: str) -> str:
-    spec = _owning_spec(project, rel)
-    return (spec.host_doc if spec else None) or ""
-
-
 def preview_key(project: Project, rel: str, recipe: PreviewRecipe) -> str | None:
     """Content address of the rendered artifact; None if bytes are absent.
 
     Folds in everything the render depends on — output bytes, command,
-    format, host doc, and each declared input's digest — so editing the
+    format, and each declared input's digest — so editing the
     preamble invalidates exactly the previews that read it, and nothing
     recompiles when nothing moved.
     """
@@ -98,7 +85,6 @@ def preview_key(project: Project, rel: str, recipe: PreviewRecipe) -> str | None
         (f"output:{rel}", out_sha),
         ("command", hashing.sha256_text(recipe.command)),
         ("format", recipe.format),
-        ("host_doc", _host_doc(project, rel)),
     ]
     for pattern in recipe.inputs:
         matches = [p for p in sorted(project.root.glob(pattern)) if p.is_file()]
@@ -145,10 +131,8 @@ def render_preview(
 
     scratch = Path(tempfile.mkdtemp(prefix="build-", dir=cache_dir))
     out_tmp = scratch / f"preview.{recipe.format}"
-    command = (
-        recipe.command.replace("{input}", shlex.quote(rel))
-        .replace("{out}", shlex.quote(str(out_tmp)))
-        .replace("{host_doc}", shlex.quote(_host_doc(project, rel)))
+    command = recipe.command.replace("{input}", shlex.quote(rel)).replace(
+        "{out}", shlex.quote(str(out_tmp))
     )
     try:
         try:

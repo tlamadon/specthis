@@ -72,7 +72,7 @@ against the claim) if a local step actually needs them.
   to author the code*. Part of the contract; names no path.
 - **`## Entry`** / **`## Entries`** — the claim unit(s). Each
   `### entry-name` block carries `Output:` (compute, one path under
-  `results/`) or `Export outputs:` (report/figure, files under
+  `results/`) or `Export outputs:` (report, files under
   `reports/`). `library` entries carry NO output — they are contracts
   on package modules (bound in `bindings.toml`), the chain stops at
   code, and their ladder ends at the vouch. No `Script:`, no
@@ -125,8 +125,8 @@ Start mechanical, end judgmental:
    - **upstream-unverified** — do nothing locally; point at the
      frontier entry it is waiting on.
 3. While reading, also flag: compute-spec scope creep (compute code
-   writing under `reports/` or importing plotting libraries), routing
-   leaks (a compute `Output:` naming a `reports/` path), spec state
+   writing under `reports/` or importing plotting libraries, or a
+   compute `Output:` naming a `reports/` path), spec state
    leaks (`Script:` / `Status:` / `depends_on:` fields), missing
    `## Artefact design` on report entries, and `references:` targets
    never mentioned in the body.
@@ -167,9 +167,8 @@ Only when explicitly asked:
    if the default `scripts/<entry>.py` convention doesn't fit.
 4. Compute entries: smoke-test only (data loads, model builds, first
    step finite) — never a full fit, never writing the real output.
-   Report/figure entries: run the exporter end-to-end (it is cheap)
-   and confirm the declared artefacts materialise; confirm the host
-   doc routes them (`host_doc:` / `section_label:`).
+   Report entries: run the exporter end-to-end (it is cheap)
+   and confirm the declared artefacts materialise.
 5. **Stop. Propose the vouch.** Tell the user the entry is ready for
    judgment: "run `specthis vouch <entry> --as <you>`, or hand it to
    a critic session." You authored this change; the pen is not yours.

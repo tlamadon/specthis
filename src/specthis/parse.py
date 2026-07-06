@@ -8,10 +8,10 @@ template):
   artefact flow, enters signatures) and ``references:`` (spec files —
   vocabulary, ledger-invisible). Compute specs add
   ``tier: intensive | quick``.
-- Executable kinds (``compute``, ``report``, ``figure``) carry a
+- Executable kinds (``compute``, ``report``) carry a
   ``## Entry`` (single) or ``## Entries`` (multi) section whose
   ``### <entry-name>`` blocks each declare ``Output:`` (compute, one
-  path) or ``Export outputs:`` (report/figure, one or more paths).
+  path) or ``Export outputs:`` (report, one or more paths).
 
 ``bindings.toml`` is hand-edited vocabulary, not a claim: it maps each
 entry to the scripts that implement it, the command that runs it, and
@@ -40,8 +40,8 @@ else:  # pragma: no cover
 from .hashing import sha256_text
 from .preview import CONTENT_TYPES
 
-KINDS = {"meta", "definitions", "templates", "library", "compute", "report", "figure"}
-ENTRY_KINDS = {"library", "compute", "report", "figure"}
+KINDS = {"meta", "definitions", "templates", "library", "compute", "report"}
+ENTRY_KINDS = {"library", "compute", "report"}
 TIERS = {"intensive", "quick"}
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -78,7 +78,7 @@ class PreviewRecipe:
     """How the dashboard renders one output suffix; vocabulary, not a claim.
 
     The command runs at the project root and must place its artifact at
-    ``{out}``; ``{input}`` and ``{host_doc}`` are also substituted.
+    ``{out}``; ``{input}`` is also substituted.
     ``inputs`` are glob patterns whose digests fold into the preview
     cache key — declare the preamble and the recipe script itself so
     editing either invalidates exactly the affected previews.
@@ -118,8 +118,6 @@ class SpecFile:
     title: str = ""  # display title: frontmatter `title:`, else first heading, else name
     skip: bool = False  # commented out: entries dormant, body not grammar-checked
     entries: list[Entry] = field(default_factory=list)
-    host_doc: str | None = None
-    section_label: str | None = None
 
 
 @dataclass
@@ -219,8 +217,6 @@ def parse_spec(path: Path) -> SpecFile:
         body=body,
         title=str(meta.get("title") or (heading.group(1) if heading else name)),
         skip=skip,
-        host_doc=meta.get("host_doc"),
-        section_label=meta.get("section_label"),
     )
 
     if kind in ENTRY_KINDS:

@@ -46,20 +46,17 @@ preview-recipe edit as drift, and never run a recipe yourself.
 
 While reading, also flag (per AGENTS.md): compute-spec scope creep
 (compute code writing under `reports/` or importing plotting
-libraries), routing leaks (a compute `Output:` naming a `reports/`
-path), spec state leaks (`Script:` / `Status:` / `depends_on:` in a
-spec), missing `## Artefact design` on report entries, `references:`
-targets never mentioned in the body, and — for report specs — that
-each `Export outputs:` path is `\input`/`\includegraphics`'d inside
-the `\label{<section_label>}` section of the declared `host_doc:`
-(Grep the host doc; do not compile it).
+libraries, or a compute `Output:` naming a `reports/` path), spec
+state leaks (`Script:` / `Status:` / `depends_on:` in a spec),
+missing `## Artefact design` on report entries, and `references:`
+targets never mentioned in the body.
 
 ## Output format
 
 Return exactly one markdown table, one row per entry:
 
 ```
-| entry | status | repair | contract ✓ | routing ✓ | notes / proposed verdict |
+| entry | status | repair | contract ✓ | notes / proposed verdict |
 ```
 
 `repair` is `mind` (audit needed / rejected), `machine` (stale),
@@ -69,7 +66,7 @@ or "propose reject: <one-line reason>". Proposals are for the human
 or a critic session to act on — never act on them yourself.
 
 After the table, a ≤5-line summary: counts per status, plus any
-scope-creep / routing / state-leak findings.
+scope-creep / state-leak findings.
 
 ## Hard rules
 

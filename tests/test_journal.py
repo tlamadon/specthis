@@ -53,7 +53,7 @@ def test_load_journal_without_directory(root: Path) -> None:
 def test_dashboard_renders_journal_view(root: Path) -> None:
     write(root, "journal/2026-06-30-smc-ffbs-fix.md", FIX_ENTRY)
     write(root, "journal/2026-06-10-abb-calibration.md", CALIBRATION_ENTRY)
-    page, index, _ = render(load_project(root))
+    page, index = render(load_project(root))
     # sidebar: a journal nav group with the index link and both entries
     assert '<span class="kind kind-journal">journal</span>' in page
     assert 'data-file-anchor="journal"' in page
@@ -85,7 +85,7 @@ def test_journal_links_are_hash_routed_both_ways(root: Path) -> None:
         "See the [narrative](journal/2026-06-30-smc-ffbs-fix.md).",
     )
     write(root, "specs/compute-alpha.md", text)
-    page, _, _ = render(load_project(root))
+    page, _ = render(load_project(root))
     # spec body -> journal section; journal body -> spec + sibling journal
     assert 'href="#journal-2026-06-30-smc-ffbs-fix"' in page
     assert 'href="journal/2026-06-30-smc-ffbs-fix.md"' not in page
@@ -98,7 +98,7 @@ def test_journal_titles_are_escaped(root: Path) -> None:
     # the body itself renders as-is like any spec (the user's own repo
     # content — the same trust level as opening the file in an editor).
     write(root, "journal/2026-06-30-xss.md", '# a <b>"bold"</b> title\n')
-    page, _, _ = render(load_project(root))
+    page, _ = render(load_project(root))
     assert (
         '<span class="journal-card-title">a &lt;b&gt;&quot;bold&quot;&lt;/b&gt; title</span>'
         in page
@@ -107,7 +107,7 @@ def test_journal_titles_are_escaped(root: Path) -> None:
 
 
 def test_export_without_journal_omits_the_view(root: Path) -> None:
-    page, index, _ = render(load_project(root))
+    page, index = render(load_project(root))
     assert 'id="journal-filter-input"' not in page
     assert '<span class="kind kind-journal">' not in page
     assert 'class="journal-card"' not in page

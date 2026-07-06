@@ -96,6 +96,6 @@ human that doubts await their own judgment.
   DOUBT.
 - If the ledger refuses a vouch (standing rejection), report it;
   never work around it.
-- Do not audit routing, freshness, or anything `specthis check`
+- Do not audit freshness or anything `specthis check`
   already derives mechanically — your scarce judgment is
   contract-in-spirit only.

@@ -1,4 +1,4 @@
-"""Dashboard renderer: specs/specs.html + _index.json + _routing.json.
+"""Dashboard renderer: specs/specs.html + _index.json.
 
 The page is an mkdocs-style spec browser: a sticky sidebar lists every
 spec file grouped by kind, hash routing shows one spec at a time (the
@@ -6,8 +6,7 @@ full markdown contract, rendered), and a "Status dashboard" section
 carries the frontier and the cross-project entry table. Everything is
 a *regenerated view*, never a source of truth: it joins the parsed
 specs (:mod:`specthis.parse`), the derived statuses
-(:mod:`specthis.check`), the host-doc routing scan
-(:mod:`specthis.routing`), and the journal narratives
+(:mod:`specthis.check`), and the journal narratives
 (:mod:`specthis.journal`) — and nothing else. ``specthis check``
 never reads these artefacts; deleting them changes no answer.
 
@@ -32,7 +31,6 @@ import markdown as _markdown
 from .check import LOCAL_BREAKS, Report, Status, check_project, frontier
 from .journal import JournalEntry, load_journal
 from .parse import _FRONTMATTER, Problem, Project, SpecFile, load_project_lenient
-from .routing import RoutingReport, build_routing_json, check_routing
 
 _KIND_ORDER = {
     "meta": 0,
@@ -41,7 +39,6 @@ _KIND_ORDER = {
     "templates": 3,
     "compute": 4,
     "report": 5,
-    "figure": 6,
 }
 
 _STATUS_CLASS = {
@@ -95,8 +92,6 @@ def build_index(
                 "tier": spec.tier,
                 "consumes": spec.consumes,
                 "references": spec.references,
-                "host_doc": spec.host_doc,
-                "section_label": spec.section_label,
                 "entries": entries,
             }
         )
@@ -116,7 +111,7 @@ _CSS = """
   --sidebar-bg: #f7f4ee;
   --kind-meta: #6e6e6e; --kind-definitions: #2e7d5b;
   --kind-templates: #6a3d8a; --kind-compute: #2e6e9e;
-  --kind-report: #b85a1e; --kind-figure: #1f7a7a;
+  --kind-report: #b85a1e;
   --kind-library: #8a6d1f; --kind-journal: #335c81;
 }
 * { box-sizing: border-box; }
@@ -141,7 +136,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
   font-weight: 700; }
 .kind-meta { color: var(--kind-meta); }       .kind-definitions { color: var(--kind-definitions); }
 .kind-templates { color: var(--kind-templates); } .kind-compute { color: var(--kind-compute); }
-.kind-report { color: var(--kind-report); }   .kind-figure { color: var(--kind-figure); }
+.kind-report { color: var(--kind-report); }
 .kind-library { color: var(--kind-library); }
 .kind-journal { color: var(--kind-journal); }
 .kind-broken { color: #a40e26; }
@@ -206,9 +201,6 @@ td a { color: var(--accent); text-decoration: none; }
 .who { color: var(--muted); font-size: 0.82rem; }
 .moved { color: #7d4e00; font-size: 0.82rem; }
 .empty { color: #9a958c; }
-.r-ok  { color: #1a5c33; }
-.r-bad { color: #a40e26; font-weight: 600; }
-.r-note { color: #9a958c; }
 
 .md { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
 .md h1 { font-size: 1.3rem; margin: 1rem 0 0.4rem; }
@@ -518,30 +510,6 @@ def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) ->
     )
 
 
-def _routing_line(spec: SpecFile, rr: RoutingReport | None) -> str:
-    head = f'<span class="lbl">routes to</span> <code>{_e(spec.host_doc)}</code>' + (
-        f" &sect; <code>{_e(spec.section_label)}</code>" if spec.section_label else ""
-    )
-    if rr is None:
-        return f'<div class="dep">{head}</div>'
-    if not rr.host_doc_exists:
-        return f'<div class="dep">{head} <span class="r-bad">&#10007; host doc missing</span></div>'
-    if not rr.label_found:
-        return f'<div class="dep">{head} <span class="r-bad">&#10007; label not found</span></div>'
-    marks = " ".join(
-        f'<span class="r-ok">&#10003; <code>{_e(Path(out).name)}</code></span>'
-        if ok
-        else f'<span class="r-bad">&#10007; <code>{_e(Path(out).name)}</code> orphaned</span>'
-        for out, ok in rr.routed.items()
-    )
-    extra = (
-        f' <span class="r-note">section also inputs: {_e(", ".join(rr.extra_inputs))}</span>'
-        if rr.extra_inputs
-        else ""
-    )
-    return f'<div class="dep">{head} {marks}{extra}</div>'
-
-
 _MD_HREF = re.compile(r'href="(?!(?:[a-z][a-z0-9+.-]*:|//|#))([^"]+?\.md)(#[^"]*)?"')
 
 
@@ -696,7 +664,6 @@ def _broken_section(root: Path, filename: str, problems: list[Problem]) -> str:
 def _status_section(
     project: Project,
     reports: dict[str, Report],
-    routing: dict[str, RoutingReport],
     problems: list[Problem],
 ) -> str:
     local, waiting, _ready = frontier(reports)
@@ -733,29 +700,6 @@ def _status_section(
             f"<table>{rows}</table>{waiting_html}</div>"
         )
 
-    warn_items = []
-    for rr in routing.values():
-        if not rr.host_doc_exists:
-            warn_items.append(f"{_e(rr.spec)}: host doc <code>{_e(rr.host_doc)}</code> missing")
-        elif not rr.label_found:
-            warn_items.append(
-                f"{_e(rr.spec)}: label <code>{_e(rr.section_label)}</code> "
-                f"not found in <code>{_e(rr.host_doc)}</code>"
-            )
-        else:
-            for out in rr.orphaned:
-                warn_items.append(
-                    f"{_e(rr.spec)}: <code>{_e(out)}</code> exported but never "
-                    f"input by <code>{_e(rr.host_doc)}</code>"
-                )
-    warnings_html = (
-        '<div class="warnings"><b>Routing warnings</b><ul>'
-        + "".join(f"<li>{w}</li>" for w in warn_items)
-        + "</ul></div>"
-        if warn_items
-        else ""
-    )
-
     all_rows = "".join(
         f'<tr><td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
         f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
@@ -775,7 +719,7 @@ def _status_section(
         '<section class="spec" id="status">'
         '<h2 class="spec-title">Status dashboard</h2>'
         f'<div class="chips">{chips}</div>'
-        f"{_problems_box(problems)}{frontier_html}{warnings_html}{all_table}</section>"
+        f"{_problems_box(problems)}{frontier_html}{all_table}</section>"
     )
 
 
@@ -783,7 +727,6 @@ def _spec_section(
     spec: SpecFile,
     project: Project,
     reports: dict[str, Report],
-    routing: dict[str, RoutingReport],
     journal_stems: set[str] | None = None,
 ) -> str:
     spec_names = {s.name for s in project.specs}
@@ -815,8 +758,6 @@ def _spec_section(
             for ref in spec.references
         )
         deps.append(f'<div class="dep"><span class="lbl">references</span> {chips}</div>')
-    if spec.host_doc:
-        deps.append(_routing_line(spec, routing.get(spec.name)))
 
     body_html = ""
     if spec.body.strip():
@@ -884,7 +825,6 @@ def _journal_section(
 def render_html(
     project: Project,
     reports: dict[str, Report],
-    routing: dict[str, RoutingReport],
     generated: str,
     problems: list[Problem] | None = None,
     journal: list[JournalEntry] | None = None,
@@ -894,13 +834,13 @@ def render_html(
     spec_names = {s.name for s in project.specs}
     journal_stems = {j.stem for j in journal}
     sections = (
-        [_status_section(project, reports, routing, problems)]
+        [_status_section(project, reports, problems)]
         + [
             _broken_section(project.root, filename, problems)
             for filename in _broken_files(project, problems)
         ]
         + [
-            _spec_section(spec, project, reports, routing, journal_stems)
+            _spec_section(spec, project, reports, journal_stems)
             for spec in sorted(
                 project.specs, key=lambda s: (_KIND_ORDER.get(s.kind, 9), s.name)
             )
@@ -925,30 +865,29 @@ def render_html(
 """
 
 
-def render(project: Project, problems: list[Problem] | None = None) -> tuple[str, dict, dict]:
-    """One joined view: (specs.html text, _index.json data, _routing.json data)."""
+def render(project: Project, problems: list[Problem] | None = None) -> tuple[str, dict]:
+    """One joined view: (specs.html text, _index.json data)."""
     reports = check_project(project)
-    routing = {r.spec: r for r in check_routing(project)}
     journal = load_journal(project.root)
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return (
-        render_html(project, reports, routing, generated, problems, journal),
+        render_html(project, reports, generated, problems, journal),
         build_index(project, reports, journal),
-        build_routing_json(project),
     )
 
 
 def write_artefacts(root: Path) -> list[Path]:
-    """Render and write specs/specs.html + _index.json + _routing.json.
+    """Render and write specs/specs.html + _index.json.
 
     Lenient: grammar problems land in the page, not on stderr."""
     project, problems = load_project_lenient(root)
-    html_text, index, routing = render(project, problems)
+    html_text, index = render(project, problems)
     targets = {
         project.specs_dir / "specs.html": html_text,
         project.specs_dir / "_index.json": json.dumps(index, indent=2) + "\n",
-        project.specs_dir / "_routing.json": json.dumps(routing, indent=2) + "\n",
     }
     for path, content in targets.items():
         path.write_text(content, encoding="utf-8")
+    # retired generated view — clear it from trees written by older versions
+    (project.specs_dir / "_routing.json").unlink(missing_ok=True)
     return list(targets)

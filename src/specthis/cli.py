@@ -141,24 +141,6 @@ def check_cmd(project_path: Path) -> None:
     skipped = f" (+{len(project.skipped_entries)} skipped)" if project.skipped_entries else ""
     click.echo(f"ready: {ready}/{len(reports)}{skipped}")
 
-    # Routing findings are view-layer warnings, not claims: informational,
-    # never part of the exit code.
-    from .routing import check_routing
-
-    warnings = []
-    for rr in check_routing(project):
-        if not rr.host_doc_exists:
-            warnings.append(f"{rr.spec}: host doc {rr.host_doc} missing")
-        elif not rr.label_found:
-            warnings.append(f"{rr.spec}: \\label{{{rr.section_label}}} not found in {rr.host_doc}")
-        else:
-            for out in rr.orphaned:
-                warnings.append(f"{rr.spec}: {out} exported but never input by {rr.host_doc}")
-    if warnings:
-        click.echo("routing warnings (view-layer, not claims):", err=True)
-        for w in warnings:
-            click.echo(f"  {w}", err=True)
-
     if local or problems:
         sys.exit(1)
 

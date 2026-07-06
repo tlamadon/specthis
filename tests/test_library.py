@@ -194,6 +194,6 @@ def test_status_shows_library_shape(root: Path) -> None:
 
 def test_viewer_renders_library_kind(root: Path) -> None:
     add_library(root)
-    page, _, _ = render(load_project(root))
+    page, _ = render(load_project(root))
     assert "kind-library" in page
     assert "code-only" in page

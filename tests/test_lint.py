@@ -69,7 +69,7 @@ def test_viewer_renders_around_broken_files(root: Path) -> None:
     make_ready(root)
     write(root, "specs/compute-alpha.md", "# broken but interesting prose\n")
     project, problems = load_project_lenient(root)
-    page, _, _ = render(project, problems)
+    page, _ = render(project, problems)
 
     assert "Spec problems" in page  # status-section box
     assert "does not parse" in page  # sidebar group for the broken file

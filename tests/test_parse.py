@@ -22,7 +22,6 @@ def test_project_parses(root: Path) -> None:
     fig = project.entries["fig-beta"]
     assert fig.outputs == ["reports/fig_beta.tex", "reports/fig_beta.dat"]
     assert fig.consumes == ["fit-beta"]
-    assert fig.spec.host_doc == "reports/paper.tex"
 
 
 def test_spec_sha_covers_frontmatter(root: Path) -> None:

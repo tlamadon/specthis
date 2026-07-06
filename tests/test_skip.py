@@ -9,9 +9,8 @@ from specthis.check import Status, check_project
 from specthis.cli import main
 from specthis.export import render
 from specthis.parse import SpecError, load_project_lenient, parse_spec
-from specthis.routing import check_routing
 
-from .conftest import COMPUTE_ALPHA, PAPER_TEX, REPORT_BETA, make_ready, write
+from .conftest import COMPUTE_ALPHA, REPORT_BETA, make_ready, write
 from .test_library import ESTIMATORS, add_library, ready_all
 
 
@@ -112,15 +111,6 @@ def test_skipped_library_keeps_blob_carveout(root: Path) -> None:
     assert any("consumes skipped entry `estimator-core`" in p.message for p in problems)
 
 
-def test_routing_exempts_skipped_specs(root: Path) -> None:
-    write(root, "reports/paper.tex", PAPER_TEX.replace("\\input{fig_beta.tex}\n", ""))
-    assert check_routing(load_project_lenient(root)[0])[0].orphaned  # baseline: warned
-    write(root, "specs/report-beta.md", REPORT_BETA.replace(
-        "kind: report", "kind: report\nskip: true"
-    ))
-    assert check_routing(load_project_lenient(root)[0]) == []  # dormant: silent
-
-
 # ----------------------------------------------------------------- view
 
 
@@ -128,7 +118,7 @@ def test_viewer_renders_skipped_greyed_not_gone(root: Path) -> None:
     make_ready(root)
     skip_alpha(root)
     project, problems = load_project_lenient(root)
-    page, index, _ = render(project, problems)
+    page, index = render(project, problems)
 
     assert '<section class="spec skipped" id="spec-compute-alpha">' in page
     assert "skipped — entries dormant" in page  # spec-meta badge

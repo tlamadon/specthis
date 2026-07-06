@@ -48,7 +48,7 @@ def test_parse_preview_recipes(root: Path) -> None:
 ".png" = 'convert {input} {out}'
 
 [preview.".tex"]
-command = 'scripts/preview_tex.sh {input} {host_doc} {out}'
+command = 'scripts/preview_tex.sh {input} {out}'
 format  = "svg"
 inputs  = ["paper/preamble.tex"]
 """,
@@ -183,27 +183,6 @@ def test_render_preview_timeout(root: Path, tmp_path: Path) -> None:
     assert result.path is None and "timed out" in result.log
 
 
-def test_host_doc_placeholder(root: Path, tmp_path: Path) -> None:
-    make_ready(root)
-    write(
-        root,
-        "specs/bindings.toml",
-        BINDINGS
-        + '[preview.".tex"]\ncommand = \'printf %s {host_doc} > {out}\'\nformat = "txt"\n'
-        + '[preview.".json"]\ncommand = \'printf x{host_doc} > {out}\'\nformat = "txt"\n',
-    )
-    project = load_project(root)
-    cache = tmp_path / "pcache"
-    # report-beta declares host_doc: reports/paper.tex
-    rel = "reports/fig_beta.tex"
-    tex = _render(project, rel, _recipe(project, rel), cache)
-    assert tex.path is not None and tex.path.read_text() == "reports/paper.tex"
-    # compute-alpha has no host_doc -> empty substitution
-    rel = "results/alpha/fit.json"
-    js = _render(project, rel, _recipe(project, rel), cache)
-    assert js.path is not None and js.path.read_text() == "x"
-
-
 @contextmanager
 def _served(root: Path):
     dash = Dashboard(root)
@@ -279,7 +258,7 @@ def test_view_page_links_preview_only_when_recipe_exists(
 FIGURE_PNG = """\
 ---
 name: figure-plot
-kind: figure
+kind: report
 ---
 
 # a standalone plot
@@ -303,7 +282,7 @@ def test_image_outputs_viewable_raw_and_chips_linked(
     (root / "reports").mkdir(exist_ok=True)
     (root / "reports/plot.png").write_bytes(PNG_BYTES)
 
-    page, _, _ = render(load_project(root))
+    page, _ = render(load_project(root))
     assert 'href="/view/reports/plot.png"' in page  # binary but browser-native
 
     with _served(root) as get:

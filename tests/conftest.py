@@ -64,8 +64,6 @@ name: report-beta
 kind: report
 consumes:
   - fit-beta
-host_doc: reports/paper.tex
-section_label: sec:beta
 ---
 
 # beta figures
@@ -130,15 +128,8 @@ pathlib.Path("reports/fig_beta.dat").write_text(str(beta["loss"]))
 """
 
 PAPER_TEX = """\
+% stand-in for a paper preamble: preview tests declare it as an input
 \\section{The beta fit}
-\\label{sec:beta}
-
-Results appear below. % \\input{commented-out.tex} is ignored
-
-\\input{fig_beta.tex}
-
-\\section{Discussion}
-\\label{sec:discussion}
 """
 
 

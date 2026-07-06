@@ -21,7 +21,7 @@ from .conftest import make_ready, write
 def test_export_writes_html_and_index(root: Path) -> None:
     make_ready(root)
     written = write_artefacts(root)
-    assert {p.name for p in written} == {"specs.html", "_index.json", "_routing.json"}
+    assert {p.name for p in written} == {"specs.html", "_index.json"}
 
     page = (root / "specs/specs.html").read_text()
     for needle in ("fit-alpha", "fit-beta", "fig-beta", "compute-alpha", "ready"):
@@ -44,7 +44,7 @@ def test_export_shows_frontier_and_escapes_html(root: Path) -> None:
 
     vouch_ok(root, "fit-alpha", attester='critic <b>"x"</b>')
     project = load_project(root)
-    page, _, _ = render(project)
+    page, _ = render(project)
     assert "Frontier" in page  # fit-alpha is now stale (re-vouched, not re-run)
     assert "&lt;b&gt;" in page and '<b>"x"</b>' not in page  # attester name escaped
     assert "upstream-unverified" in page or "stale" in page
@@ -52,7 +52,7 @@ def test_export_shows_frontier_and_escapes_html(root: Path) -> None:
 
 def test_spec_markdown_is_rendered_for_browsing(root: Path) -> None:
     project = load_project(root)
-    page, _, _ = render(project)
+    page, _ = render(project)
     assert '<div class="md">' in page
     assert "<h2>Script</h2>" in page  # compute-alpha's "## Script" heading
     assert "Fit the alpha model per models.md." in page  # its prose
@@ -68,7 +68,7 @@ def test_markdown_spec_links_are_hash_routed(root: Path) -> None:
         "see [ext](https://example.org/doc.md) and [gone](missing.md).",
     )
     write(root, "specs/compute-alpha.md", text)
-    page, _, _ = render(load_project(root))
+    page, _ = render(load_project(root))
     for raw in ('href="models.md"', 'href="./models.md"', 'href="specs/models.md"'):
         assert raw not in page  # every sibling-spec form rewritten...
     assert 'href="#spec-models"' in page  # ...to the hash-routed section
@@ -78,7 +78,7 @@ def test_markdown_spec_links_are_hash_routed(root: Path) -> None:
 
 def test_sidebar_and_hash_routing(root: Path) -> None:
     project = load_project(root)
-    page, _, _ = render(project)
+    page, _ = render(project)
     # one nav entry per spec file, grouped by kind, plus the status shortcut
     assert '<nav class="sidebar">' in page
     assert 'data-file-anchor="status"' in page
@@ -119,7 +119,7 @@ def test_index_matches_check(root: Path) -> None:
 def test_text_output_chips_link_to_viewer(root: Path) -> None:
     make_ready(root)
     (root / "reports/fig_beta.dat").unlink()  # ready, bytes remote
-    page, _, _ = render(load_project(root))
+    page, _ = render(load_project(root))
     assert 'href="/view/results/alpha/fit.json"' in page
     assert 'href="/view/reports/fig_beta.tex"' in page
     assert 'href="/view/reports/fig_beta.dat"' not in page  # nothing to open
@@ -130,7 +130,7 @@ def test_text_output_chips_link_to_viewer(root: Path) -> None:
 def test_binary_outputs_are_not_clickable(root: Path) -> None:
     make_ready(root)
     (root / "results/alpha/fit.json").write_bytes(b"\x00\x01PNGish")
-    page, _, _ = render(load_project(root))
+    page, _ = render(load_project(root))
     assert 'href="/view/results/alpha/fit.json"' not in page
     assert "<code>results/alpha/fit.json</code>" in page
 
