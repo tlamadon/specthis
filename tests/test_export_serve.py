@@ -67,6 +67,31 @@ def test_status_table_columns_and_sorter(root: Path) -> None:
     assert flat["fig-beta"]["materialized"] is False
 
 
+def test_status_table_focus_and_detail(root: Path) -> None:
+    make_ready(root)
+    page, index = render(load_project(root))
+    # rows carry the DAG so the client-side focus filter can walk it
+    assert 'data-name="fit-beta" data-consumes="fit-alpha"' in page
+    assert 'data-name="fig-beta" data-consumes="fit-beta"' in page
+    assert "focus-btn" in page and 'id="focus-bar"' in page
+    assert "specsFocus" in page  # focus survives the live-reload cycle
+    # each row has a collapsed detail card with the entry neighborhood
+    assert '<tr class="detail">' in page
+    assert '<span class="lbl">consumed by</span>' in page
+    flat = {e["name"]: e for s in index["specs"] for e in s["entries"]}
+    assert flat["fit-alpha"]["consumed_by"] == ["fit-beta"]
+    assert flat["fig-beta"]["consumes"] == ["fit-beta"]
+    assert flat["fig-beta"]["consumed_by"] == []
+
+
+def test_detail_card_diagnoses_broken_entries(root: Path) -> None:
+    make_ready(root)
+    (root / "scripts/fit_beta.py").write_text("# edited\n")  # fit-beta -> audit
+    page, _ = render(load_project(root))
+    assert '<span class="lbl">why</span> spec or code moved since vouch' in page
+    assert '<span class="lbl">why</span> waiting on fit-beta' in page  # fig-beta
+
+
 def test_spec_markdown_is_rendered_for_browsing(root: Path) -> None:
     project = load_project(root)
     page, _ = render(project)

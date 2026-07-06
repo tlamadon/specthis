@@ -3,8 +3,10 @@
 The page is an mkdocs-style spec browser: a sticky sidebar lists every
 spec file grouped by kind, hash routing shows one spec at a time (the
 full markdown contract, rendered), and a "Status dashboard" section
-carries the cross-project entry table — sortable by any column, with
-frontier membership, last ledger update, and byte location as columns. Everything is
+carries the cross-project entry table — sortable by any column, each
+row expandable into a detail card (repair hint, upstream/downstream
+neighbors, ledger facts), and focusable on one entry so only its
+upstream/downstream slice stays visible. Everything is
 a *regenerated view*, never a source of truth: it joins the parsed
 specs (:mod:`specthis.parse`), the derived statuses
 (:mod:`specthis.check`), and the journal narratives
@@ -56,12 +58,22 @@ _STATUS_CLASS = {
 _STATUS_RANK = {s: i for i, s in enumerate(Status)}
 
 
+def _consumed_by(project: Project) -> dict[str, list[str]]:
+    """Reverse of ``consumes`` over the active entries (downstream edges)."""
+    rev: dict[str, list[str]] = {}
+    for name, e in sorted(project.entries.items()):
+        for up in e.consumes:
+            rev.setdefault(up, []).append(name)
+    return rev
+
+
 def build_index(
     project: Project,
     reports: dict[str, Report],
     journal: list[JournalEntry] | None = None,
 ) -> dict:
     """The queryable JSON view: per spec, frontmatter + per-entry facts."""
+    consumed_by = _consumed_by(project)
     specs = []
     for spec in project.specs:
         entries = []
@@ -86,6 +98,8 @@ def build_index(
                     "run": asdict(r.run) if r.run else None,
                     "moved": r.moved,
                     "materialized": r.materialized,
+                    "consumes": entry.consumes,
+                    "consumed_by": consumed_by.get(entry.name, []),
                 }
             )
         specs.append(
@@ -203,6 +217,31 @@ table.sortable th { cursor: pointer; user-select: none; white-space: nowrap; }
 table.sortable th:hover { color: var(--fg); }
 table.sortable th.sort-asc::after { content: " \\25B4"; }
 table.sortable th.sort-desc::after { content: " \\25BE"; }
+table.sortable th.no-sort { cursor: default; }
+
+.focus-bar { display: flex; align-items: center; gap: 10px; font-size: 0.85rem;
+  background: #fff; border: 1px solid var(--border);
+  border-left: 4px solid var(--accent); border-radius: 8px;
+  padding: 8px 12px; margin-bottom: 12px; }
+.focus-bar button { border: 1px solid var(--border); background: var(--bg);
+  border-radius: 999px; font-size: 0.75rem; padding: 2px 10px; cursor: pointer;
+  color: var(--muted); margin-left: auto; }
+.focus-bar button:hover { color: var(--accent); border-color: var(--accent); }
+.focus-cell { white-space: nowrap; }
+.focus-btn { border: none; background: none; cursor: pointer; padding: 0;
+  color: #b9b3a7; font-size: 0.95rem; line-height: 1; }
+.focus-btn:hover { color: var(--accent); }
+tr.entry-row.focused .focus-btn { color: var(--accent); }
+.dir { font-size: 0.8rem; color: var(--muted); margin-left: 4px; }
+tr.entry-row { cursor: pointer; }
+tr.entry-row:hover td { background: rgba(107, 63, 29, 0.04); }
+tr.detail { display: none; }
+tr.detail.open { display: table-row; }
+tr.detail > td { padding: 2px 0 10px; }
+.detail-card { background: var(--sidebar-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 12px; font-size: 0.85rem; }
+.detail-card .dep { color: var(--fg); margin-top: 2px; }
+.detail-card .lbl { display: inline-block; min-width: 92px; color: var(--muted); }
 .who { color: var(--muted); font-size: 0.82rem; }
 .moved { color: #7d4e00; font-size: 0.82rem; }
 .empty { color: #9a958c; }
@@ -298,11 +337,13 @@ _ROUTER_JS = """
 
   // Sortable tables: click a header to sort by that column, click
   // again to reverse. Cells opt into a custom key via data-sort
-  // (numbers compare numerically); empty keys always sort last.
+  // (numbers compare numerically); empty keys always sort last. A
+  // row's detail row (the expandable card) travels with it.
   document.querySelectorAll('table.sortable').forEach((table) => {
     const tbody = table.tBodies[0];
     const headers = Array.from(table.tHead ? table.tHead.rows[0].cells : []);
     headers.forEach((th, col) => {
+      if (th.classList.contains('no-sort')) return;
       th.addEventListener('click', () => {
         const asc = !th.classList.contains('sort-asc');
         headers.forEach((h) => h.classList.remove('sort-asc', 'sort-desc'));
@@ -314,7 +355,12 @@ _ROUTER_JS = """
           return s !== undefined ? s : td.textContent.trim().toLowerCase();
         };
         Array.from(tbody.rows)
-          .map((tr) => [key(tr), tr])
+          .filter((tr) => !tr.classList.contains('detail'))
+          .map((tr) => {
+            const next = tr.nextElementSibling;
+            const detail = next && next.classList.contains('detail') ? next : null;
+            return [key(tr), tr, detail];
+          })
           .sort((a, b) => {
             if (a[0] === '' || b[0] === '') {
               return (a[0] === '' ? 1 : 0) - (b[0] === '' ? 1 : 0);
@@ -325,10 +371,92 @@ _ROUTER_JS = """
               ? na - nb : a[0].localeCompare(b[0]);
             return asc ? cmp : -cmp;
           })
-          .forEach((pair) => tbody.appendChild(pair[1]));
+          .forEach((row) => {
+            tbody.appendChild(row[1]);
+            if (row[2]) tbody.appendChild(row[2]);
+          });
       });
     });
   });
+
+  // Entry focus + detail cards. Rows carry the DAG (data-consumes);
+  // focusing an entry hides everything outside its upstream/downstream
+  // closure. Clicking a row toggles its detail card. Focus survives
+  // the live-reload cycle via sessionStorage, like scroll does.
+  const entryRows = Array.from(document.querySelectorAll('tr.entry-row'));
+  if (entryRows.length) {
+    const up = {};
+    const down = {};
+    entryRows.forEach((tr) => {
+      const name = tr.dataset.name;
+      up[name] = (tr.dataset.consumes || '').split(' ').filter(Boolean);
+      up[name].forEach((c) => { (down[c] = down[c] || []).push(name); });
+    });
+    const closure = (start, edges) => {
+      const seen = new Set();
+      const queue = [start];
+      while (queue.length) {
+        for (const next of edges[queue.pop()] || []) {
+          if (!seen.has(next)) { seen.add(next); queue.push(next); }
+        }
+      }
+      return seen;
+    };
+    const detailOf = (tr) => {
+      const next = tr.nextElementSibling;
+      return next && next.classList.contains('detail') ? next : null;
+    };
+    const bar = document.getElementById('focus-bar');
+    let current = null;
+    const apply = (name) => {
+      current = name;
+      const ups = name ? closure(name, up) : null;
+      const downs = name ? closure(name, down) : null;
+      let shown = 0;
+      entryRows.forEach((tr) => {
+        const n = tr.dataset.name;
+        const visible = !name || n === name || ups.has(n) || downs.has(n);
+        tr.hidden = !visible;
+        tr.classList.toggle('focused', n === name);
+        const detail = detailOf(tr);
+        if (detail && !visible) detail.classList.remove('open');
+        const dir = tr.querySelector('.dir');
+        if (dir) {
+          dir.textContent = !name || n === name ? ''
+            : (ups.has(n) ? '\\u2191' : (downs.has(n) ? '\\u2193' : ''));
+        }
+        if (visible) shown += 1;
+      });
+      if (bar) {
+        bar.hidden = !name;
+        if (name) {
+          document.getElementById('focus-name').textContent = name;
+          document.getElementById('focus-counts').textContent =
+            '\\u2014 ' + ups.size + ' upstream, ' + downs.size +
+            ' downstream (' + shown + ' of ' + entryRows.length + ' entries shown)';
+        }
+      }
+      if (name) sessionStorage.setItem('specsFocus', name);
+      else sessionStorage.removeItem('specsFocus');
+    };
+    entryRows.forEach((tr) => {
+      const btn = tr.querySelector('.focus-btn');
+      if (btn) {
+        btn.addEventListener('click', () => {
+          apply(current === tr.dataset.name ? null : tr.dataset.name);
+        });
+      }
+      tr.addEventListener('click', (ev) => {
+        if (ev.target.closest('a, button')) return;
+        const detail = detailOf(tr);
+        if (detail) detail.classList.toggle('open');
+      });
+    });
+    const clear = document.getElementById('focus-clear');
+    if (clear) clear.addEventListener('click', () => apply(null));
+    const saved = sessionStorage.getItem('specsFocus');
+    if (saved && entryRows.some((tr) => tr.dataset.name === saved)) apply(saved);
+  }
 
   // Journal index: client-side text filter over the cards.
   const filterInput = document.getElementById('journal-filter-input');
@@ -700,13 +828,73 @@ def _broken_section(root: Path, filename: str, problems: list[Problem]) -> str:
     )
 
 
-def _frontier_cell(r: Report, project: Project) -> str:
-    """Frontier column: broken for local reasons, with the repair hint."""
+def _frontier_cell(r: Report) -> str:
+    """Frontier column: broken for local reasons, yes or —. The reason
+    lives in the row's detail card, not here — membership is for
+    scanning, diagnosis is for drilling down."""
     if r.status not in LOCAL_BREAKS:
         return '<td data-sort="1"><span class="empty">—</span></td>'
-    hint = _hint(r, project)
-    detail = f' <span class="who">— {_e(hint)}</span>' if hint else ""
-    return f'<td class="frontier-yes" data-sort="0"><b>yes</b>{detail}</td>'
+    return '<td class="frontier-yes" data-sort="0"><b>yes</b></td>'
+
+
+def _why(r: Report, entry: Entry, project: Project, reports: dict[str, Report]) -> str:
+    """One line of diagnosis for the detail card: the repair hint for
+    local breaks, the blocking upstreams for a waiting entry."""
+    if r.status in LOCAL_BREAKS:
+        return _hint(r, project)
+    if r.status is Status.UPSTREAM_UNVERIFIED:
+        broken = [u for u in entry.consumes if reports[u].status is not Status.READY]
+        return "waiting on " + ", ".join(broken)
+    return ""
+
+
+def _detail_row(
+    entry: Entry,
+    r: Report,
+    project: Project,
+    reports: dict[str, Report],
+    consumed_by: dict[str, list[str]],
+) -> str:
+    """The collapsed card under each dashboard row: diagnosis, the
+    entry's direct DAG neighborhood, and the ledger facts."""
+
+    def chips(names: list[str]) -> str:
+        return " ".join(
+            f'<a href="#{_e(_entry_anchor(n))}"><code>{_e(n)}</code></a>' for n in names
+        ) or '<span class="empty">—</span>'
+
+    lines: list[tuple[str, str]] = []
+    why = _why(r, entry, project, reports)
+    if why:
+        lines.append(("why", _e(why)))
+    lines.append(("consumes", chips(entry.consumes)))
+    lines.append(("consumed by", chips(consumed_by.get(entry.name, []))))
+    outputs = " ".join(_output_chip(project.root, o) for o in entry.outputs) or (
+        '<span class="empty">code-only</span>'
+    )
+    lines.append(("outputs", outputs))
+    if r.vouch:
+        note = f" — {r.vouch.note}" if r.vouch.note else ""
+        lines.append(
+            (
+                "vouch",
+                f'{_e(r.vouch.verdict)} <span class="who">by {_e(r.vouch.attester)}, '
+                f"{_e(r.vouch.vouched[:10])}{_e(note)}</span>",
+            )
+        )
+    if r.run:
+        lines.append(
+            ("run", f'<span class="who">{_e(r.run.ran[:10])} via {_e(r.run.executor)}</span>')
+        )
+    if entry.binding.scripts:
+        lines.append(
+            ("scripts", " ".join(f"<code>{_e(s)}</code>" for s in entry.binding.scripts))
+        )
+    body = "".join(
+        f'<div class="dep"><span class="lbl">{_e(label)}</span> {value}</div>'
+        for label, value in lines
+    )
+    return f'<tr class="detail"><td colspan="8"><div class="detail-card">{body}</div></td></tr>'
 
 
 def _updated_cell(r: Report) -> str:
@@ -764,21 +952,35 @@ def _status_section(
     if remote_bytes:
         chips += f'<span class="chip"><b>{remote_bytes}</b> bytes remote</span>'
 
+    consumed_by = _consumed_by(project)
     all_rows = "".join(
-        f'<tr><td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
+        f'<tr class="entry-row" data-name="{_e(name)}" '
+        f'data-consumes="{_e(" ".join(e.consumes))}">'
+        '<td class="focus-cell"><button class="focus-btn" '
+        'title="focus — show only its upstream/downstream">&#8982;</button>'
+        '<span class="dir"></span></td>'
+        f'<td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
         f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
         f'<td data-sort="{_STATUS_RANK[reports[name].status]}">'
         f"{_badge(reports[name].status)}</td>"
         f"<td>{_e(e.spec.kind if e.spec.kind == 'library' else f'{e.spec.kind}/{e.tier}')}</td>"
-        f"{_frontier_cell(reports[name], project)}"
+        f"{_frontier_cell(reports[name])}"
         f"{_updated_cell(reports[name])}"
         f"{_cached_cell(reports[name], e)}</tr>"
+        + _detail_row(e, reports[name], project, reports, consumed_by)
         for name, e in sorted(project.entries.items())
     )
+    focus_bar = (
+        '<div class="focus-bar" id="focus-bar" hidden>'
+        "<span>&#8982; focused on <b id=\"focus-name\"></b> "
+        '<span class="who" id="focus-counts"></span></span>'
+        '<button id="focus-clear">clear</button></div>'
+    )
     all_table = (
-        '<table class="sortable"><thead><tr><th>entry</th><th>spec</th>'
-        "<th>status</th><th>kind/tier</th><th>frontier</th>"
-        "<th>last update</th><th>cached</th></tr></thead>"
+        focus_bar
+        + '<table class="sortable"><thead><tr><th class="no-sort"></th>'
+        "<th>entry</th><th>spec</th><th>status</th><th>kind/tier</th>"
+        "<th>frontier</th><th>last update</th><th>cached</th></tr></thead>"
         f"<tbody>{all_rows}</tbody></table>"
         if all_rows
         else '<p class="empty">No entries yet.</p>'
