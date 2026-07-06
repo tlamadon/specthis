@@ -26,7 +26,7 @@ def test_export_writes_html_and_index(root: Path) -> None:
     page = (root / "specs/specs.html").read_text()
     for needle in ("fit-alpha", "fit-beta", "fig-beta", "compute-alpha", "ready"):
         assert needle in page
-    assert "Frontier" not in page  # everything is ready
+    assert "frontier-yes" not in page  # everything is ready — frontier column empty
 
     index = json.loads((root / "specs/_index.json").read_text())
     by_name = {s["name"]: s for s in index["specs"]}
@@ -45,9 +45,26 @@ def test_export_shows_frontier_and_escapes_html(root: Path) -> None:
     vouch_ok(root, "fit-alpha", attester='critic <b>"x"</b>')
     project = load_project(root)
     page, _ = render(project)
-    assert "Frontier" in page  # fit-alpha is now stale (re-vouched, not re-run)
+    assert "frontier-yes" in page  # fit-alpha is now stale (re-vouched, not re-run)
     assert "&lt;b&gt;" in page and '<b>"x"</b>' not in page  # attester name escaped
     assert "upstream-unverified" in page or "stale" in page
+
+
+def test_status_table_columns_and_sorter(root: Path) -> None:
+    make_ready(root)
+    (root / "reports/fig_beta.dat").unlink()  # fig-beta -> ready, bytes remote
+    page, index = render(load_project(root))
+    for th in ("<th>frontier</th>", "<th>last update</th>", "<th>cached</th>"):
+        assert th in page
+    assert '<table class="sortable">' in page
+    assert "table.sortable" in page  # the click-to-sort JS ships inline
+    assert ">disk</td>" in page  # fit-alpha/fit-beta bytes on this disk
+    assert ">remote</span>" in page  # fig-beta claim stands, bytes elsewhere
+    # last update: sort key is the full stamp, the cell shows the date
+    assert 'data-sort="2026-01-01T00:00:00+00:00">2026-01-01<' in page
+    flat = {e["name"]: e for s in index["specs"] for e in s["entries"]}
+    assert flat["fit-alpha"]["materialized"] is True
+    assert flat["fig-beta"]["materialized"] is False
 
 
 def test_spec_markdown_is_rendered_for_browsing(root: Path) -> None:

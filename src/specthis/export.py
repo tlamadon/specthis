@@ -3,7 +3,8 @@
 The page is an mkdocs-style spec browser: a sticky sidebar lists every
 spec file grouped by kind, hash routing shows one spec at a time (the
 full markdown contract, rendered), and a "Status dashboard" section
-carries the frontier and the cross-project entry table. Everything is
+carries the cross-project entry table — sortable by any column, with
+frontier membership, last ledger update, and byte location as columns. Everything is
 a *regenerated view*, never a source of truth: it joins the parsed
 specs (:mod:`specthis.parse`), the derived statuses
 (:mod:`specthis.check`), and the journal narratives
@@ -28,9 +29,9 @@ from urllib.parse import quote
 
 import markdown as _markdown
 
-from .check import LOCAL_BREAKS, Report, Status, check_project, frontier
+from .check import LOCAL_BREAKS, Report, Status, check_project
 from .journal import JournalEntry, load_journal
-from .parse import _FRONTMATTER, Problem, Project, SpecFile, load_project_lenient
+from .parse import _FRONTMATTER, Entry, Problem, Project, SpecFile, load_project_lenient
 
 _KIND_ORDER = {
     "meta": 0,
@@ -49,6 +50,10 @@ _STATUS_CLASS = {
     Status.UNIMPLEMENTED: "unimplemented",
     Status.UPSTREAM_UNVERIFIED: "upstream",
 }
+
+#: sort key for the status column: enum order is severity order
+#: (most broken first), which beats alphabetical badge text.
+_STATUS_RANK = {s: i for i, s in enumerate(Status)}
 
 
 def build_index(
@@ -80,6 +85,7 @@ def build_index(
                     "vouch": asdict(r.vouch) if r.vouch else None,
                     "run": asdict(r.run) if r.run else None,
                     "moved": r.moved,
+                    "materialized": r.materialized,
                 }
             )
         specs.append(
@@ -183,11 +189,6 @@ section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
 .badge.upstream      { background: #dce9f5; color: #23629c; }
 .badge.skipped       { background: #eeece6; color: #8a857a; }
 .badge.remote-bytes  { background: #e8e4f4; color: #4b3d8f; }
-.frontier { background: #fff; border: 1px solid var(--border);
-  border-left: 4px solid #a04100; border-radius: 8px; padding: 12px 16px;
-  margin-bottom: 20px; }
-.frontier h3 { font-size: 0.95rem; margin: 0 0 6px; }
-.frontier .waiting { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
 .warnings { background: #fff; border: 1px solid var(--border);
   border-left: 4px solid #b85a1e; border-radius: 8px; padding: 12px 16px;
   margin-bottom: 20px; font-size: 0.9rem; }
@@ -198,6 +199,10 @@ th { text-align: left; font-size: 0.72rem; text-transform: uppercase;
   padding: 4px 10px 4px 0; border-bottom: 1px solid var(--border); }
 td { padding: 6px 10px 6px 0; border-bottom: 1px solid #eae6de; vertical-align: top; }
 td a { color: var(--accent); text-decoration: none; }
+table.sortable th { cursor: pointer; user-select: none; white-space: nowrap; }
+table.sortable th:hover { color: var(--fg); }
+table.sortable th.sort-asc::after { content: " \\25B4"; }
+table.sortable th.sort-desc::after { content: " \\25BE"; }
 .who { color: var(--muted); font-size: 0.82rem; }
 .moved { color: #7d4e00; font-size: 0.82rem; }
 .empty { color: #9a958c; }
@@ -290,6 +295,40 @@ _ROUTER_JS = """
 
   window.addEventListener('hashchange', route);
   route();
+
+  // Sortable tables: click a header to sort by that column, click
+  // again to reverse. Cells opt into a custom key via data-sort
+  // (numbers compare numerically); empty keys always sort last.
+  document.querySelectorAll('table.sortable').forEach((table) => {
+    const tbody = table.tBodies[0];
+    const headers = Array.from(table.tHead ? table.tHead.rows[0].cells : []);
+    headers.forEach((th, col) => {
+      th.addEventListener('click', () => {
+        const asc = !th.classList.contains('sort-asc');
+        headers.forEach((h) => h.classList.remove('sort-asc', 'sort-desc'));
+        th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+        const key = (tr) => {
+          const td = tr.cells[col];
+          if (!td) return '';
+          const s = td.dataset.sort;
+          return s !== undefined ? s : td.textContent.trim().toLowerCase();
+        };
+        Array.from(tbody.rows)
+          .map((tr) => [key(tr), tr])
+          .sort((a, b) => {
+            if (a[0] === '' || b[0] === '') {
+              return (a[0] === '' ? 1 : 0) - (b[0] === '' ? 1 : 0);
+            }
+            const na = Number(a[0]);
+            const nb = Number(b[0]);
+            const cmp = !Number.isNaN(na) && !Number.isNaN(nb)
+              ? na - nb : a[0].localeCompare(b[0]);
+            return asc ? cmp : -cmp;
+          })
+          .forEach((pair) => tbody.appendChild(pair[1]));
+      });
+    });
+  });
 
   // Journal index: client-side text filter over the cards.
   const filterInput = document.getElementById('journal-filter-input');
@@ -661,12 +700,54 @@ def _broken_section(root: Path, filename: str, problems: list[Problem]) -> str:
     )
 
 
+def _frontier_cell(r: Report, project: Project) -> str:
+    """Frontier column: broken for local reasons, with the repair hint."""
+    if r.status not in LOCAL_BREAKS:
+        return '<td data-sort="1"><span class="empty">—</span></td>'
+    hint = _hint(r, project)
+    detail = f' <span class="who">— {_e(hint)}</span>' if hint else ""
+    return f'<td class="frontier-yes" data-sort="0"><b>yes</b>{detail}</td>'
+
+
+def _updated_cell(r: Report) -> str:
+    """Last-update column: the most recent vouch or run timestamp."""
+    stamps = [
+        t
+        for t in (r.vouch.vouched if r.vouch else None, r.run.ran if r.run else None)
+        if t
+    ]
+    if not stamps:
+        return '<td data-sort=""><span class="empty">—</span></td>'
+    latest = max(stamps)
+    return f'<td data-sort="{_e(latest)}">{_e(latest[:10])}</td>'
+
+
+def _cached_cell(r: Report, entry: Entry) -> str:
+    """Cached column: where the certified bytes are. ``disk`` when the
+    standing claim's outputs are on this disk, ``remote`` when the claim
+    stands but the bytes live in the cache (fetchable), em-dash when
+    there are no outputs or no standing claim."""
+    claim_stands = (
+        r.run is not None
+        and r.status in (Status.READY, Status.UPSTREAM_UNVERIFIED)
+        and entry.outputs
+    )
+    if not claim_stands:
+        return '<td data-sort=""><span class="empty">—</span></td>'
+    if not r.materialized:
+        return (
+            '<td data-sort="0"><span class="badge remote-bytes" '
+            'title="claim recorded; outputs not on this disk — cache fetch '
+            'materializes (verified)">remote</span></td>'
+        )
+    return '<td data-sort="1">disk</td>'
+
+
 def _status_section(
     project: Project,
     reports: dict[str, Report],
     problems: list[Problem],
 ) -> str:
-    local, waiting, _ready = frontier(reports)
     counts: dict[Status, int] = {}
     for r in reports.values():
         counts[r.status] = counts.get(r.status, 0) + 1
@@ -683,34 +764,22 @@ def _status_section(
     if remote_bytes:
         chips += f'<span class="chip"><b>{remote_bytes}</b> bytes remote</span>'
 
-    frontier_html = ""
-    if local:
-        rows = "".join(
-            f'<tr><td><a href="#{_e(_entry_anchor(r.entry))}"><b>{_e(r.entry)}</b></a></td>'
-            f"<td>{_badge(r.status)}</td><td>{_e(_hint(r, project))}</td></tr>"
-            for r in sorted(local, key=lambda r: r.entry)
-        )
-        waiting_html = (
-            f'<div class="waiting">waiting on the frontier: {waiting} upstream-unverified</div>'
-            if waiting
-            else ""
-        )
-        frontier_html = (
-            '<div class="frontier"><h3>Frontier — broken for local reasons</h3>'
-            f"<table>{rows}</table>{waiting_html}</div>"
-        )
-
     all_rows = "".join(
         f'<tr><td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
         f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
-        f"<td>{_badge(reports[name].status)}{_bytes_badge(reports[name])}</td>"
-        f"<td>{_e(e.spec.kind if e.spec.kind == 'library' else f'{e.spec.kind}/{e.tier}')}</td></tr>"
+        f'<td data-sort="{_STATUS_RANK[reports[name].status]}">'
+        f"{_badge(reports[name].status)}</td>"
+        f"<td>{_e(e.spec.kind if e.spec.kind == 'library' else f'{e.spec.kind}/{e.tier}')}</td>"
+        f"{_frontier_cell(reports[name], project)}"
+        f"{_updated_cell(reports[name])}"
+        f"{_cached_cell(reports[name], e)}</tr>"
         for name, e in sorted(project.entries.items())
     )
     all_table = (
-        "<table><tr><th>entry</th><th>spec</th><th>status</th><th>kind/tier</th></tr>"
-        + all_rows
-        + "</table>"
+        '<table class="sortable"><thead><tr><th>entry</th><th>spec</th>'
+        "<th>status</th><th>kind/tier</th><th>frontier</th>"
+        "<th>last update</th><th>cached</th></tr></thead>"
+        f"<tbody>{all_rows}</tbody></table>"
         if all_rows
         else '<p class="empty">No entries yet.</p>'
     )
@@ -719,7 +788,7 @@ def _status_section(
         '<section class="spec" id="status">'
         '<h2 class="spec-title">Status dashboard</h2>'
         f'<div class="chips">{chips}</div>'
-        f"{_problems_box(problems)}{frontier_html}{all_table}</section>"
+        f"{_problems_box(problems)}{all_table}</section>"
     )
 
 
