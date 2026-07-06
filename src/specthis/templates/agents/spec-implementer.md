@@ -37,6 +37,9 @@ binding in `specs/bindings.toml`, a passed smoke-test — and a
      declared contract.
 4. Bind the entry in `specs/bindings.toml` (scripts + run command),
    unless the default `scripts/<entry>.py` convention already fits.
+   Leave any `[preview]` table there alone — it is dashboard-only
+   vocabulary (recipes for rendering outputs at view time), not part
+   of the binding you owe, and editing it moves no digest.
 5. Smoke-test: run only the first few iterations (a temporary
    `--max-iter 3`, or a snippet that builds the model and takes one
    inner step). PASS iff data loads, the model builds, and the first

@@ -26,12 +26,18 @@ and `specs/bindings.toml`, and nothing else.
      instead and ask.
    - **unknown kind / tier, missing frontmatter, missing `Output:`** —
      fix per `specs/README.md`.
+   - **`[preview]` problems** (key without a leading dot, command
+     missing `{out}`, unknown `format`, unknown keys) — mechanical;
+     fix per the Previews section of `specs/README.md`. The command
+     must place its artifact at `{out}`; keys are output suffixes
+     like `".tex"`.
    - **consumes/references unknown targets** — usually a typo or a
      renamed entry; grep the specs for near-matches before asking.
 3. Warn the user where a fix will move digests: editing a spec file
    returns its entries to *audit needed*, and adding/changing a
    binding does the same for that entry. That is correct behavior,
-   not damage — say so plainly.
+   not damage — say so plainly. (The one exception: `[preview]`
+   stanzas are dashboard-only and move no digest.)
 4. Never touch `vouches.toml` / `runs.toml`, never run
    `specthis vouch`, never run project scripts.
 5. Re-run `specthis lint` until clean, then finish with

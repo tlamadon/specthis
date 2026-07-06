@@ -17,7 +17,10 @@ template):
 entry to the scripts that implement it, the command that runs it, and
 (optionally) scripthut workflow files and an executor label. A
 ``[package]`` table declares the shared-library globs whose blob
-digest enters every code manifest.
+digest enters every code manifest. A ``[preview]`` table maps output
+suffixes to the shell commands the dashboard uses to render previews
+(:mod:`specthis.preview`) — same species as executors: a configured
+ingredient for a view, never an authority over any claim.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ else:  # pragma: no cover
     import tomli as tomllib
 
 from .hashing import sha256_text
+from .preview import CONTENT_TYPES
 
 KINDS = {"meta", "definitions", "templates", "library", "compute", "report", "figure"}
 ENTRY_KINDS = {"library", "compute", "report", "figure"}
@@ -67,6 +71,22 @@ class Binding:
     run: str | None
     workflows: list[str] = field(default_factory=list)
     executor: str | None = None
+
+
+@dataclass
+class PreviewRecipe:
+    """How the dashboard renders one output suffix; vocabulary, not a claim.
+
+    The command runs at the project root and must place its artifact at
+    ``{out}``; ``{input}`` and ``{host_doc}`` are also substituted.
+    ``inputs`` are glob patterns whose digests fold into the preview
+    cache key — declare the preamble and the recipe script itself so
+    editing either invalidates exactly the affected previews.
+    """
+
+    command: str
+    format: str = "pdf"  # what lands at {out}; decides the content type served
+    inputs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -115,6 +135,8 @@ class Project:
     library_scripts: frozenset[str] = frozenset()
     #: entry name -> spec filename, for entries dormant under `skip: true`.
     skipped_entries: dict[str, str] = field(default_factory=dict)
+    #: output suffix (".tex") -> preview recipe, from [preview] in bindings.
+    previews: dict[str, PreviewRecipe] = field(default_factory=dict)
 
 
 def _field_paths(block: str, label: str) -> list[str]:
@@ -240,10 +262,38 @@ def parse_spec(path: Path) -> SpecFile:
     return spec
 
 
-def _load_bindings(specs_dir: Path) -> tuple[dict[str, Binding], list[str], str | None]:
+def _parse_previews(data: dict) -> dict[str, PreviewRecipe]:
+    """The ``[preview]`` table: suffix -> recipe, string or table form."""
+    previews: dict[str, PreviewRecipe] = {}
+    for suffix, raw in data.get("preview", {}).items():
+        where = f'bindings.toml: [preview] "{suffix}"'
+        if not suffix.startswith("."):
+            raise SpecError(f"{where}: keys are output suffixes and must start with a dot")
+        if isinstance(raw, str):
+            raw = {"command": raw}
+        if not isinstance(raw, dict) or not isinstance(raw.get("command"), str):
+            raise SpecError(f"{where}: must be a command string or a table with `command`")
+        if unknown := set(raw) - {"command", "format", "inputs"}:
+            raise SpecError(f"{where}: unknown key(s) {sorted(unknown)}")
+        if "{out}" not in raw["command"]:
+            raise SpecError(f"{where}: the command must place its artifact at {{out}}")
+        fmt = raw.get("format", "pdf")
+        if fmt not in CONTENT_TYPES:
+            raise SpecError(f"{where}: `format = \"{fmt}\"` is not one of {sorted(CONTENT_TYPES)}")
+        previews[suffix.lower()] = PreviewRecipe(
+            command=raw["command"],
+            format=fmt,
+            inputs=_str_list(raw.get("inputs"), where, "inputs"),
+        )
+    return previews
+
+
+def _load_bindings(
+    specs_dir: Path,
+) -> tuple[dict[str, Binding], list[str], str | None, dict[str, PreviewRecipe]]:
     path = specs_dir / "bindings.toml"
     if not path.is_file():
-        return {}, [], None
+        return {}, [], None, {}
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -258,7 +308,7 @@ def _load_bindings(specs_dir: Path) -> tuple[dict[str, Binding], list[str], str 
             workflows=_str_list(table.get("workflows"), "bindings.toml", "workflows"),
             executor=table.get("executor"),
         )
-    return bindings, globs, cache_url
+    return bindings, globs, cache_url, _parse_previews(data)
 
 
 def _default_binding(entry_name: str) -> Binding:
@@ -290,10 +340,10 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             problems.append(Problem(path.name, str(exc)))
 
     try:
-        bindings, package_globs, cache_url = _load_bindings(specs_dir)
+        bindings, package_globs, cache_url, previews = _load_bindings(specs_dir)
     except SpecError as exc:
         problems.append(Problem("bindings.toml", str(exc)))
-        bindings, package_globs, cache_url = {}, [], None
+        bindings, package_globs, cache_url, previews = {}, [], None, {}
 
     entries: dict[str, Entry] = {}
     skipped_entries: dict[str, str] = {}
@@ -387,6 +437,7 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             for s in e.binding.scripts
         ),
         skipped_entries=skipped_entries,
+        previews=previews,
     )
     return project, problems
 

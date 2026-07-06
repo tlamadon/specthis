@@ -46,7 +46,11 @@ code satisfies the contract, at exact digests — written only by
 code on these exact inputs, as a composed signature over scripts +
 package + upstream artefact digests + workflow config — written only
 by `specthis run`). `specs/bindings.toml` maps entries to their
-scripts and run commands. `specthis check` re-derives everything and
+scripts and run commands; its `[preview]` table is dashboard-only
+vocabulary (how to render an output type at view time) — a preview
+recipe enters no signature and expires no vouch, and the artifacts it
+renders live in a cache outside the repo: never treat either as
+project state or audit material. `specthis check` re-derives everything and
 reports, per entry: **unimplemented** / **audit needed** /
 **rejected** (a mind's work), **stale** (a machine's work), or
 **upstream-unverified** (patience — fix upstream and it heals).

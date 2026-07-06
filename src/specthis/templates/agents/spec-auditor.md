@@ -39,6 +39,11 @@ the part that needs you — is judgment:
 6. **upstream-unverified** entries: skip — point at the frontier entry
    they wait on.
 
+A `[preview]` table in `specs/bindings.toml` is dashboard-only
+vocabulary: recipes render output previews at view time, enter no
+signature, and expire no vouch. Not audit material — do not flag a
+preview-recipe edit as drift, and never run a recipe yourself.
+
 While reading, also flag (per AGENTS.md): compute-spec scope creep
 (compute code writing under `reports/` or importing plotting
 libraries), routing leaks (a compute `Output:` naming a `reports/`

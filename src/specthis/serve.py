@@ -1,13 +1,16 @@
 """Local dev server for the specs dashboard, stdlib only.
 
-Serves the rendered dashboard from memory (it writes nothing) and
-re-renders when anything the view depends on changes: spec files, the
-ledgers, bindings, scripts, workflow files, outputs, or the package
-blob. The browser polls ``/__state`` and reloads when the token bumps.
-Declared text outputs are additionally readable at ``/view/<path>`` —
-an escaped, syntax-highlighted page the dashboard's output chips link
-to. The declared-output set is the whole ACL: nothing an entry does
-not claim is ever served.
+Serves the rendered dashboard from memory (it writes nothing into the
+project tree) and re-renders when anything the view depends on
+changes: spec files, the ledgers, bindings, scripts, workflow files,
+outputs, or the package blob. The browser polls ``/__state`` and
+reloads when the token bumps. Declared outputs are additionally
+readable at ``/view/<path>`` — text as an escaped, syntax-highlighted
+page, images and PDFs as raw bytes — and renderable at
+``/preview/<path>`` when the project declares a ``[preview]`` recipe
+for the suffix (:mod:`specthis.preview`; artifacts are cached outside
+the tree). The declared-output set is the whole ACL: nothing an entry
+does not claim is ever served.
 
 A viewing convenience only — the ledger neither knows nor cares
 whether it runs. Change detection uses a cheap ``stat`` scan (mtime +
@@ -23,10 +26,11 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
-from .export import is_text_file, output_lang, render
+from .export import is_text_file, output_lang, raw_view_type, render
 from .parse import Project, SpecError, load_project_lenient
+from .preview import CONTENT_TYPES, default_cache_dir, find_recipe, render_preview
 
 POLL_SECONDS = 1.0
 
@@ -70,9 +74,12 @@ header { position: sticky; top: 0; display: flex; gap: 0.9rem;
   border-bottom: 1px solid var(--border); font-size: 0.9rem; }
 header code { font-weight: 600; }
 header .size { color: var(--muted); font-size: 0.8rem; }
-header a { margin-left: auto; color: var(--accent); text-decoration: none;
+header .nav { margin-left: auto; display: flex; gap: 0.9rem; }
+header .nav a { color: var(--accent); text-decoration: none;
   white-space: nowrap; }
 .truncated { padding: 0.5rem 1.1rem; background: #f7ecc9; color: #7d4e00;
+  font-size: 0.85rem; }
+.fail-note { padding: 0.5rem 1.1rem; background: #f7d9d5; color: #a40e26;
   font-size: 0.85rem; }
 pre { margin: 0; padding: 1rem 1.1rem; overflow: auto; font-size: 0.85rem;
   line-height: 1.5; }
@@ -87,7 +94,17 @@ _VIEW_TRUNCATE_BYTES = 2_000_000  # a tab-freezing CSV is not a viewer's job
 _HIGHLIGHT_MAX_BYTES = 500_000  # highlight.js chokes long before truncation
 
 
-def render_output_page(rel: str, path: Path) -> str:
+def _viewer_nav(rel: str, has_preview: bool, at_preview: bool = False) -> str:
+    """The header's right-side links: preview/source toggle + dashboard."""
+    links = ""
+    if at_preview:
+        links += f'<a href="/view/{html.escape(quote(rel))}">source</a>'
+    elif has_preview:
+        links += f'<a href="/preview/{html.escape(quote(rel))}">preview</a>'
+    return f'<span class="nav">{links}<a href="/">&larr; dashboard</a></span>'
+
+
+def render_output_page(rel: str, path: Path, has_preview: bool = False) -> str:
     """The ``/view/<output>`` page: escaped bytes plus CDN highlighting.
 
     Same trust and degradation story as the dashboard: content is
@@ -121,9 +138,29 @@ def render_output_page(rel: str, path: Path) -> str:
         f"<title>{name}</title>\n{css_link}<style>{_VIEWER_CSS}</style></head>\n"
         f"<body><header><code>{name}</code>"
         f'<span class="size">{len(data):,} bytes</span>'
-        '<a href="/">&larr; dashboard</a></header>\n'
+        f"{_viewer_nav(rel, has_preview)}</header>\n"
         f'{note}<pre><code class="language-{html.escape(lang)}">'
         f"{html.escape(shown)}</code></pre>\n{scripts}</body></html>\n"
+    )
+
+
+def render_preview_failed_page(rel: str, command: str, log: str) -> str:
+    """The ``/preview/<output>`` page when the recipe fails: the log.
+
+    A failed compile is content, not a server error — the fragment (or
+    its preamble) is what needs fixing. Failures are never cached, so a
+    plain reload retries."""
+    name = html.escape(rel)
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>preview failed — {name}</title>\n<style>{_VIEWER_CSS}</style></head>\n"
+        f"<body><header><code>{name}</code>"
+        f"{_viewer_nav(rel, has_preview=False, at_preview=True)}</header>\n"
+        '<div class="fail-note">preview recipe failed — fix and reload '
+        "(failures are not cached)</div>\n"
+        f"<pre><code>$ {html.escape(command)}\n\n{html.escape(log)}</code></pre>\n"
+        "</body></html>\n"
     )
 
 
@@ -150,6 +187,7 @@ class Dashboard:
 
     def __init__(self, root: Path) -> None:
         self.root = root
+        self.preview_cache = default_cache_dir()
         self._lock = threading.Lock()
         self.token = 0
         self.html = ""
@@ -203,46 +241,70 @@ class Dashboard:
         path = (self.root / rel).resolve()
         return path if path.is_relative_to(self.root.resolve()) else None
 
+    @property
+    def project(self) -> Project | None:
+        return self._project
+
 
 def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 (stdlib API)
             token, page = dashboard.snapshot()
             if self.path in ("/", "/specs.html", "/index.html"):
-                body = page.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._send(page.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path == "/__state":
-                body = json.dumps({"token": token}).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._send(json.dumps({"token": token}).encode("utf-8"), "application/json")
             elif self.path.startswith("/view/"):
                 rel = unquote(self.path[len("/view/"):].split("?", 1)[0])
                 target = dashboard.output_path(rel)
+                raw_type = raw_view_type(rel)
                 if target is None:
                     self.send_error(404, "Not a declared output")
                 elif not target.is_file():
                     self.send_error(404, "Output bytes are not on this disk")
+                elif raw_type is not None:
+                    self._send(target.read_bytes(), raw_type)
                 elif not is_text_file(target):
-                    self.send_error(404, "Output is not a text file")
+                    self.send_error(404, "Output is not viewable (binary)")
                 else:
-                    body = render_output_page(rel, target).encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
+                    project = dashboard.project
+                    has_preview = project is not None and find_recipe(project, rel) is not None
+                    page = render_output_page(rel, target, has_preview=has_preview)
+                    self._send(page.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path.startswith("/preview/"):
+                rel = unquote(self.path[len("/preview/"):].split("?", 1)[0])
+                target = dashboard.output_path(rel)
+                project = dashboard.project
+                recipe = find_recipe(project, rel) if project is not None else None
+                if target is None:
+                    self.send_error(404, "Not a declared output")
+                elif recipe is None:
+                    self.send_error(
+                        404,
+                        "No [preview] recipe for this suffix in specs/bindings.toml",
+                    )
+                elif not target.is_file():
+                    self.send_error(404, "Output bytes are not on this disk")
+                else:
+                    assert project is not None
+                    result = render_preview(project, rel, recipe, dashboard.preview_cache)
+                    if result is None:  # bytes vanished between the checks
+                        self.send_error(404, "Output bytes are not on this disk")
+                    elif result.path is not None:
+                        self._send(result.path.read_bytes(), CONTENT_TYPES[recipe.format])
+                    else:
+                        page = render_preview_failed_page(rel, recipe.command, result.log)
+                        self._send(page.encode("utf-8"), "text/html; charset=utf-8")
             else:
                 self.send_error(404)
+
+        def _send(self, body: bytes, content_type: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def log_message(self, format: str, *args: object) -> None:
             pass  # keep the terminal quiet; the dashboard is the output

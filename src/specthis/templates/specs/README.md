@@ -96,7 +96,7 @@ or just patience while upstream heals.
 |---|---|---|
 | `specs/vouches.toml` | attested claims: `(spec_sha, code_sha, verdict, attester, when, note)` per entry | `specthis vouch` — only |
 | `specs/runs.toml` | derived claims: composed input signature, output digest, executor, and the full `[inputs]` table per entry | `specthis run` — only |
-| `specs/bindings.toml` | entry → scripts, run command, scripthut workflow files, executor; plus `[package]` globs for the shared library | you, by hand |
+| `specs/bindings.toml` | entry → scripts, run command, scripthut workflow files, executor; plus `[package]` globs for the shared library and `[preview]` recipes for the dashboard | you, by hand |
 
 `bindings.toml` is vocabulary, not a claim: it says *where* an entry's
 code lives and *how* to run it. Pointing an entry at different code
@@ -118,6 +118,48 @@ scripts   = ["scripts/fit_alpha.py"]
 run       = "python scripts/fit_alpha.py"
 workflows = ["hut.fit-alpha.json"]   # scripthut config: signature input, not judged code
 executor  = "scripthut:slurm"        # omit for local execution
+```
+
+### Previews (dashboard-only)
+
+When served (`specthis serve`), declared outputs are viewable at
+`/view/<path>`: text escaped and highlighted, images and PDFs as-is.
+A `[preview]` table teaches the dashboard to *render* an output type
+— same division of labor as executors: specthis provides the plumbing
+(when to render, where to cache, what to serve), your recipe provides
+the how. Recipes are a view concern: rendered artifacts are cached
+outside the repo, content-addressed by (output bytes, recipe, declared
+inputs), and never read back by the ledger.
+
+```toml
+[preview.".tex"]
+command = "scripts/preview_tex.sh {input} {host_doc} {out}"  # runs at the project root
+format  = "pdf"                                   # what lands at {out} (default pdf)
+inputs  = ["paper/preamble.tex", "scripts/preview_tex.sh"]  # part of the cache key
+```
+
+The command must place its artifact at `{out}`; `{input}` is the
+output file (project-relative) and `{host_doc}` is the owning spec's
+`host_doc:` (empty if none). Declare in `inputs` everything else the
+render reads — the preamble, the recipe script itself — so editing
+them invalidates exactly the affected previews. Successful renders are
+cached; failures are not (the log shows in the browser; fix and
+reload). A wrapper that compiles a fragment inside its host document's
+preamble is about ten lines:
+
+```sh
+#!/bin/sh
+# preview_tex.sh <fragment> <host_doc> <out>: compile a .tex fragment
+# inside the host document's preamble, place the PDF at <out>.
+set -e
+frag="$1"; host="$2"; out="$3"
+build=$(mktemp -d); trap 'rm -rf "$build"' EXIT
+sed '/\\begin{document}/,$d' "$host" > "$build/wrapped.tex"   # host preamble
+printf '\\begin{document}\n\\input{%s}\n\\end{document}\n' "$(pwd)/$frag" >> "$build/wrapped.tex"
+TEXINPUTS=":$(dirname "$host"):" tectonic --outdir "$build" "$build/wrapped.tex" \
+  || TEXINPUTS=":$(dirname "$host"):" pdflatex -interaction=nonstopmode \
+       -no-shell-escape -output-directory "$build" "$build/wrapped.tex"
+mv "$build/wrapped.pdf" "$out"
 ```
 
 ## Frontmatter convention

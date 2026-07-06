@@ -376,6 +376,19 @@ def output_lang(rel: str) -> str:
     return _VIEW_LANGS.get(Path(rel).suffix.lower(), "plaintext")
 
 
+#: suffixes the dev server serves as raw bytes — browsers render these
+#: natively, so figures and PDFs are viewable without any recipe.
+_RAW_VIEW_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".pdf": "application/pdf",
+}
+
+
+def raw_view_type(rel: str) -> str | None:
+    """Content type for outputs served as raw bytes; None for the rest."""
+    return _RAW_VIEW_TYPES.get(Path(rel).suffix.lower())
+
+
 def is_text_file(path: Path) -> bool:
     """True when the leading bytes decode as UTF-8 with no NULs.
 
@@ -399,12 +412,13 @@ def is_text_file(path: Path) -> bool:
 
 def _output_chip(root: Path, rel: str) -> str:
     """The output cell chip, linked to the dev server's /view/ page when
-    the bytes are on disk and look like text. Binary or remote bytes stay
-    plain chips — there is nothing readable to open. From file:// there
-    is no server either; the router JS strips these hrefs."""
+    the bytes are on disk and viewable: text renders escaped +
+    highlighted, images and PDFs are served raw. Other binaries and
+    remote bytes stay plain chips — there is nothing to open. From
+    file:// there is no server either; the router JS strips these hrefs."""
     chip = f"<code>{_e(rel)}</code>"
     path = root / rel
-    if path.is_file() and is_text_file(path):
+    if path.is_file() and (raw_view_type(rel) or is_text_file(path)):
         return (
             f'<a class="output-link" href="/view/{_e(quote(rel))}" '
             f'target="_blank" title="view output">{chip}</a>'

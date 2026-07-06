@@ -126,12 +126,36 @@ refuse to write ledgers against a tree that doesn't parse. The
 `/specthis-lint` slash command explains each problem and fixes the
 mechanical ones.
 
-When served, **text outputs are clickable**: an output chip whose bytes
-are on disk and look like text opens at `/view/<path>` in a new tab —
-escaped, syntax-highlighted (highlight.js from CDN, plain text
-offline), and restricted to declared outputs. In the static
-`specs.html` opened from disk there is no server, so the chips degrade
-back to plain text.
+When served, **outputs are clickable**: an output chip whose bytes are
+on disk opens at `/view/<path>` in a new tab — text escaped and
+syntax-highlighted (highlight.js from CDN, plain text offline), images
+and PDFs rendered natively — always restricted to declared outputs. In
+the static `specs.html` opened from disk there is no server, so the
+chips degrade back to plain text.
+
+Outputs a browser can't show — a `.tex` table fragment, say — can be
+**previewed** through a project-declared recipe in
+`specs/bindings.toml`, the same division of labor as executors:
+specthis provides the plumbing, the project provides the how.
+
+```toml
+[preview.".tex"]
+command = "scripts/preview_tex.sh {input} {host_doc} {out}"
+inputs  = ["paper/preamble.tex", "scripts/preview_tex.sh"]
+```
+
+The command runs at the project root and must place its artifact
+(`format`, default `pdf`) at `{out}`; specthis substitutes `{input}`
+(the output file) and `{host_doc}` (from the owning spec's
+frontmatter) — so a ten-line wrapper can compile a fragment inside
+the very preamble that will host it (the bundled `specs/README.md`
+ships one). Previews are a view, never a claim: artifacts are
+content-addressed by (output bytes, recipe, declared inputs), cached
+*outside* the repo, rendered on first view at `/preview/<path>`
+(linked from the `/view/` page), and never read back by the ledger.
+Editing the preamble invalidates exactly the previews that read it. A
+failing recipe shows its compile log in the browser — failures are
+not cached, so fixing and reloading retries.
 
 The views include **host-doc routing**: for each report spec declaring
 `host_doc:` + `section_label:`, is every exported `.tex` actually
@@ -395,9 +419,12 @@ both ledgers, status derivation + frontier, the five verbs, migration,
 scaffolding, agent templates, the dashboard (`export` + `serve` with
 live reload, stdlib only), host-doc routing (`_routing.json` +
 orphaned-export checks), the remote cache (`file://` and `s3://`
-backends, digest-verified fetch keyed by the composed signature), and
-the journal (`journal/` narratives rendered into the dashboard, plus
-`/specthis-journal`).
+backends, digest-verified fetch keyed by the composed signature), the
+journal (`journal/` narratives rendered into the dashboard, plus
+`/specthis-journal`), and output previews (`[preview]` recipes in
+bindings, rendered on view at `/preview/<path>`, cached
+content-addressed outside the repo; images and PDFs viewable with no
+recipe).
 
 Also done: **`skip: true` in frontmatter** — comment a spec out while
 developing. Skipped entries leave the frontier and every count;
@@ -410,6 +437,17 @@ restores the exact vouched bytes and trust returns with them.
 
 Known future extensions — each additive, none precluded by the core:
 
+- **Adoption path: `specthis init --from-code`.** Kick-start an
+  existing repo: walk `scripts/`, read what's already there
+  (docstrings, filenames, imports), and *draft* spec files plus
+  proposed bindings from it — a one-time extraction the human then
+  edits. Drafts arrive unvouched, so the first pass through the queue
+  is human-grade judgment, exactly as the model prescribes. Specs
+  remain the single home: docstrings seed the draft but are never
+  read back by the ledger — spec-in-docstring was considered and
+  rejected (it breaks spec-first authoring, muddies the
+  spec-moved/code-moved audit lanes, and couples hashing to
+  per-language parsing).
 - **Output-schema-into-signature.**
 - **Quick-tier caching** as an executor concern.
 - **Section-scoped spec hashing** if whole-file contract hashing ever
