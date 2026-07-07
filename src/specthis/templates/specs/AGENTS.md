@@ -80,8 +80,12 @@ against the claim) if a local step actually needs them.
 - Frontmatter: `name`, `kind`, `tier` (compute), `consumes:` (upstream
   entry names — signature-bearing), `references:` (vocabulary spec
   files — ledger-invisible). `depends_on:` is retired; flag it.
+  Optional `group:` / `priority:` (int, higher first) only organize
+  the dashboard sidebar.
 - The whole file, frontmatter included, is the contract: any edit
-  returns its entries to *audit needed*.
+  returns its entries to *audit needed*. Sole carve-out: the
+  display-only `group:` / `priority:` lines are stripped before
+  `spec_sha`, so retagging never disturbs vouches.
 
 ## Compute / report responsibility split
 

@@ -291,10 +291,13 @@ and it's that baseline that makes later drift legible and delegable.
   covers. Unbound entries follow the `scripts/<entry>.py` convention.
 
 The spec files themselves carry YAML frontmatter (`name`, `kind`,
-`tier`, `consumes`, `references`) and `### entry` blocks declaring
-each entry's `Output:` / `Export outputs:`. The whole file,
-frontmatter included, is the contract — any edit returns its entries
-to *audit needed*. No `Script:`, no `Status:`: bindings live in
+`tier`, `consumes`, `references`, plus display-only `group` /
+`priority` that organize the dashboard sidebar) and `### entry`
+blocks declaring each entry's `Output:` / `Export outputs:`. The
+whole file, frontmatter included, is the contract — any edit returns
+its entries to *audit needed* (the display-only keys are the one
+carve-out: they are stripped before hashing, so retagging never
+disturbs vouches). No `Script:`, no `Status:`: bindings live in
 `bindings.toml`, status is derived. See
 [`src/specthis/templates/specs/README.md`](src/specthis/templates/specs/README.md)
 for the full convention (the bundled templates ship a research/paper

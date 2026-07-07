@@ -173,6 +173,8 @@ name: <spec-name>          # filename stem, no extension
 kind: <kind>               # see below
 tier: intensive | quick    # compute specs; intensive is the default
 skip: true                 # optional: comment this spec out (see below)
+group: <label>             # optional: dashboard sidebar group (display-only)
+priority: <int>            # optional: sidebar rank, higher first; default 0
 consumes:                  # upstream ENTRY names whose artefacts this
   - <entry-name>           #   spec's code reads — enters signatures
 references:                # other spec FILES read for vocabulary —
@@ -184,6 +186,14 @@ The entire file — frontmatter included — is the contract: any edit
 returns the file's entries to *audit needed*. There is no `depends_on:`
 (retired: it conflated the two edge kinds) and no `Status:` anywhere —
 status is derived, never authored.
+
+The two display-only keys are the one carve-out: `group:` and
+`priority:` organize the dashboard sidebar (specs sharing a `group:`
+label form a block; blocks rank by their highest member priority,
+files within a block by priority then name; untagged specs keep the
+kind-based blocks below) and are stripped before `spec_sha` is
+computed — retagging or reshuffling groups never touches the ledger.
+They carry no semantics: not edges, not status, just navigation.
 
 `skip: true` comments a spec out while developing: its entries leave
 the frontier and every count, `run`/`vouch` refuse them, their ledger

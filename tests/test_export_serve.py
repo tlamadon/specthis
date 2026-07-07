@@ -136,6 +136,53 @@ def test_sidebar_and_hash_routing(root: Path) -> None:
     assert "MathJax" in page
 
 
+def test_sidebar_frontmatter_groups_and_pills(root: Path) -> None:
+    # estimation (max priority 5) outranks figures (1); models stays
+    # untagged and keeps its kind block below the custom groups
+    for name, extra in (
+        ("compute-alpha", "\ngroup: estimation"),
+        ("compute-beta", "\ngroup: estimation\npriority: 5"),
+        ("report-beta", "\ngroup: figures\npriority: 1"),
+    ):
+        path = root / f"specs/{name}.md"
+        path.write_text(path.read_text().replace(f"name: {name}", f"name: {name}{extra}"))
+    write(
+        root,
+        "specs/compute-beta.md",
+        (root / "specs/compute-beta.md").read_text().replace("tier: quick", "tier: intensive"),
+    )
+    page, index = render(load_project(root))
+
+    i_est = page.index('<span class="kind kind-custom">estimation</span>')
+    i_fig = page.index('<span class="kind kind-custom">figures</span>')
+    i_def = page.index('<span class="kind kind-definitions">definitions</span>')
+    assert i_est < i_fig < i_def
+
+    # within a group priority wins over the name: beta (5) before alpha (0)
+    sidebar = page[: page.index("</nav>")]
+    assert sidebar.index('data-file-anchor="spec-compute-beta"') < sidebar.index(
+        'data-file-anchor="spec-compute-alpha"'
+    )
+    # rows in custom groups carry a kind pill; intensive compute adds a tier pill
+    assert '<span class="pill kind-compute">compute</span>' in sidebar
+    assert '<span class="pill kind-report">report</span>' in sidebar
+    assert '<span class="pill pill-tier">intensive</span>' in sidebar
+
+    # the section stream follows the same order as the sidebar
+    body = page[page.index("</nav>") :]
+    assert (
+        body.index('id="spec-compute-beta"')
+        < body.index('id="spec-compute-alpha"')
+        < body.index('id="spec-report-beta"')
+        < body.index('id="spec-models"')
+    )
+
+    by_name = {s["name"]: s for s in index["specs"]}
+    assert by_name["compute-beta"]["group"] == "estimation"
+    assert by_name["compute-beta"]["priority"] == 5
+    assert by_name["models"]["group"] is None
+
+
 def test_export_view_is_pure_join(root: Path) -> None:
     # exporting must not change any status or ledger byte
     make_ready(root)

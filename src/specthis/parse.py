@@ -7,7 +7,10 @@ template):
   ``kind``, and the two edge lists: ``consumes:`` (entry names —
   artefact flow, enters signatures) and ``references:`` (spec files —
   vocabulary, ledger-invisible). Compute specs add
-  ``tier: intensive | quick``.
+  ``tier: intensive | quick``. Optional ``group:`` (string) and
+  ``priority:`` (int, default 0, higher first) organize the dashboard
+  sidebar; they are display-only and excluded from ``spec_sha``, so
+  retagging never invalidates vouches.
 - Executable kinds (``compute``, ``report``) carry a
   ``## Entry`` (single) or ``## Entries`` (multi) section whose
   ``### <entry-name>`` blocks each declare ``Output:`` (compute, one
@@ -47,6 +50,10 @@ TIERS = {"intensive", "quick"}
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _ENTRY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _BACKTICKED = re.compile(r"`([^`]+)`")
+#: Display-only frontmatter lines carved out of ``spec_sha`` — they
+#: organize the sidebar, never the contract, so editing them must not
+#: invalidate vouches.
+_DISPLAY_LINE = re.compile(r"^(?:group|priority):[^\n]*(?:\n|$)", re.MULTILINE)
 
 
 class SpecError(Exception):
@@ -117,6 +124,8 @@ class SpecFile:
     body: str  # markdown after the frontmatter (the contract prose)
     title: str = ""  # display title: frontmatter `title:`, else first heading, else name
     skip: bool = False  # commented out: entries dormant, body not grammar-checked
+    group: str | None = None  # sidebar group label; display-only, outside spec_sha
+    priority: int = 0  # sidebar rank, higher first; display-only, outside spec_sha
     entries: list[Entry] = field(default_factory=list)
 
 
@@ -172,6 +181,19 @@ def _str_list(raw: object, where: str, what: str) -> list[str]:
     return raw
 
 
+def _spec_sha(text: str, m: "re.Match[str]") -> str:
+    """``spec_sha`` with display-only frontmatter lines removed.
+
+    A file that never uses ``group:``/``priority:`` hashes exactly as
+    the raw text, so existing vouches survive this carve-out.
+    """
+    fm = m.group(1)
+    stripped = _DISPLAY_LINE.sub("", fm)
+    if stripped == fm:
+        return sha256_text(text)
+    return sha256_text(text[: m.start(1)] + stripped + text[m.end(1) :])
+
+
 def parse_spec(path: Path) -> SpecFile:
     text = path.read_text(encoding="utf-8")
     m = _FRONTMATTER.match(text)
@@ -204,6 +226,13 @@ def parse_spec(path: Path) -> SpecFile:
     if not isinstance(skip, bool):
         raise SpecError(f"{path.name}: `skip: {skip}` must be true or false")
 
+    group = meta.get("group")
+    if group is not None and (not isinstance(group, str) or not group.strip()):
+        raise SpecError(f"{path.name}: `group: {group}` must be a non-empty string")
+    priority = meta.get("priority", 0)
+    if isinstance(priority, bool) or not isinstance(priority, int):
+        raise SpecError(f"{path.name}: `priority: {priority}` must be an integer")
+
     body = text[m.end() :]
     heading = re.search(r"^# +(.+?)\s*$", body, re.MULTILINE)
     spec = SpecFile(
@@ -213,10 +242,12 @@ def parse_spec(path: Path) -> SpecFile:
         tier=tier,
         consumes=_str_list(meta.get("consumes"), path.name, "consumes"),
         references=_str_list(meta.get("references"), path.name, "references"),
-        spec_sha=sha256_text(text),
+        spec_sha=_spec_sha(text, m),
         body=body,
         title=str(meta.get("title") or (heading.group(1) if heading else name)),
         skip=skip,
+        group=group.strip() if group else None,
+        priority=priority,
     )
 
     if kind in ENTRY_KINDS:

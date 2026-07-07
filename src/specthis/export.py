@@ -1,7 +1,9 @@
 """Dashboard renderer: specs/specs.html + _index.json.
 
 The page is an mkdocs-style spec browser: a sticky sidebar lists every
-spec file grouped by kind, hash routing shows one spec at a time (the
+spec file grouped by frontmatter ``group:`` (ranked by ``priority:``,
+higher first; untagged specs fall back to kind groups below, each row
+carrying a small kind/tier pill), hash routing shows one spec at a time (the
 full markdown contract, rendered), and a "Status dashboard" section
 carries a spec-level DAG (:mod:`specthis.dag` — a git-log-style rails
 list in story order, trust flowing down status-colored rails, entry
@@ -113,6 +115,8 @@ def build_index(
                 "kind": spec.kind,
                 "skip": spec.skip,
                 "tier": spec.tier,
+                "group": spec.group,
+                "priority": spec.priority,
                 "consumes": spec.consumes,
                 "references": spec.references,
                 "entries": entries,
@@ -163,8 +167,17 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
 .kind-library { color: var(--kind-library); }
 .kind-journal { color: var(--kind-journal); }
 .kind-broken { color: #a40e26; }
+.kind-custom { color: var(--accent); }
+.pill { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; padding: 0 6px; border-radius: 999px;
+  border: 1px solid currentColor; white-space: nowrap; opacity: 0.75; }
+.pill-tier { color: var(--muted); }
 .nav-file { margin-bottom: 0.55rem; padding: 0.1rem 0 0.1rem 0.5rem;
-  border-left: 3px solid transparent; }
+  border-left: 3px solid transparent; display: flex; align-items: baseline; }
+.nav-file a { min-width: 0; }
+.nav-file .dot { flex: none; }
+.nav-file .pills { margin-left: auto; padding-left: 0.4rem; display: flex;
+  gap: 0.25rem; flex: none; align-self: center; }
 html.js-routed .nav-file.active { border-left-color: var(--accent);
   background: rgba(107, 63, 29, 0.06); }
 .nav-file a { font-weight: 600; color: var(--fg); text-decoration: none; }
@@ -285,6 +298,7 @@ tr.detail > td { padding: 2px 0 10px; }
 .journal-date { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em; color: var(--muted); margin-right: 0.4rem; }
 .nav-file .journal-date { font-size: 0.78em; margin-right: 0.3rem; }
+.nav-file a + .journal-date { margin-left: 0.3rem; }
 .journal-filter { display: flex; align-items: center; gap: 0.6rem;
   margin: 0.4rem 0 1rem; }
 .journal-filter input { flex: 1 1 auto; padding: 0.5rem 0.7rem;
@@ -765,6 +779,50 @@ def _broken_files(project: Project, problems: list[Problem]) -> list[str]:
     return sorted({p.file for p in problems if p.file.endswith(".md") and p.file not in parsed})
 
 
+def _spec_groups(project: Project) -> list[tuple[str, bool, list[SpecFile]]]:
+    """Navigation order shared by the sidebar and the section stream.
+
+    Custom ``group:`` blocks come first — a group ranks by the highest
+    ``priority:`` among its specs (higher first, ties alphabetical) —
+    then untagged specs keep today's kind blocks in ``_KIND_ORDER``.
+    Within any block: priority desc, then name. The bool flags a
+    custom group (its rows need a kind pill; kind headers don't).
+    """
+    custom: dict[str, list[SpecFile]] = {}
+    by_kind: dict[str, list[SpecFile]] = {}
+    for spec in project.specs:
+        if spec.group:
+            custom.setdefault(spec.group, []).append(spec)
+        else:
+            by_kind.setdefault(spec.kind, []).append(spec)
+
+    def within(s: SpecFile) -> tuple[int, str]:
+        return (-s.priority, s.name)
+
+    ordered = [
+        (label, True, sorted(custom[label], key=within))
+        for label in sorted(
+            custom, key=lambda g: (-max(s.priority for s in custom[g]), g.lower())
+        )
+    ]
+    ordered += [
+        (kind, False, sorted(by_kind[kind], key=within))
+        for kind in sorted(by_kind, key=lambda k: _KIND_ORDER.get(k, 9))
+    ]
+    return ordered
+
+
+def _nav_pills(spec: SpecFile, in_custom_group: bool) -> str:
+    """Right-aligned pills for one sidebar row: the kind (only where the
+    group header doesn't already say it) and the intensive tier."""
+    pills = []
+    if in_custom_group:
+        pills.append(f'<span class="pill kind-{_e(spec.kind)}">{_e(spec.kind)}</span>')
+    if spec.kind == "compute" and spec.tier == "intensive":
+        pills.append('<span class="pill pill-tier">intensive</span>')
+    return f'<span class="pills">{"".join(pills)}</span>' if pills else ""
+
+
 def _sidebar(
     project: Project,
     reports: dict[str, Report],
@@ -772,9 +830,6 @@ def _sidebar(
     generated: str,
     journal: list[JournalEntry],
 ) -> str:
-    groups: dict[str, list[SpecFile]] = {}
-    for spec in sorted(project.specs, key=lambda s: s.name):
-        groups.setdefault(spec.kind, []).append(spec)
     broken = _broken_files(project, problems)
     problem_files = {p.file for p in problems}
 
@@ -799,12 +854,13 @@ def _sidebar(
                 f'<a href="#{_e(anchor)}" title="{_e(filename)}">{_e(filename)}</a></div>'
             )
         parts.append("</div>")
-    for kind in sorted(groups, key=lambda k: _KIND_ORDER.get(k, 9)):
+    for label, is_custom, specs in _spec_groups(project):
+        header_cls = "kind kind-custom" if is_custom else f"kind kind-{_e(label)}"
         parts.append(
             f'<div class="nav-group"><div class="nav-group-header">'
-            f'<span class="kind kind-{_e(kind)}">{_e(kind)}</span></div>'
+            f'<span class="{header_cls}">{_e(label)}</span></div>'
         )
-        for spec in groups[kind]:
+        for spec in specs:
             anchor = _spec_anchor(spec.name)
             dot = (
                 '<span class="dot dot-break"></span>'
@@ -815,7 +871,8 @@ def _sidebar(
             parts.append(
                 f'<div class="nav-file{skipped_cls}" data-file-anchor="{_e(anchor)}">'
                 f"{dot}"
-                f'<a href="#{_e(anchor)}" title="{_e(spec.path.name)}">{_e(spec.title)}</a></div>'
+                f'<a href="#{_e(anchor)}" title="{_e(spec.path.name)}">{_e(spec.title)}</a>'
+                f"{_nav_pills(spec, is_custom)}</div>"
             )
         parts.append("</div>")
     if journal:
@@ -1060,12 +1117,15 @@ def _spec_section(
                 f"&#8596; {_e(other)}</a></span>"
             )
     tier = f"&middot; {_e(spec.tier)}" if spec.kind == "compute" else ""
+    group = (
+        f'&middot; <span class="kind kind-custom">{_e(spec.group)}</span> ' if spec.group else ""
+    )
     skipped_badge = (
         ' <span class="badge skipped">skipped — entries dormant</span>' if spec.skip else ""
     )
     meta = (
         f'<div class="spec-meta"><span class="kind kind-{_e(spec.kind)}">{_e(spec.kind)}</span> '
-        f"{tier} <code>{_e(spec.path.name)}</code> {pair}{skipped_badge}</div>"
+        f"{tier} {group}<code>{_e(spec.path.name)}</code> {pair}{skipped_badge}</div>"
     )
     deps = []
     if spec.consumes:
@@ -1162,9 +1222,8 @@ def render_html(
         ]
         + [
             _spec_section(spec, project, reports, journal_stems)
-            for spec in sorted(
-                project.specs, key=lambda s: (_KIND_ORDER.get(s.kind, 9), s.name)
-            )
+            for _, _, specs in _spec_groups(project)
+            for spec in specs
         ]
         + ([_journal_index_section(journal)] if journal else [])
         + [_journal_section(j, spec_names, journal_stems) for j in journal]
