@@ -45,16 +45,21 @@ def test_group_and_priority_parse(root: Path) -> None:
     assert tagged.priority == 5
 
 
-def test_group_and_priority_stay_outside_spec_sha(root: Path) -> None:
-    # display-only keys: tagging or reshuffling the sidebar must not
+def test_display_keys_stay_outside_spec_sha(root: Path) -> None:
+    # display-only keys: retitling or reshuffling the sidebar must not
     # invalidate vouches, so they are carved out of spec_sha
     before = parse_spec(root / "specs/compute-alpha.md").spec_sha
     write(
         root,
         "specs/compute-alpha.md",
-        COMPUTE_ALPHA.replace("tier: quick", "tier: quick\ngroup: estimation\npriority: 5"),
+        COMPUTE_ALPHA.replace(
+            "tier: quick",
+            "tier: quick\ntitle: The alpha fit\ngroup: estimation\npriority: 5",
+        ),
     )
-    assert parse_spec(root / "specs/compute-alpha.md").spec_sha == before
+    tagged = parse_spec(root / "specs/compute-alpha.md")
+    assert tagged.spec_sha == before
+    assert tagged.title == "The alpha fit"  # the title still lands on the spec
 
 
 def test_default_binding_convention(root: Path) -> None:

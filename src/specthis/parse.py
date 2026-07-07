@@ -7,10 +7,11 @@ template):
   ``kind``, and the two edge lists: ``consumes:`` (entry names —
   artefact flow, enters signatures) and ``references:`` (spec files —
   vocabulary, ledger-invisible). Compute specs add
-  ``tier: intensive | quick``. Optional ``group:`` (string) and
-  ``priority:`` (int, default 0, higher first) organize the dashboard
-  sidebar; they are display-only and excluded from ``spec_sha``, so
-  retagging never invalidates vouches.
+  ``tier: intensive | quick``. Optional ``title:`` (display title),
+  ``group:`` (string) and ``priority:`` (int, default 0, higher first)
+  name and organize specs in the dashboard; they are display-only and
+  excluded from ``spec_sha``, so retitling/retagging never invalidates
+  vouches.
 - Executable kinds (``compute``, ``report``) carry a
   ``## Entry`` (single) or ``## Entries`` (multi) section whose
   ``### <entry-name>`` blocks each declare ``Output:`` (compute, one
@@ -51,9 +52,9 @@ _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _ENTRY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _BACKTICKED = re.compile(r"`([^`]+)`")
 #: Display-only frontmatter lines carved out of ``spec_sha`` — they
-#: organize the sidebar, never the contract, so editing them must not
-#: invalidate vouches.
-_DISPLAY_LINE = re.compile(r"^(?:group|priority):[^\n]*(?:\n|$)", re.MULTILINE)
+#: name and organize things in the dashboard, never the contract, so
+#: editing them must not invalidate vouches.
+_DISPLAY_LINE = re.compile(r"^(?:group|priority|title):[^\n]*(?:\n|$)", re.MULTILINE)
 
 
 class SpecError(Exception):
@@ -122,7 +123,7 @@ class SpecFile:
     references: list[str]
     spec_sha: str  # sha256 of the FULL file text, frontmatter included
     body: str  # markdown after the frontmatter (the contract prose)
-    title: str = ""  # display title: frontmatter `title:`, else first heading, else name
+    title: str = ""  # frontmatter `title:` (display-only, outside spec_sha), else first heading, else name
     skip: bool = False  # commented out: entries dormant, body not grammar-checked
     group: str | None = None  # sidebar group label; display-only, outside spec_sha
     priority: int = 0  # sidebar rank, higher first; display-only, outside spec_sha
@@ -184,8 +185,8 @@ def _str_list(raw: object, where: str, what: str) -> list[str]:
 def _spec_sha(text: str, m: "re.Match[str]") -> str:
     """``spec_sha`` with display-only frontmatter lines removed.
 
-    A file that never uses ``group:``/``priority:`` hashes exactly as
-    the raw text, so existing vouches survive this carve-out.
+    A file that never uses ``title:``/``group:``/``priority:`` hashes
+    exactly as the raw text, so its vouches survive this carve-out.
     """
     fm = m.group(1)
     stripped = _DISPLAY_LINE.sub("", fm)
