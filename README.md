@@ -10,7 +10,7 @@ of repair does each broken one need — a mind (re-judge), a machine
 > Status: **implemented and tested** — the ledger verbs (`check` /
 > `status` / `run` / `vouch` / `migrate`), the scaffolding (`install` /
 > `init`), the live dashboard (`export` / `serve`) with spec browsing,
-> the journal view, and the remote cache. See
+> the DAG overview, the journal view, and the remote cache. See
 > [Roadmap](#roadmap) for the deliberately-deferred extensions.
 
 ## The model
@@ -115,6 +115,9 @@ specthis lint      # grammar check: EVERY problem across all files at once
 specthis export    # write specs/specs.html + _index.json
 specthis serve     # live dashboard at localhost:8765; re-renders on any
                    # spec / ledger / code / output change (writes nothing)
+specthis dag       # the spec-level DAG on stdout (or --out FILE): standalone
+                   # SVG — statuses as dots, portable anywhere — or, with
+                   # --format json, nodes + layout + edges to render your own way
 ```
 
 Readers are lenient, writers are strict: `check`, `lint`, and the
@@ -409,7 +412,9 @@ humans work the queue with `specthis vouch` / `specthis run --stale`.
 Done: spec/bindings parsing, content hashing + composed signatures,
 both ledgers, status derivation + frontier, the five verbs, migration,
 scaffolding, agent templates, the dashboard (`export` + `serve` with
-live reload, stdlib only), the remote cache (`file://` and `s3://`
+live reload, a spec-level DAG overview with per-entry status dots —
+also exportable standalone via `specthis dag`, stdlib only), the
+remote cache (`file://` and `s3://`
 backends, digest-verified fetch keyed by the composed signature), the
 journal (`journal/` narratives rendered into the dashboard, plus
 `/specthis-journal`), and output previews (`[preview]` recipes in

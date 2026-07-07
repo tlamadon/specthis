@@ -261,6 +261,9 @@ specthis vouch <entry> --as NAME [--reject] [--note TEXT]
                                # attest — someone other than the author, always named
 specthis serve                 # live dashboard (a regenerated view; writes nothing,
                                #   and the ledger never reads it)
+specthis dag [--out FILE]      # the spec-level DAG: standalone SVG (statuses as
+                               #   entry dots), or --format json (nodes + computed
+                               #   layout + edges) — same species of view
 ```
 
 Two more verbs cover **remote compute whose bytes should stay put**

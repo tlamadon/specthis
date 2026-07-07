@@ -3,10 +3,11 @@
 The page is an mkdocs-style spec browser: a sticky sidebar lists every
 spec file grouped by kind, hash routing shows one spec at a time (the
 full markdown contract, rendered), and a "Status dashboard" section
-carries the cross-project entry table — sortable by any column, each
-row expandable into a detail card (repair hint, upstream/downstream
-neighbors, ledger facts), and focusable on one entry so only its
-upstream/downstream slice stays visible. Everything is
+carries a spec-level DAG strip (:mod:`specthis.dag` — consumes flow,
+entry statuses as dots) above the cross-project entry table — sortable
+by any column, each row expandable into a detail card (repair hint,
+upstream/downstream neighbors, ledger facts), and focusable on one
+entry so only its upstream/downstream slice stays visible. Everything is
 a *regenerated view*, never a source of truth: it joins the parsed
 specs (:mod:`specthis.parse`), the derived statuses
 (:mod:`specthis.check`), and the journal narratives
@@ -32,6 +33,7 @@ from urllib.parse import quote
 import markdown as _markdown
 
 from .check import LOCAL_BREAKS, Report, Status, check_project
+from .dag import dag_svg
 from .journal import JournalEntry, load_journal
 from .parse import _FRONTMATTER, Entry, Problem, Project, SpecFile, load_project_lenient
 
@@ -219,6 +221,7 @@ table.sortable th.sort-asc::after { content: " \\25B4"; }
 table.sortable th.sort-desc::after { content: " \\25BE"; }
 table.sortable th.no-sort { cursor: default; }
 
+.focus-bar[hidden] { display: none; } /* author display:flex beats the UA [hidden] rule */
 .focus-bar { display: flex; align-items: center; gap: 10px; font-size: 0.85rem;
   background: #fff; border: 1px solid var(--border);
   border-left: 4px solid var(--accent); border-radius: 8px;
@@ -245,6 +248,18 @@ tr.detail > td { padding: 2px 0 10px; }
 .who { color: var(--muted); font-size: 0.82rem; }
 .moved { color: #7d4e00; font-size: 0.82rem; }
 .empty { color: #9a958c; }
+
+/* spec-level DAG strip: consumes flow, one node per spec, a dot per entry */
+.dag-wrap { overflow-x: auto; margin: 2px 0 4px; }
+.dag { display: block; }
+.dag a { text-decoration: none; }
+.dag .dag-node .box { fill: #fff; stroke: var(--border); stroke-width: 1.2; }
+.dag .dag-node:hover .box { stroke: var(--accent); }
+.dag .dag-node text { font-size: 12px; font-weight: 600; fill: var(--fg); }
+.dag .dag-node.skipped { opacity: 0.55; }
+.dag .dag-node.skipped .box { stroke-dasharray: 4 3; }
+.dag .edge { fill: none; stroke: #b9b3a7; stroke-width: 1.3; }
+.dag-caption { font-size: 0.78rem; color: var(--muted); margin: 0 0 16px; }
 
 .md { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
 .md h1 { font-size: 1.3rem; margin: 1rem 0 0.4rem; }
@@ -986,11 +1001,19 @@ def _status_section(
         else '<p class="empty">No entries yet.</p>'
     )
 
+    dag = dag_svg(project, reports)
+    if dag:
+        dag += (
+            '<div class="dag-caption">artefact flow (<code>consumes</code>), '
+            "upstream &rarr; downstream &mdash; one dot per entry, colored by "
+            "status; click a spec to open it</div>"
+        )
+
     return (
         '<section class="spec" id="status">'
         '<h2 class="spec-title">Status dashboard</h2>'
         f'<div class="chips">{chips}</div>'
-        f"{_problems_box(problems)}{all_table}</section>"
+        f"{_problems_box(problems)}{dag}{all_table}</section>"
     )
 
 

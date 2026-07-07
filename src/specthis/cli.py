@@ -521,6 +521,53 @@ def export_cmd(project_path: Path) -> None:
         click.echo(f"  wrote  {path}")
 
 
+@main.command("dag")
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["svg", "json"]),
+    default="svg",
+    show_default=True,
+    help="svg: self-contained document; json: nodes (statuses, layer/row, "
+    "geometry) + edges + canvas size, for rendering it your own way.",
+)
+@click.option(
+    "--out",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write to a file instead of stdout.",
+)
+@_path_option
+def dag_cmd(fmt: str, out: Path | None, project_path: Path) -> None:
+    """Print the spec-level DAG: standalone SVG, or layout JSON.
+
+    The same picture the dashboard's status page shows — specs as
+    nodes, consumes edges, one dot per entry colored by status. The
+    SVG is self-contained (styles inlined), so it renders anywhere: a
+    repo README, an issue, slides. The JSON carries the graph plus the
+    computed layout, so you can tune a rendering of your own without
+    re-deriving either. A regenerated view like the dashboard; nothing
+    ever reads it back.
+    """
+    from .dag import dag_json, dag_standalone_svg
+    from .parse import load_project_lenient
+
+    project, _ = load_project_lenient(project_path)
+    reports = check_project(project)
+    if fmt == "json":
+        data = dag_json(project, reports)
+        text = json.dumps(data, indent=2) + "\n" if data is not None else ""
+    else:
+        text = dag_standalone_svg(project, reports)
+    if not text:
+        raise click.ClickException("no consumes edges between specs — nothing to draw")
+    if out:
+        out.write_text(text, encoding="utf-8")
+        click.echo(f"  wrote  {out}")
+    else:
+        click.echo(text, nl=False)
+
+
 @main.command("serve")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", type=int, default=8765, show_default=True)
