@@ -163,10 +163,11 @@ def test_sidebar_frontmatter_groups_and_pills(root: Path) -> None:
     assert sidebar.index('data-file-anchor="spec-compute-beta"') < sidebar.index(
         'data-file-anchor="spec-compute-alpha"'
     )
-    # rows in custom groups carry a kind pill; intensive compute adds a tier pill
-    assert '<span class="pill kind-compute">compute</span>' in sidebar
-    assert '<span class="pill kind-report">report</span>' in sidebar
-    assert '<span class="pill pill-tier">intensive</span>' in sidebar
+    # rows in custom groups carry a kind icon pill (tooltip names it);
+    # intensive compute adds a tier pill
+    assert '<span class="pill kind-compute" title="compute">' in sidebar
+    assert '<span class="pill kind-report" title="report">' in sidebar
+    assert '<span class="pill pill-tier" title="intensive">' in sidebar
 
     # the section stream follows the same order as the sidebar
     body = page[page.index("</nav>") :]

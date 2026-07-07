@@ -168,16 +168,17 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
 .kind-journal { color: var(--kind-journal); }
 .kind-broken { color: #a40e26; }
 .kind-custom { color: var(--accent); }
-.pill { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em;
-  text-transform: uppercase; padding: 0 6px; border-radius: 999px;
-  border: 1px solid currentColor; white-space: nowrap; opacity: 0.75; }
+.pill { display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 1px solid currentColor; opacity: 0.65; flex: none; }
+.pill svg { width: 9px; height: 9px; display: block; }
 .pill-tier { color: var(--muted); }
 .nav-file { margin-bottom: 0.55rem; padding: 0.1rem 0 0.1rem 0.5rem;
   border-left: 3px solid transparent; display: flex; align-items: baseline; }
 .nav-file a { min-width: 0; }
 .nav-file .dot { flex: none; }
 .nav-file .pills { margin-left: auto; padding-left: 0.4rem; display: flex;
-  gap: 0.25rem; flex: none; align-self: center; }
+  gap: 3px; flex: none; align-self: center; }
 html.js-routed .nav-file.active { border-left-color: var(--accent);
   background: rgba(107, 63, 29, 0.06); }
 .nav-file a { font-weight: 600; color: var(--fg); text-decoration: none; }
@@ -812,14 +813,52 @@ def _spec_groups(project: Project) -> list[tuple[str, bool, list[SpecFile]]]:
     return ordered
 
 
+#: Feather-style stroke icons (24px viewBox) for the sidebar pills;
+#: terminal = compute job, bars = report, book = library, open book =
+#: definitions, layout = templates, info = meta, bolt = intensive tier.
+_PILL_ICONS = {
+    "compute": '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+    "report": (
+        '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>'
+        '<line x1="6" y1="20" x2="6" y2="14"/>'
+    ),
+    "library": (
+        '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>'
+        '<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'
+    ),
+    "definitions": (
+        '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>'
+        '<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>'
+    ),
+    "templates": (
+        '<rect x="3" y="3" width="18" height="18" rx="2"/>'
+        '<line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>'
+    ),
+    "meta": (
+        '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/>'
+        '<line x1="12" y1="8" x2="12.01" y2="8"/>'
+    ),
+    "intensive": '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+}
+
+
+def _pill(kind_class: str, label: str) -> str:
+    """One icon pill: a ringed 10px stroke icon, full word in the tooltip."""
+    return (
+        f'<span class="pill {kind_class}" title="{_e(label)}">'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" '
+        f'stroke-linecap="round" stroke-linejoin="round">{_PILL_ICONS[label]}</svg></span>'
+    )
+
+
 def _nav_pills(spec: SpecFile, in_custom_group: bool) -> str:
-    """Right-aligned pills for one sidebar row: the kind (only where the
-    group header doesn't already say it) and the intensive tier."""
+    """Right-aligned icon pills for one sidebar row: the kind (only where
+    the group header doesn't already say it) and the intensive tier."""
     pills = []
-    if in_custom_group:
-        pills.append(f'<span class="pill kind-{_e(spec.kind)}">{_e(spec.kind)}</span>')
+    if in_custom_group and spec.kind in _PILL_ICONS:
+        pills.append(_pill(f"kind-{_e(spec.kind)}", spec.kind))
     if spec.kind == "compute" and spec.tier == "intensive":
-        pills.append('<span class="pill pill-tier">intensive</span>')
+        pills.append(_pill("pill-tier", "intensive"))
     return f'<span class="pills">{"".join(pills)}</span>' if pills else ""
 
 
