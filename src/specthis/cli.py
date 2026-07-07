@@ -532,33 +532,54 @@ def export_cmd(project_path: Path) -> None:
     "geometry) + edges + canvas size, for rendering it your own way.",
 )
 @click.option(
+    "--view",
+    type=click.Choice(["layered", "rails"]),
+    default="layered",
+    show_default=True,
+    help="layered: node-link figure showing the pipeline's shape; "
+    "rails: git-log-style list in story order (the dashboard's view).",
+)
+@click.option(
+    "--orient",
+    type=click.Choice(["tb", "lr"]),
+    default="tb",
+    show_default=True,
+    help="Layered view only. tb: flow runs downward (rows pack nodes at "
+    "natural width); lr: left-to-right (columns as wide as their widest label).",
+)
+@click.option(
     "--out",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help="Write to a file instead of stdout.",
 )
 @_path_option
-def dag_cmd(fmt: str, out: Path | None, project_path: Path) -> None:
+def dag_cmd(fmt: str, view: str, orient: str, out: Path | None, project_path: Path) -> None:
     """Print the spec-level DAG: standalone SVG, or layout JSON.
 
-    The same picture the dashboard's status page shows — specs as
-    nodes, consumes edges, one dot per entry colored by status. The
-    SVG is self-contained (styles inlined), so it renders anywhere: a
-    repo README, an issue, slides. The JSON carries the graph plus the
-    computed layout, so you can tune a rendering of your own without
-    re-deriving either. A regenerated view like the dashboard; nothing
-    ever reads it back.
+    Two views of the same graph the dashboard shows: `layered` (the
+    default) is a node-link figure of the pipeline's shape; `rails` is
+    the dashboard's git-log-style list, story-ordered with trust
+    flowing down status-colored rails. The SVG is self-contained
+    (styles inlined), so it renders anywhere: a repo README, an issue,
+    slides. The JSON carries the graph plus both computed placements,
+    so you can tune a rendering of your own without re-deriving
+    either. A regenerated view like the dashboard; nothing ever reads
+    it back.
     """
     from .dag import dag_json, dag_standalone_svg
     from .parse import load_project_lenient
 
-    project, _ = load_project_lenient(project_path)
+    try:
+        project, _ = load_project_lenient(project_path)
+    except SpecError as exc:
+        raise click.ClickException(str(exc)) from exc
     reports = check_project(project)
     if fmt == "json":
-        data = dag_json(project, reports)
+        data = dag_json(project, reports, orient)
         text = json.dumps(data, indent=2) + "\n" if data is not None else ""
     else:
-        text = dag_standalone_svg(project, reports)
+        text = dag_standalone_svg(project, reports, orient, view)
     if not text:
         raise click.ClickException("no consumes edges between specs — nothing to draw")
     if out:

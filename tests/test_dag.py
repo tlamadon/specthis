@@ -10,7 +10,7 @@ from click.testing import CliRunner
 
 from specthis.check import check_project
 from specthis.cli import main
-from specthis.dag import dag_json, dag_svg, spec_graph
+from specthis.dag import dag_json, dag_standalone_svg, dag_svg, spec_graph
 from specthis.export import render
 from specthis.parse import load_project, load_project_lenient
 
@@ -22,10 +22,12 @@ def _svg(page: str) -> str:
     return page[page.index('<svg class="dag"'): page.index("</svg>")]
 
 
-def _node_x(svg: str) -> dict[str, int]:
+def _node_pos(svg: str) -> dict[str, tuple[int, int]]:
     return {
-        m.group(2): int(m.group(1))
-        for m in re.finditer(r'transform="translate\((\d+),\d+\)" data-spec="([^"]+)"', svg)
+        m.group(3): (int(m.group(1)), int(m.group(2)))
+        for m in re.finditer(
+            r'transform="translate\((\d+),(\d+)\)" data-spec="([^"]+)"', svg
+        )
     }
 
 
@@ -39,24 +41,90 @@ def test_spec_graph_projects_consumes_to_spec_level(root: Path) -> None:
     }
 
 
-def test_dag_renders_layered_left_to_right(root: Path) -> None:
+def test_dag_page_is_rails_in_story_order(root: Path) -> None:
     make_ready(root)
     page, _ = render(load_project(root))
     svg = _svg(page)
-    x = _node_x(svg)
-    assert x["compute-alpha"] < x["compute-beta"] < x["report-beta"]
+    pos = _node_pos(svg)
+    # story order: every spec below its inputs
+    assert pos["compute-alpha"][1] < pos["compute-beta"][1] < pos["report-beta"][1]
+    # one spine + one branch per upstream (alpha and beta each feed one spec)
+    assert svg.count('class="rail"') == 4
+    assert 'href="#spec-compute-beta"' in svg  # rows click through to the spec
+    assert 'data-up="compute-beta"' in svg  # hover JS traces a row's inputs
+    assert "rails-hover" in page  # the spotlight JS/CSS ships with the page
+
+
+def test_dag_standalone_layered_top_down(root: Path) -> None:
+    make_ready(root)
+    project = load_project(root)
+    svg = _svg(dag_standalone_svg(project, check_project(project)))
+    pos = _node_pos(svg)
+    assert pos["compute-alpha"][1] < pos["compute-beta"][1] < pos["report-beta"][1]
     assert svg.count('class="edge"') == 2
-    assert 'href="#spec-compute-beta"' in svg  # nodes click through to the spec
+
+
+def test_dag_cli_orient_lr(root: Path) -> None:
+    result = CliRunner().invoke(main, ["dag", "--path", str(root), "--orient", "lr"])
+    assert result.exit_code == 0, result.output
+    pos = _node_pos(result.output)
+    assert pos["compute-alpha"][0] < pos["compute-beta"][0] < pos["report-beta"][0]
 
 
 def test_dag_dots_follow_status(root: Path) -> None:
-    # nothing vouched yet: code exists, so every entry is audit-needed
+    # nothing vouched yet: code exists, so every entry is audit-needed.
+    # rails rows show the worst-status dot on the rail plus the chips —
+    # two fills per single-status spec.
     svg = _svg(render(load_project(root))[0])
-    assert svg.count('fill="#c06a1f"') == 3
-    assert "<title>fit-alpha: audit needed</title>" in svg
+    assert svg.count('fill="#c06a1f"') == 6
+    assert "audit needed (1): fit-alpha" in svg  # group tooltip names the entries
     make_ready(root)
     svg = _svg(render(load_project(root))[0])
-    assert svg.count('fill="#4d9367"') == 3
+    assert svg.count('fill="#4d9367"') == 6
+
+
+_REPORT_MANY = """\
+---
+name: report-many
+kind: report
+consumes:
+  - fit-beta
+---
+
+# many exports
+
+## Entries
+
+### exp-one
+
+Export outputs:
+- `reports/one.dat`
+
+### exp-two
+
+Export outputs:
+- `reports/two.dat`
+
+### exp-three
+
+Export outputs:
+- `reports/three.dat`
+"""
+
+
+def test_dag_dots_aggregate_per_status(root: Path) -> None:
+    write(root, "specs/report-many.md", _REPORT_MANY)
+    svg = _svg(render(load_project(root))[0])
+    m = re.search(
+        r'<g class="dag-node[^"]*"[^>]*data-spec="report-many"[^>]*>.*?</g></a>', svg, re.S
+    )
+    assert m is not None
+    node = m.group(0)
+    # three same-status entries collapse to one chip dot carrying the
+    # count (plus the row's worst-status dot on the rail)
+    assert node.count("<circle") == 2
+    assert ">3</text>" in node
+    assert "unimplemented (3): exp-one, exp-two, exp-three" in node
 
 
 def test_dag_omitted_when_no_flow(tmp_path: Path) -> None:
@@ -77,9 +145,9 @@ def test_dag_skipped_spec_greyed_with_dormant_edges(root: Path) -> None:
     # the skipped node stays in the picture, greyed, its dormant edge drawn;
     # report-beta's edge onto the skipped entry was dropped at load
     assert 'class="dag-node skipped"' in svg
-    assert svg.count('class="edge"') == 1
+    assert svg.count('class="rail"') == 2  # one dormant edge: spine + branch
     assert 'data-spec="report-beta"' in svg
-    assert "<title>fit-beta: skipped</title>" in svg
+    assert "skipped (1): fit-beta" in svg
 
 
 _SKIPPED_CYCLE = """\
@@ -111,7 +179,8 @@ def test_dag_survives_dormant_cycle(root: Path) -> None:
     write(root, "specs/compute-y.md", _SKIPPED_CYCLE.format(me="y", other="x"))
     project, problems = load_project_lenient(root)
     svg = _svg(render(project, problems)[0])
-    assert svg.count('class="edge"') == 2  # just the live alpha -> beta -> report chain
+    # just the live alpha -> beta -> report chain: two upstreams' rails
+    assert svg.count('class="rail"') == 4
     assert 'data-spec="compute-x"' in svg and 'data-spec="compute-y"' in svg
 
 
@@ -158,7 +227,8 @@ def test_dag_cli_writes_out_file(root: Path) -> None:
 def test_dag_json_matches_the_svg_picture(root: Path) -> None:
     make_ready(root)
     project = load_project(root)
-    data = dag_json(project, check_project(project))
+    reports = check_project(project)
+    data = dag_json(project, reports)
     assert data is not None
     by = {n["spec"]: n for n in data["nodes"]}
     assert {(e["upstream"], e["downstream"]) for e in data["edges"]} == {
@@ -168,10 +238,15 @@ def test_dag_json_matches_the_svg_picture(root: Path) -> None:
     assert by["compute-alpha"]["layer"] < by["compute-beta"]["layer"]
     assert by["compute-beta"]["entries"] == [{"name": "fit-beta", "status": "ready"}]
     assert by["report-beta"]["kind"] == "report"
-    # same layout pass as the SVG: geometry and canvas agree exactly
-    svg = _svg(render(project)[0])
-    for spec, x in _node_x(svg).items():
-        assert by[spec]["x"] == x
+    assert data["orient"] == "tb"
+    # the rails placement rides along: story order respects every edge
+    for e in data["edges"]:
+        assert by[e["upstream"]]["order"] < by[e["downstream"]]["order"]
+    assert all(n["lane"] >= 0 for n in data["nodes"])
+    # same layout pass as the layered SVG: geometry and canvas agree exactly
+    svg = _svg(dag_standalone_svg(project, reports))
+    for spec, (x, y) in _node_pos(svg).items():
+        assert (by[spec]["x"], by[spec]["y"]) == (x, y)
     assert f'viewBox="0 0 {data["size"]["width"]} {data["size"]["height"]}"' in svg
 
 
@@ -188,6 +263,21 @@ def test_dag_cli_json_format(root: Path) -> None:
     assert {e["status"] for n in data["nodes"] for e in n["entries"]} == {"audit needed"}
 
 
+def test_dag_cli_clean_error_without_specs_dir(tmp_path: Path) -> None:
+    result = CliRunner().invoke(main, ["dag", "--path", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "no specs/ directory" in result.output  # a clean message, not a traceback
+
+
+def test_dag_cli_view_rails(root: Path) -> None:
+    result = CliRunner().invoke(main, ["dag", "--path", str(root), "--view", "rails"])
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith('<?xml version="1.0"')
+    assert 'class="rail"' in result.output
+    assert ".rail {" in result.output  # standalone: rail styles inlined
+    assert "<a " not in result.output
+
+
 def test_dag_cli_refuses_when_no_flow(tmp_path: Path) -> None:
     write(tmp_path, "specs/models.md", MODELS)
     write(tmp_path, "specs/bindings.toml", "")
@@ -196,7 +286,7 @@ def test_dag_cli_refuses_when_no_flow(tmp_path: Path) -> None:
     assert "nothing to draw" in result.output
 
 
-def test_dag_diamond_shares_a_column(tmp_path: Path) -> None:
+def test_dag_diamond_shares_a_row(tmp_path: Path) -> None:
     consumes = "consumes:\n  - fit-{0}\n"
     write(tmp_path, "specs/compute-a.md", _DIAMOND_SPEC.format(me="a", consumes=""))
     write(tmp_path, "specs/compute-b.md", _DIAMOND_SPEC.format(me="b", consumes=consumes.format("a")))
@@ -207,7 +297,9 @@ def test_dag_diamond_shares_a_column(tmp_path: Path) -> None:
         _DIAMOND_SPEC.format(me="d", consumes="consumes:\n  - fit-b\n  - fit-c\n"),
     )
     write(tmp_path, "specs/bindings.toml", "")
-    svg = _svg(render(load_project(tmp_path))[0])
-    x = _node_x(svg)
-    assert x["compute-a"] < x["compute-b"] == x["compute-c"] < x["compute-d"]
+    project = load_project(tmp_path)
+    svg = _svg(dag_standalone_svg(project, check_project(project)))
+    pos = _node_pos(svg)
+    assert pos["compute-a"][1] < pos["compute-b"][1] == pos["compute-c"][1] < pos["compute-d"][1]
+    assert pos["compute-b"][0] != pos["compute-c"][0]  # side by side in the row
     assert svg.count('class="edge"') == 4

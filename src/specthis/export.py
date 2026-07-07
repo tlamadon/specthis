@@ -3,8 +3,9 @@
 The page is an mkdocs-style spec browser: a sticky sidebar lists every
 spec file grouped by kind, hash routing shows one spec at a time (the
 full markdown contract, rendered), and a "Status dashboard" section
-carries a spec-level DAG strip (:mod:`specthis.dag` — consumes flow,
-entry statuses as dots) above the cross-project entry table — sortable
+carries a spec-level DAG (:mod:`specthis.dag` — a git-log-style rails
+list in story order, trust flowing down status-colored rails, entry
+statuses as counted dots) above the cross-project entry table — sortable
 by any column, each row expandable into a detail card (repair hint,
 upstream/downstream neighbors, ledger facts), and focusable on one
 entry so only its upstream/downstream slice stays visible. Everything is
@@ -256,9 +257,15 @@ tr.detail > td { padding: 2px 0 10px; }
 .dag .dag-node .box { fill: #fff; stroke: var(--border); stroke-width: 1.2; }
 .dag .dag-node:hover .box { stroke: var(--accent); }
 .dag .dag-node text { font-size: 12px; font-weight: 600; fill: var(--fg); }
+.dag .dag-node text.cnt { font-size: 10px; fill: #5a5a5a; }
 .dag .dag-node.skipped { opacity: 0.55; }
 .dag .dag-node.skipped .box { stroke-dasharray: 4 3; }
 .dag .edge { fill: none; stroke: #b9b3a7; stroke-width: 1.3; }
+.dag .rail { fill: none; stroke-width: 2; stroke-linecap: round; opacity: 0.45;
+  transition: opacity 0.12s; }
+.dag.rails-hover .rail { opacity: 0.1; }
+.dag.rails-hover .rail.hot { opacity: 0.9; }
+.dag .hit { fill: none; pointer-events: all; }
 .dag-caption { font-size: 0.78rem; color: var(--muted); margin: 0 0 16px; }
 
 .md { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
@@ -472,6 +479,25 @@ _ROUTER_JS = """
     const saved = sessionStorage.getItem('specsFocus');
     if (saved && entryRows.some((tr) => tr.dataset.name === saved)) apply(saved);
   }
+
+  // DAG rails: hovering a row spotlights the rails feeding it (its
+  // upstreams' rails) and the rail it sends downstream.
+  document.querySelectorAll('svg.dag').forEach((svg) => {
+    const rails = Array.from(svg.querySelectorAll('.rail'));
+    if (!rails.length) return;
+    svg.querySelectorAll('.dag-node[data-spec]').forEach((row) => {
+      const mine = new Set((row.dataset.up || '').split(' ').filter(Boolean));
+      mine.add(row.dataset.spec);
+      row.addEventListener('mouseenter', () => {
+        svg.classList.add('rails-hover');
+        rails.forEach((r) => r.classList.toggle('hot', mine.has(r.dataset.src)));
+      });
+      row.addEventListener('mouseleave', () => {
+        svg.classList.remove('rails-hover');
+        rails.forEach((r) => r.classList.remove('hot'));
+      });
+    });
+  });
 
   // Journal index: client-side text filter over the cards.
   const filterInput = document.getElementById('journal-filter-input');
@@ -1004,9 +1030,10 @@ def _status_section(
     dag = dag_svg(project, reports)
     if dag:
         dag += (
-            '<div class="dag-caption">artefact flow (<code>consumes</code>), '
-            "upstream &rarr; downstream &mdash; one dot per entry, colored by "
-            "status; click a spec to open it</div>"
+            '<div class="dag-caption">artefact flow (<code>consumes</code>): '
+            "every spec sits below its inputs; rail color is the upstream's "
+            "status, dots count entries by status &mdash; hover a row to "
+            "trace it, click to open the spec</div>"
         )
 
     return (

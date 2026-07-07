@@ -1,29 +1,34 @@
-"""Spec-level DAG overview for the status dashboard: layout + inline SVG.
+"""Spec-level DAG views for the status dashboard and `specthis dag`.
 
-The status table answers *which entry, what repair*; this strip answers
+The status table answers *which entry, what repair*; these views answer
 *what feeds what*. One node per spec that participates in artefact flow
 (the kinds with entries), one edge per spec-level projection of
 ``consumes:`` — ``references:`` is vocabulary and stays out of the
-picture. Inside each node, one dot per entry colored by derived status,
-so the frontier reads as a boundary in the graph: green upstream, a
-break, its wake downstream. Clicking a node opens the spec's section.
+picture. Entries collapse to one dot per status with a count (thirty
+same-status entries are one dot, not a bar of thirty), so the frontier
+reads as a boundary: green upstream, a break, its wake downstream.
 
-Pure view code, no graph library: layering is longest-path over the
-consumes DAG, crossing reduction is a few barycenter sweeps — plenty at
-project scale (tens of specs), and it keeps the page dependency-free.
-Skipped specs render greyed with their dormant edges. Only dormant
-edges can form a cycle (live edges are validated and cycle-checked
-before any render); on a cycle the dormant edges are dropped rather
-than the picture.
+Two views share the graph pass:
 
-Three outputs of the same picture, all fed by one layout pass: the
-dashboard strip (styled by the page CSS, nodes link into the spec
-sections), a standalone SVG document for `specthis dag` (styles
-inlined, no anchors — a portable snapshot you can mail, commit, or
-drop into slides), and layout JSON for `specthis dag --format json`
-(nodes with statuses, layer/row, pixel geometry; edges; canvas size)
-for re-rendering with different aesthetics elsewhere. Like the
-dashboard these are regenerated views: nothing ever reads them back.
+- **rails** (the dashboard's view): a git-log-style list — one row per
+  spec in *story order* (every spec below all of its inputs, directly
+  below the inputs only it consumes; shared foundations float to the
+  top, the final deliverable lands last, edgeless specs trail). Edges
+  run as vertical rails in a left gutter, one lane per upstream shared
+  by all its out-edges and colored by that upstream's status — trust
+  visibly flows down the page. Scales as a list: no horizontal scroll.
+- **layered** (the figure, `specthis dag`'s default): a Sugiyama-lite
+  node-link diagram — longest-path layering, a few barycenter sweeps —
+  that shows the pipeline's shape at a glance. Top-down by default
+  (rows pack nodes at natural label width); ``lr`` for left-to-right.
+
+`specthis dag --format json` emits the graph with both placements
+(layered geometry plus story order/lane), for re-rendering elsewhere.
+Pure view code, no graph library; like the dashboard, all of it is a
+regenerated view — nothing ever reads it back. Skipped specs render
+greyed with their dormant edges. Only dormant edges can form a cycle
+(live edges are validated and cycle-checked before any render); on a
+cycle the dormant edges are dropped rather than the picture.
 """
 
 from __future__ import annotations
@@ -60,21 +65,38 @@ _KIND_FILL = {
 }
 
 #: inline rules for the standalone document — the look the page CSS
-#: gives the strip, with the palette values resolved.
+#: gives the views, with the palette values resolved.
 _STANDALONE_STYLE = (
     "<style>"
     'text { font: 600 12px -apple-system, "Segoe UI", Roboto, sans-serif; fill: #1a1a1a; }'
+    " .cnt { font-size: 10px; fill: #5a5a5a; }"
     " .box { fill: #fff; stroke: #d8d4cc; stroke-width: 1.2; }"
     " .skipped { opacity: 0.55; }"
     " .skipped .box { stroke-dasharray: 4 3; }"
     " .edge { fill: none; stroke: #b9b3a7; stroke-width: 1.3; }"
+    " .rail { fill: none; stroke-width: 2; stroke-linecap: round; opacity: 0.45; }"
+    " .hit { fill: none; }"
     "</style>"
 )
 
 _NODE_H = 44
-_H_GAP = 56  # between columns — room for edges to bend readably
-_V_GAP = 18
+_H_GAP = 56  # layered lr: between columns — room for edges to bend readably
+_V_GAP = 18  # layered lr: between nodes stacked in a column
+_ROW_GAP = 52  # layered tb: between layer rows
+_SIB_GAP = 26  # layered tb: between nodes side by side in a row
+_RAILS_ROW_H = 30  # rails: one list row
+_LANE_W = 14  # rails: gutter lane pitch
 _PAD = 12
+
+#: Rails is the dashboard default (a scanning list: no horizontal
+#: scroll, labels aligned, trust flowing down the gutter); layered is
+#: the `specthis dag` default (a figure: the pipeline's shape).
+VIEWS = ("rails", "layered")
+
+#: Layered top-down is the default orientation: node width (the label)
+#: is the dominant dimension, and tb lets rows pack nodes at natural
+#: width while lr forces every column as wide as its widest label.
+ORIENTS = ("tb", "lr")
 
 
 def spec_graph(project: Project) -> tuple[list[SpecFile], list[tuple[str, str]]]:
@@ -117,6 +139,26 @@ def _layers(names: set[str], edges: list[tuple[str, str]]) -> dict[str, int] | N
     return layer
 
 
+def _graph(
+    project: Project,
+) -> tuple[dict[str, SpecFile], list[tuple[str, str]], dict[str, int]] | None:
+    """spec_graph plus layering, with the dormant-cycle fallback shared
+    by every view; None when there is no flow to picture (isolated
+    specs are already covered by the sidebar dots)."""
+    nodes, edges = spec_graph(project)
+    if not edges:
+        return None
+    by_name = {s.name: s for s in nodes}
+    names = set(by_name)
+    layer = _layers(names, edges)
+    if layer is None:  # a dormant cycle — drop skipped specs' edges, keep the picture
+        edges = [(u, d) for u, d in edges if not by_name[d].skip]
+        layer = _layers(names, edges)
+        if layer is None or not edges:
+            return None
+    return by_name, edges, layer
+
+
 def _columns(
     names: set[str], edges: list[tuple[str, str]], layer: dict[str, int]
 ) -> list[list[str]]:
@@ -157,8 +199,123 @@ def _columns(
     return cols
 
 
-def _node_width(name: str, n_dots: int) -> int:
-    return int(max(76, 24 + len(name) * 7.2, 24 + n_dots * 13))
+def _story_order(
+    names: set[str], edges: list[tuple[str, str]], layer: dict[str, int]
+) -> list[str]:
+    """Rows for the rails view: post-order DFS up from the sinks.
+
+    Every spec lands below all of its inputs; a spec's widely-consumed
+    inputs are visited first so the inputs that exist only for it stay
+    pinned directly above it. Shared foundations float to the top, the
+    deepest deliverable lands last, edgeless specs trail at the bottom.
+    Deterministic: ties break on (layer, name).
+    """
+    children: dict[str, list[str]] = {n: [] for n in names}
+    parents: dict[str, list[str]] = {n: [] for n in names}
+    for u, d in edges:
+        children[u].append(d)
+        parents[d].append(u)
+    seen: set[str] = set()
+    order: list[str] = []
+
+    def visit(n: str) -> None:
+        if n in seen:
+            return
+        seen.add(n)
+        for p in sorted(parents[n], key=lambda p: (-len(children[p]), layer[p], p)):
+            visit(p)
+        order.append(n)
+
+    sinks = sorted(
+        (n for n in names if not children[n] and parents[n]),
+        key=lambda n: (layer[n], n),
+    )
+    for n in [*sinks, *sorted(names)]:
+        visit(n)
+    return order
+
+
+def _lanes(order: list[str], edges: list[tuple[str, str]]) -> dict[str, int]:
+    """Gutter lane per spec: its rail spans from its own row to its last
+    consumer's row; smallest lane free over that interval (greedy
+    interval coloring). All of an upstream's out-edges share its lane."""
+    row = {n: i for i, n in enumerate(order)}
+    children: dict[str, list[str]] = defaultdict(list)
+    for u, d in edges:
+        children[u].append(d)
+    busy: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    lane: dict[str, int] = {}
+    for n in order:
+        s = row[n]
+        e = max((row[c] for c in children[n]), default=s)
+        k = 0
+        while any(a <= e and s <= b for a, b in busy[k]):
+            k += 1
+        lane[n] = k
+        busy[k].append((s, e))
+    return lane
+
+
+def _dot_groups(
+    spec: SpecFile, reports: dict[str, Report]
+) -> list[tuple[str, int, str, list[str]]]:
+    """Entry dots collapsed per status: (label, count, fill, entry names),
+    severity-ordered (most broken first, skipped last). One dot per
+    status keeps a spec with dozens of same-status entries from
+    bloating into a bar of identical dots."""
+    groups: dict[Status | None, list[str]] = defaultdict(list)
+    for entry in spec.entries:
+        r = reports.get(entry.name)  # None when dormant under skip: true
+        groups[r.status if r else None].append(entry.name)
+    return [
+        (
+            status.value if status else "skipped",
+            len(groups[status]),
+            _DOT_FILL[status] if status else _SKIP_FILL,
+            groups[status],
+        )
+        for status in [*Status, None]
+        if status in groups
+    ]
+
+
+def _group_advance(count: int) -> int:
+    """Horizontal room one status-dot group takes: the dot, the count
+    when there is more than one entry, and the gap to the next group."""
+    return 8 + (3 + len(str(count)) * 7 if count > 1 else 0) + 10
+
+
+def _dots_width(groups: list[tuple[str, int, str, list[str]]]) -> int:
+    return sum(_group_advance(c) for _, c, _, _ in groups) - (10 if groups else 0)
+
+
+def _node_width(name: str, groups: list[tuple[str, int, str, list[str]]]) -> int:
+    return int(max(76, 24 + len(name) * 7.2, 24 + _dots_width(groups)))
+
+
+def _chips(
+    groups: list[tuple[str, int, str, list[str]]], cy: int
+) -> str:
+    """The per-status dot groups, laid out left to right around ``cy``;
+    each group's tooltip names its entries."""
+    parts = []
+    cx = 0
+    for label, count, fill, entry_names in groups:
+        tip = f"{label} ({count}): {', '.join(entry_names)}"
+        cnt = (
+            f'<text class="cnt" x="{cx + 11}" y="{cy + 4}">{count}</text>' if count > 1 else ""
+        )
+        parts.append(
+            f"<g><title>{escape(tip)}</title>"
+            f'<circle cx="{cx + 4}" cy="{cy}" r="4" fill="{fill}"/>{cnt}</g>'
+        )
+        cx += _group_advance(count)
+    return "".join(parts)
+
+
+def _summary(spec: SpecFile, groups: list[tuple[str, int, str, list[str]]]) -> str:
+    counts = ", ".join(f"{count} {label}" for label, count, _, _ in groups)
+    return escape(f"{spec.path.name} — {counts or spec.kind}")
 
 
 @dataclass
@@ -169,75 +326,99 @@ class _Node:
     x: int
     y: int
     width: int
-    layer: int  # column index (depth along the flow)
-    row: int  # index within the column after crossing reduction
+    layer: int  # depth along the flow
+    row: int  # index within the layer after crossing reduction
 
 
 def _layout(
-    project: Project,
+    project: Project, reports: dict[str, Report], orient: str
 ) -> tuple[list[_Node], list[tuple[str, str]], int, int] | None:
-    """Placed nodes, drawable edges, and (width, height) of the canvas;
-    None when there is no flow to picture."""
-    nodes, edges = spec_graph(project)
-    if not edges:
+    """Layered placement: nodes, drawable edges, and (width, height) of
+    the canvas; None when there is no flow to picture."""
+    g = _graph(project)
+    if g is None:
         return None
-    by_name = {s.name: s for s in nodes}
+    by_name, edges, layer = g
     names = set(by_name)
-    layer = _layers(names, edges)
-    if layer is None:  # a dormant cycle — drop skipped specs' edges, keep the picture
-        edges = [(u, d) for u, d in edges if not by_name[d].skip]
-        layer = _layers(names, edges)
-        if layer is None or not edges:
-            return None
-
     cols = _columns(names, edges, layer)
-    widths = {s.name: _node_width(s.name, len(s.entries)) for s in nodes}
-    col_w = [max(widths[n] for n in col) for col in cols]
-    col_x: list[int] = []
-    x = _PAD
-    for w in col_w:
-        col_x.append(x)
-        x += w + _H_GAP
-    total_w = x - _H_GAP + _PAD
-    col_h = [len(col) * _NODE_H + (len(col) - 1) * _V_GAP for col in cols]
-    total_h = max(col_h) + 2 * _PAD
+    widths = {n: _node_width(n, _dot_groups(s, reports)) for n, s in by_name.items()}
     placed: list[_Node] = []
-    for i, col in enumerate(cols):
-        y = _PAD + (max(col_h) - col_h[i]) // 2  # center each column vertically
-        for j, n in enumerate(col):
-            placed.append(
-                _Node(by_name[n], col_x[i] + (col_w[i] - widths[n]) // 2, y, widths[n], i, j)
-            )
-            y += _NODE_H + _V_GAP
+    if orient == "lr":
+        col_w = [max(widths[n] for n in col) for col in cols]
+        col_x: list[int] = []
+        x = _PAD
+        for w in col_w:
+            col_x.append(x)
+            x += w + _H_GAP
+        total_w = x - _H_GAP + _PAD
+        col_h = [len(col) * _NODE_H + (len(col) - 1) * _V_GAP for col in cols]
+        total_h = max(col_h) + 2 * _PAD
+        for i, col in enumerate(cols):
+            y = _PAD + (max(col_h) - col_h[i]) // 2  # center each column vertically
+            for j, n in enumerate(col):
+                placed.append(
+                    _Node(by_name[n], col_x[i] + (col_w[i] - widths[n]) // 2, y, widths[n], i, j)
+                )
+                y += _NODE_H + _V_GAP
+    else:  # tb — rows pack nodes at natural width; no column inflation
+        row_w = [sum(widths[n] for n in col) + _SIB_GAP * (len(col) - 1) for col in cols]
+        total_w = max(row_w) + 2 * _PAD
+        total_h = len(cols) * _NODE_H + (len(cols) - 1) * _ROW_GAP + 2 * _PAD
+        for i, col in enumerate(cols):
+            x = _PAD + (max(row_w) - row_w[i]) // 2  # center each row
+            y = _PAD + i * (_NODE_H + _ROW_GAP)
+            for j, n in enumerate(col):
+                placed.append(_Node(by_name[n], x, y, widths[n], i, j))
+                x += widths[n] + _SIB_GAP
     return placed, edges, total_w, total_h
 
 
-def dag_svg(project: Project, reports: dict[str, Report]) -> str:
-    """The dashboard strip, or "" when there is no flow to picture
-    (isolated specs are already covered by the sidebar dots)."""
-    svg = _render(project, reports, standalone=False)
+def dag_svg(
+    project: Project, reports: dict[str, Report], orient: str = "tb", view: str = "rails"
+) -> str:
+    """The dashboard block — rails by default, the scanning view. "" when
+    there is no flow to picture."""
+    if view == "rails":
+        svg = _render_rails(project, reports, standalone=False)
+    else:
+        svg = _render_layered(project, reports, standalone=False, orient=orient)
     return f'<div class="dag-wrap">{svg}</div>' if svg else ""
 
 
-def dag_standalone_svg(project: Project, reports: dict[str, Report]) -> str:
-    """The same picture as a self-contained SVG document (`specthis
-    dag`): styles inlined, no page anchors. "" when there is no flow."""
-    svg = _render(project, reports, standalone=True)
+def dag_standalone_svg(
+    project: Project, reports: dict[str, Report], orient: str = "tb", view: str = "layered"
+) -> str:
+    """A self-contained SVG document (`specthis dag`) — layered by
+    default, the figure. Styles inlined, no page anchors. "" when there
+    is no flow."""
+    if view == "rails":
+        svg = _render_rails(project, reports, standalone=True)
+    else:
+        svg = _render_layered(project, reports, standalone=True, orient=orient)
     return f'<?xml version="1.0" encoding="UTF-8"?>\n{svg}\n' if svg else ""
 
 
-def dag_json(project: Project, reports: dict[str, Report]) -> dict | None:
+def dag_json(
+    project: Project, reports: dict[str, Report], orient: str = "tb"
+) -> dict | None:
     """The same picture as data (`specthis dag --format json`): nodes
-    carrying identity (spec, kind, entry statuses) and the computed
-    layout (layer/row plus pixel geometry), the edges, and the canvas
-    size — enough to re-render with different aesthetics, or to ignore
-    the geometry and lay out the raw graph yourself. None when there
-    is no flow."""
-    laid = _layout(project)
+    carrying identity (spec, kind, entry statuses) and both computed
+    placements — the layered layout (layer/row plus pixel geometry for
+    the requested orient) and the rails placement (story-order index
+    and gutter lane) — plus the edges and the layered canvas size.
+    Enough to re-render either view with different aesthetics, or to
+    ignore the placements and lay out the raw graph yourself. None
+    when there is no flow."""
+    laid = _layout(project, reports, orient)
     if laid is None:
         return None
     placed, edges, total_w, total_h = laid
+    layer_map = {p.spec.name: p.layer for p in placed}
+    story = _story_order(set(layer_map), edges, layer_map)
+    story_row = {n: i for i, n in enumerate(story)}
+    lanes = _lanes(story, edges)
     return {
+        "orient": orient,
         "size": {"width": total_w, "height": total_h},
         "nodes": [
             {
@@ -252,6 +433,8 @@ def dag_json(project: Project, reports: dict[str, Report]) -> dict | None:
                 "y": p.y,
                 "width": p.width,
                 "height": _NODE_H,
+                "order": story_row[p.spec.name],
+                "lane": lanes[p.spec.name],
                 "entries": [
                     {
                         "name": e.name,
@@ -268,8 +451,10 @@ def dag_json(project: Project, reports: dict[str, Report]) -> dict | None:
     }
 
 
-def _render(project: Project, reports: dict[str, Report], standalone: bool) -> str:
-    laid = _layout(project)
+def _render_layered(
+    project: Project, reports: dict[str, Report], standalone: bool, orient: str
+) -> str:
+    laid = _layout(project, reports, orient)
     if laid is None:
         return ""
     placed, edges, total_w, total_h = laid
@@ -288,40 +473,122 @@ def _render(project: Project, reports: dict[str, Report], standalone: bool) -> s
     if standalone:
         parts.insert(1, _STANDALONE_STYLE + '<rect width="100%" height="100%" fill="#fdfdfc"/>')
     for u, d in edges:
-        x1 = xy[u][0] + widths[u]
-        y1 = xy[u][1] + _NODE_H // 2
-        x2, y2 = xy[d][0] - 2, xy[d][1] + _NODE_H // 2
-        mid = (x1 + x2) // 2
+        if orient == "lr":  # right edge of upstream -> left edge of downstream
+            x1 = xy[u][0] + widths[u]
+            y1 = xy[u][1] + _NODE_H // 2
+            x2, y2 = xy[d][0] - 2, xy[d][1] + _NODE_H // 2
+            mid = (x1 + x2) // 2
+            path = f"M{x1},{y1} C{mid},{y1} {mid},{y2} {x2},{y2}"
+        else:  # tb: bottom center of upstream -> top center of downstream
+            x1 = xy[u][0] + widths[u] // 2
+            y1 = xy[u][1] + _NODE_H
+            x2, y2 = xy[d][0] + widths[d] // 2, xy[d][1] - 2
+            mid = (y1 + y2) // 2
+            path = f"M{x1},{y1} C{x1},{mid} {x2},{mid} {x2},{y2}"
         parts.append(
-            f'<path class="edge" d="M{x1},{y1} C{mid},{y1} {mid},{y2} {x2},{y2}" '
-            'marker-end="url(#dag-arrow)"/>'
+            f'<path class="edge" d="{path}" marker-end="url(#dag-arrow)"/>'
         )
     for p in placed:
         spec = p.spec
-        nx, ny = p.x, p.y
-        dots, tips = [], []
-        for j, entry in enumerate(spec.entries):
-            r = reports.get(entry.name)  # None when dormant under skip: true
-            label = f"{entry.name}: {r.status.value if r else 'skipped'}"
-            tips.append(label)
-            dots.append(
-                f'<circle cx="{16 + j * 13}" cy="30" r="4" '
-                f'fill="{_DOT_FILL[r.status] if r else _SKIP_FILL}">'
-                f"<title>{escape(label)}</title></circle>"
-            )
-        title = escape(f"{spec.path.name} — {'; '.join(tips) if tips else spec.kind}")
+        groups = _dot_groups(spec, reports)
         node = (
             f'<g class="dag-node{" skipped" if spec.skip else ""}" '
-            f'transform="translate({nx},{ny})" data-spec="{escape(spec.name)}">'
-            f"<title>{title}</title>"
+            f'transform="translate({p.x},{p.y})" data-spec="{escape(spec.name)}">'
+            f"<title>{_summary(spec, groups)}</title>"
             f'<rect class="box" width="{p.width}" height="{_NODE_H}" rx="6"/>'
             f'<rect x="0" y="6" width="3" height="{_NODE_H - 12}" rx="1.5" '
             f'fill="{_KIND_FILL.get(spec.kind, "#6e6e6e")}"/>'
-            f'<text x="12" y="19">{escape(spec.name)}</text>' + "".join(dots) + "</g>"
+            f'<text x="12" y="19">{escape(spec.name)}</text>'
+            f'<g transform="translate(12,0)">{_chips(groups, 30)}</g>'
+            "</g>"
         )
         if not standalone:
             # anchor matches export's _spec_anchor — the hash router takes over
             node = f'<a href="#spec-{escape(spec.name)}">{node}</a>'
+        parts.append(node)
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _render_rails(project: Project, reports: dict[str, Report], standalone: bool) -> str:
+    """The git-log-style list. Rails render under the rows: one spine
+    per upstream down its lane, a curve branching into each consumer's
+    row. Rows carry data-spec/data-up so the page JS can spotlight a
+    hovered row's rails."""
+    g = _graph(project)
+    if g is None:
+        return ""
+    by_name, edges, layer = g
+    names = set(by_name)
+    order = _story_order(names, edges, layer)
+    lane = _lanes(order, edges)
+    row = {n: i for i, n in enumerate(order)}
+    children: dict[str, list[str]] = defaultdict(list)
+    ups: dict[str, list[str]] = defaultdict(list)
+    for u, d in edges:
+        children[u].append(d)
+        ups[d].append(u)
+
+    groups = {n: _dot_groups(by_name[n], reports) for n in order}
+    label_x = (max(lane.values()) + 1) * _LANE_W + _PAD + 14
+    total_w = int(
+        max(label_x + len(n) * 7.2 + 14 + _dots_width(groups[n]) + _PAD for n in order)
+    )
+    total_h = len(order) * _RAILS_ROW_H + 2 * _PAD
+
+    def lx(n: str) -> int:
+        return _PAD + lane[n] * _LANE_W + _LANE_W // 2
+
+    def cy(n: str) -> int:
+        return _PAD + row[n] * _RAILS_ROW_H + _RAILS_ROW_H // 2
+
+    parts = [
+        f'<svg class="dag" xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {total_w} {total_h}" '
+        f'width="{total_w}" height="{total_h}" role="img" '
+        'aria-label="spec dependency rails">',
+    ]
+    if standalone:
+        parts.append(_STANDALONE_STYLE + '<rect width="100%" height="100%" fill="#fdfdfc"/>')
+    for u in order:  # rails first, under the rows
+        kids = children[u]
+        if not kids:
+            continue
+        color = groups[u][0][2] if groups[u] else _SKIP_FILL  # severity-ordered: worst first
+        x = lx(u)
+        parts.append(
+            f'<path class="rail" data-src="{escape(u)}" stroke="{color}" '
+            f'd="M{x},{cy(u) + 5} V{max(cy(c) for c in kids) - 6}"/>'
+        )
+        for c in kids:
+            tx = lx(c) - 5
+            bend = min(x + _LANE_W, tx)
+            parts.append(
+                f'<path class="rail" data-src="{escape(u)}" stroke="{color}" '
+                f'd="M{x},{cy(c) - _RAILS_ROW_H // 2} C{x},{cy(c)} {x},{cy(c)} '
+                f'{bend},{cy(c)} H{tx}"/>'
+            )
+    mid = _RAILS_ROW_H // 2
+    for n in order:
+        spec = by_name[n]
+        worst_fill = groups[n][0][2] if groups[n] else _SKIP_FILL
+        node = (
+            f'<g class="dag-node{" skipped" if spec.skip else ""}" '
+            f'transform="translate(0,{cy(n) - mid})" data-spec="{escape(n)}" '
+            f'data-up="{escape(" ".join(sorted(ups[n])))}">'
+            f"<title>{_summary(spec, groups[n])}</title>"
+            f'<rect class="hit" width="{total_w}" height="{_RAILS_ROW_H}"/>'
+            f'<circle cx="{lx(n)}" cy="{mid}" r="4.5" fill="{worst_fill}" '
+            'stroke="#fdfdfc" stroke-width="1.5"/>'
+            f'<rect x="{label_x - 8}" y="{mid - 8}" width="3" height="16" rx="1.5" '
+            f'fill="{_KIND_FILL.get(spec.kind, "#6e6e6e")}"/>'
+            f'<text x="{label_x}" y="{mid + 4}">{escape(n)}</text>'
+            f'<g transform="translate({int(label_x + len(n) * 7.2 + 14)},{mid})">'
+            f"{_chips(groups[n], 0)}</g>"
+            "</g>"
+        )
+        if not standalone:
+            node = f'<a href="#spec-{escape(n)}">{node}</a>'
         parts.append(node)
     parts.append("</svg>")
     return "".join(parts)

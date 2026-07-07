@@ -115,9 +115,9 @@ specthis lint      # grammar check: EVERY problem across all files at once
 specthis export    # write specs/specs.html + _index.json
 specthis serve     # live dashboard at localhost:8765; re-renders on any
                    # spec / ledger / code / output change (writes nothing)
-specthis dag       # the spec-level DAG on stdout (or --out FILE): standalone
-                   # SVG — statuses as dots, portable anywhere — or, with
-                   # --format json, nodes + layout + edges to render your own way
+specthis dag       # the spec-level DAG on stdout (or --out FILE): a standalone
+                   # SVG figure (--view rails for the dashboard's git-log-style
+                   # list), or --format json — nodes + both layouts + edges
 ```
 
 Readers are lenient, writers are strict: `check`, `lint`, and the
@@ -412,8 +412,8 @@ humans work the queue with `specthis vouch` / `specthis run --stale`.
 Done: spec/bindings parsing, content hashing + composed signatures,
 both ledgers, status derivation + frontier, the five verbs, migration,
 scaffolding, agent templates, the dashboard (`export` + `serve` with
-live reload, a spec-level DAG overview with per-entry status dots —
-also exportable standalone via `specthis dag`, stdlib only), the
+live reload, a spec-level DAG — status rails on the dashboard, a
+layered figure and layout JSON via `specthis dag` — stdlib only), the
 remote cache (`file://` and `s3://`
 backends, digest-verified fetch keyed by the composed signature), the
 journal (`journal/` narratives rendered into the dashboard, plus
