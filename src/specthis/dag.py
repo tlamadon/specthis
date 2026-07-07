@@ -39,6 +39,7 @@ from graphlib import CycleError, TopologicalSorter
 from html import escape
 
 from .check import Report, Status
+from .icons import svg_icon
 from .parse import ENTRY_KINDS, Project, SpecFile
 
 #: entry-dot fill per status — the badge palette, saturated enough to
@@ -290,7 +291,8 @@ def _dots_width(groups: list[tuple[str, int, str, list[str]]]) -> int:
 
 
 def _node_width(name: str, groups: list[tuple[str, int, str, list[str]]]) -> int:
-    return int(max(76, 24 + len(name) * 7.2, 24 + _dots_width(groups)))
+    # 26 = icon gutter before the label; the box must hold label and dots
+    return int(max(80, 38 + len(name) * 7.2, 24 + _dots_width(groups)))
 
 
 def _chips(
@@ -496,9 +498,8 @@ def _render_layered(
             f'transform="translate({p.x},{p.y})" data-spec="{escape(spec.name)}">'
             f"<title>{_summary(spec, groups)}</title>"
             f'<rect class="box" width="{p.width}" height="{_NODE_H}" rx="6"/>'
-            f'<rect x="0" y="6" width="3" height="{_NODE_H - 12}" rx="1.5" '
-            f'fill="{_KIND_FILL.get(spec.kind, "#6e6e6e")}"/>'
-            f'<text x="12" y="19">{escape(spec.name)}</text>'
+            f"{svg_icon(spec.kind, 10, 8, 12, _KIND_FILL.get(spec.kind, '#6e6e6e'))}"
+            f'<text x="26" y="19">{escape(spec.name)}</text>'
             f'<g transform="translate(12,0)">{_chips(groups, 30)}</g>'
             "</g>"
         )
@@ -530,7 +531,7 @@ def _render_rails(project: Project, reports: dict[str, Report], standalone: bool
         ups[d].append(u)
 
     groups = {n: _dot_groups(by_name[n], reports) for n in order}
-    label_x = (max(lane.values()) + 1) * _LANE_W + _PAD + 14
+    label_x = (max(lane.values()) + 1) * _LANE_W + _PAD + 20
     total_w = int(
         max(label_x + len(n) * 7.2 + 14 + _dots_width(groups[n]) + _PAD for n in order)
     )
@@ -580,8 +581,7 @@ def _render_rails(project: Project, reports: dict[str, Report], standalone: bool
             f'<rect class="hit" width="{total_w}" height="{_RAILS_ROW_H}"/>'
             f'<circle cx="{lx(n)}" cy="{mid}" r="4.5" fill="{worst_fill}" '
             'stroke="#fdfdfc" stroke-width="1.5"/>'
-            f'<rect x="{label_x - 8}" y="{mid - 8}" width="3" height="16" rx="1.5" '
-            f'fill="{_KIND_FILL.get(spec.kind, "#6e6e6e")}"/>'
+            f"{svg_icon(spec.kind, label_x - 16, mid - 6, 12, _KIND_FILL.get(spec.kind, '#6e6e6e'))}"
             f'<text x="{label_x}" y="{mid + 4}">{escape(n)}</text>'
             f'<g transform="translate({int(label_x + len(n) * 7.2 + 14)},{mid})">'
             f"{_chips(groups[n], 0)}</g>"

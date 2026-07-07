@@ -37,6 +37,7 @@ import markdown as _markdown
 
 from .check import LOCAL_BREAKS, Report, Status, check_project
 from .dag import dag_svg
+from .icons import ICONS
 from .journal import JournalEntry, load_journal
 from .parse import _FRONTMATTER, Entry, Problem, Project, SpecFile, load_project_lenient
 
@@ -813,41 +814,12 @@ def _spec_groups(project: Project) -> list[tuple[str, bool, list[SpecFile]]]:
     return ordered
 
 
-#: Feather-style stroke icons (24px viewBox) for the sidebar pills;
-#: terminal = compute job, bars = report, book = library, open book =
-#: definitions, layout = templates, info = meta, bolt = intensive tier.
-_PILL_ICONS = {
-    "compute": '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
-    "report": (
-        '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>'
-        '<line x1="6" y1="20" x2="6" y2="14"/>'
-    ),
-    "library": (
-        '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>'
-        '<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'
-    ),
-    "definitions": (
-        '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>'
-        '<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>'
-    ),
-    "templates": (
-        '<rect x="3" y="3" width="18" height="18" rx="2"/>'
-        '<line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>'
-    ),
-    "meta": (
-        '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/>'
-        '<line x1="12" y1="8" x2="12.01" y2="8"/>'
-    ),
-    "intensive": '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
-}
-
-
 def _pill(kind_class: str, label: str) -> str:
     """One icon pill: a ringed 10px stroke icon, full word in the tooltip."""
     return (
         f'<span class="pill {kind_class}" title="{_e(label)}">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" '
-        f'stroke-linecap="round" stroke-linejoin="round">{_PILL_ICONS[label]}</svg></span>'
+        f'stroke-linecap="round" stroke-linejoin="round">{ICONS[label]}</svg></span>'
     )
 
 
@@ -855,7 +827,7 @@ def _nav_pills(spec: SpecFile, in_custom_group: bool) -> str:
     """Right-aligned icon pills for one sidebar row: the kind (only where
     the group header doesn't already say it) and the intensive tier."""
     pills = []
-    if in_custom_group and spec.kind in _PILL_ICONS:
+    if in_custom_group and spec.kind in ICONS:
         pills.append(_pill(f"kind-{_e(spec.kind)}", spec.kind))
     if spec.kind == "compute" and spec.tier == "intensive":
         pills.append(_pill("pill-tier", "intensive"))
