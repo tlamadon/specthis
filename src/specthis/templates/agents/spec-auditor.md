@@ -22,7 +22,11 @@ The mechanical layer is one command:
    itemized, with everything merely downstream summarized as
    upstream-unverified counts.
 3. For each frontier entry, run `specthis status <entry>` — it names
-   the exact digests, the vouch on record, and WHICH input moved.
+   the exact digests, the vouch on record, WHICH input moved, and for
+   audit-needed entries whose vouch carries decomposed digests, WHAT
+   moved since the vouch (a named script, the package blob, or the
+   spec file — inside or outside the entry's own block). Use that
+   attribution to focus the contract read; never re-derive it.
 
 That replaces every existence / freshness / hash check. What remains —
 the part that needs you — is judgment:

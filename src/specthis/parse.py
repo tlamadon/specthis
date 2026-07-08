@@ -103,6 +103,12 @@ class Entry:
     spec: "SpecFile"
     outputs: list[str]
     binding: Binding
+    #: sha256 of this entry's ``###`` block text. Diagnostic only: the
+    #: claim unit stays the whole file (an entry may lean on prose
+    #: anywhere in it), so expiry is still judged at ``spec_sha`` — the
+    #: block digest exists so an expired vouch can say WHERE the file
+    #: moved (inside or outside this entry's own block).
+    block_sha: str = ""
 
     @property
     def consumes(self) -> list[str]:
@@ -285,7 +291,13 @@ def parse_spec(path: Path) -> SpecFile:
                         f"{path.name}: compute entry `{entry_name}` must declare exactly one output"
                     )
             spec.entries.append(
-                Entry(name=entry_name, spec=spec, outputs=outputs, binding=None)  # type: ignore[arg-type]
+                Entry(
+                    name=entry_name,
+                    spec=spec,
+                    outputs=outputs,
+                    binding=None,  # type: ignore[arg-type]
+                    block_sha=sha256_text(block_match.group(0)),
+                )
             )
     return spec
 

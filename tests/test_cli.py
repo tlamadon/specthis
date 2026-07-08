@@ -5,9 +5,10 @@ from click.testing import CliRunner
 
 from specthis.check import Status, check_project
 from specthis.cli import main
+from specthis.ledger import read_runs
 from specthis.parse import load_project
 
-from .conftest import fake_run, make_ready, vouch_ok, write
+from .conftest import COMPUTE_ALPHA, FIT_ALPHA_PY, fake_run, make_ready, vouch_ok, write
 
 
 def run_cli(*args: str):
@@ -113,6 +114,90 @@ def test_run_failure_records_nothing(root: Path) -> None:
     result = run_cli("run", "fit-alpha", "--path", str(root))
     assert result.exit_code != 0
     assert not (root / "specs/runs.toml").exists()
+
+
+def test_check_attributes_expiry_to_package_blob(root: Path) -> None:
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    write(root, "src/pkg/helpers.py", "X = 2\n")
+    result = run_cli("check", "--path", str(root))
+    assert "moved since vouch: code: package blob moved" in result.output
+    assert "fit_alpha.py moved" not in result.output  # the script is innocent
+
+
+def test_check_attributes_expiry_to_the_script(root: Path) -> None:
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    result = run_cli("check", "--path", str(root))
+    assert "moved since vouch: code: scripts/fit_alpha.py moved" in result.output
+    assert "package blob" not in result.output  # the blob is innocent
+
+
+def test_status_attributes_spec_movement_relative_to_block(root: Path) -> None:
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    # prose outside the entry's ### block moves: file-level expiry, but
+    # the diagnosis says the entry's own contract text is untouched
+    outside = COMPUTE_ALPHA.replace(
+        "Fit the alpha model per models.md.",
+        "Fit the alpha model per models.md. Now with more prose.",
+    )
+    write(root, "specs/compute-alpha.md", outside)
+    result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "moved since last vouch:" in result.output
+    assert "compute-alpha.md moved outside this entry's block" in result.output
+
+    # re-vouch at the new digests, then edit inside the block
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    inside = outside.replace(
+        "The fit must converge and record its loss.",
+        "The fit must converge quickly and record its loss.",
+    )
+    write(root, "specs/compute-alpha.md", inside)
+    result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "this entry's block in compute-alpha.md moved" in result.output
+
+
+def test_legacy_vouch_without_manifest_still_attributes_coarsely(root: Path) -> None:
+    vouch_ok(root, "fit-alpha")  # writes a row without the decomposed fields
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    result = run_cli("check", "--path", str(root))
+    assert "moved since vouch: code moved" in result.output  # coarse, not wrong
+
+
+def test_run_records_duration_and_reports_time(root: Path) -> None:
+    result = run_cli("run", "fit-alpha", "--path", str(root))
+    assert result.exit_code == 0, result.output
+    assert "recorded run of `fit-alpha` in " in result.output
+    row = read_runs(root / "specs")["fit-alpha"]
+    assert row.duration_seconds is not None and row.duration_seconds >= 0
+    result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "(took " in result.output
+
+
+def test_run_reports_output_reproduced_vs_moved(root: Path) -> None:
+    make_ready(root)
+    # deterministic script: a re-run reproduces identical bytes,
+    # which cuts the downstream cascade — and says so
+    result = run_cli("run", "fit-alpha", "--path", str(root))
+    assert result.exit_code == 0, result.output
+    assert "output unchanged — downstream claims unaffected" in result.output
+
+    # change what the script writes: the output moves, consumers named
+    write(root, "scripts/fit_alpha.py", FIT_ALPHA_PY.replace('"loss": 1.0', '"loss": 2.0'))
+    result = run_cli("run", "fit-alpha", "--path", str(root))
+    assert result.exit_code == 0, result.output
+    assert "output moved" in result.output
+    assert "fit-beta" in result.output  # the now-stale consumer is named
+
+
+def test_run_stale_narrates_plan_and_progress(root: Path) -> None:
+    for entry in ("fit-alpha", "fit-beta", "fig-beta"):
+        vouch_ok(root, entry)  # all vouched, none run: everything STALE
+    result = run_cli("run", "--stale", "--path", str(root))
+    assert result.exit_code == 0, result.output
+    assert "3 stale entries to rebuild: fit-alpha -> fit-beta -> fig-beta" in result.output
+    assert "[1/3]" in result.output
+    assert "[3/3]" in result.output
+    assert "rebuilt 3 stale entries in " in result.output
 
 
 def test_run_stale_rebuilds_in_topo_order_and_skips_minds(root: Path) -> None:

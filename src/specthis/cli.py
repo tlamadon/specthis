@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from .check import (
     Report,
     Status,
     check_project,
+    code_manifest,
     code_sha,
     expected_inputs,
     frontier,
@@ -43,6 +45,16 @@ from .parse import Problem, Project, SpecError, load_project, load_project_lenie
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Human-readable wall time: ``4s``, ``3m 12s``, ``1h 04m``."""
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60:02d}s"
+    return f"{s // 3600}h {(s % 3600) // 60:02d}m"
 
 
 def _load(project_path: Path) -> Project:
@@ -93,6 +105,8 @@ def _hint(report: Report, project: Project) -> str:
         scripts = project.entries[report.entry].binding.scripts
         return "no code at " + ", ".join(scripts)
     if report.status is Status.AUDIT_NEEDED:
+        if report.expired:
+            return "moved since vouch: " + "; ".join(report.expired)
         return "spec or code moved since vouch" if report.vouch else "never vouched"
     if report.status is Status.REJECTED and report.vouch is not None:
         v = report.vouch
@@ -200,10 +214,19 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
         v = r.vouch
         note = f" — {v.note}" if v.note else ""
         click.echo(f"vouch:     {v.verdict} by {v.attester} at {v.vouched}{note}")
+        if r.expired:
+            click.echo("moved since last vouch:")
+            for what in r.expired:
+                click.echo(f"  - {what}")
     else:
         click.echo("vouch:     (none)")
     if r.run:
-        click.echo(f"run:       {r.run.ran} via {r.run.executor}")
+        took = (
+            f" (took {_fmt_duration(r.run.duration_seconds)})"
+            if r.run.duration_seconds is not None
+            else ""
+        )
+        click.echo(f"run:       {r.run.ran} via {r.run.executor}{took}")
     else:
         click.echo("run:       (none)")
     if not r.materialized:
@@ -220,10 +243,13 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
 # ------------------------------------------------------------------ run
 
 
-def _execute_entry(project: Project, name: str, push_after: bool = False) -> None:
+def _execute_entry(
+    project: Project, name: str, push_after: bool = False, position: str = ""
+) -> None:
     """Resolve+record upstream digests -> dispatch -> write runs.toml."""
     entry = project.entries[name]
     runs = read_runs(project.specs_dir)
+    prior = runs.get(name)
 
     missing_up = [
         u
@@ -251,11 +277,15 @@ def _execute_entry(project: Project, name: str, push_after: bool = False) -> Non
             "`executor` in specs/bindings.toml to dispatch to scripthut",
             err=True,
         )
-    click.echo(f"running `{name}` via {executor}: {entry.binding.run}")
+    prefix = f"{position} " if position else ""
+    click.echo(f"{prefix}running `{name}` via {executor}: {entry.binding.run}")
+    started = time.monotonic()
     result = subprocess.run(entry.binding.run, shell=True, cwd=project.root)
+    elapsed = time.monotonic() - started
     if result.returncode != 0:
         raise click.ClickException(
-            f"`{name}` failed (exit {result.returncode}); nothing recorded"
+            f"`{name}` failed (exit {result.returncode}) after "
+            f"{_fmt_duration(elapsed)}; nothing recorded"
         )
     out_sha = hashing.output_sha(project.root, entry.outputs)
     if out_sha is None:
@@ -273,9 +303,25 @@ def _execute_entry(project: Project, name: str, push_after: bool = False) -> Non
             ran=_now(),
             executor=executor,
             inputs=inputs,
+            duration_seconds=round(elapsed, 3),
         ),
     )
-    click.echo(f"recorded run of `{name}` -> {out_sha[:12]}…")
+    # Say what the run did to the DAG: a reproduced output cuts the
+    # cascade (downstream signatures unmoved); a moved one names the
+    # blast radius so the wait ahead is legible.
+    consumers = sorted(n for n, e in project.entries.items() if name in e.consumes)
+    if prior is None:
+        verdict = ""
+    elif prior.output_sha == out_sha:
+        verdict = " (output unchanged — downstream claims unaffected)"
+    elif consumers:
+        verdict = f" (output moved — {len(consumers)} consumer(s) now stale: {', '.join(consumers)})"
+    else:
+        verdict = " (output moved)"
+    click.echo(
+        f"{prefix}recorded run of `{name}` in {_fmt_duration(elapsed)} "
+        f"-> {out_sha[:12]}…{verdict}"
+    )
     if push_after:
         from .cache import CacheError, push
 
@@ -378,15 +424,30 @@ def run_cmd(
             return
         _execute_entry(project, entry, push_after=do_push)
         return
+    order = topo_order(project)
+    queue = [n for n in order if check_project(project)[n].status is Status.STALE]
+    if queue:
+        click.echo(
+            f"{len(queue)} stale entr{'y' if len(queue) == 1 else 'ies'} to rebuild: "
+            + " -> ".join(queue)
+        )
+    started = time.monotonic()
     ran, fetched, skipped = 0, 0, []
-    for name in topo_order(project):
+    for i, name in enumerate(order):
         # Re-derive after every run: an upstream rebuild makes new entries stale.
-        report = check_project(project)[name]
+        reports = check_project(project)
+        report = reports[name]
         if report.status is Status.STALE:
             if do_fetch and _try_fetch(project, name):
                 fetched += 1
                 continue
-            _execute_entry(project, name, push_after=do_push)
+            # The queue can grow mid-run (an upstream whose output moved
+            # makes new entries stale), so the total is re-counted live.
+            done = ran + fetched
+            left = sum(1 for m in order[i + 1 :] if reports[m].status is Status.STALE)
+            _execute_entry(
+                project, name, push_after=do_push, position=f"[{done + 1}/{done + 1 + left}]"
+            )
             ran += 1
         elif do_fetch and not report.materialized and _try_fetch(project, name):
             # Claim stands, bytes elsewhere: --fetch is the explicit demand
@@ -398,6 +459,8 @@ def run_cmd(
     summary = f"rebuilt {ran} stale entr{'y' if ran == 1 else 'ies'}"
     if fetched:
         summary += f", fetched {fetched} from cache"
+    if ran or fetched:
+        summary += f" in {_fmt_duration(time.monotonic() - started)}"
     click.echo(summary)
     for name, why in skipped:
         click.echo(f"  skipped {name}: {why} (needs a mind, not a machine)", err=True)
@@ -481,6 +544,10 @@ def vouch_cmd(entry: str, attester: str, reject: bool, note: str, project_path: 
         attester=attester,
         vouched=_now(),
         note=note,
+        # Decomposed digests: when this vouch later expires, check/status
+        # can say WHAT moved instead of only that something did.
+        spec_block_sha=e.block_sha,
+        code_manifest=code_manifest(project, e),
     )
     try:
         record_vouch(project.specs_dir, entry, vouch)

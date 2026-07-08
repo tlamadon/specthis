@@ -34,14 +34,19 @@ the parent session's summary of the code substitute for reading it.
    `rejected` entries — the ledger blocks re-vouching an unchanged
    pair by design, and un-rejecting is the human's call. Skip
    `unimplemented` (nothing to judge) and `stale` (machine work).
-2. For each entry, run `specthis status <entry>` to get its scripts,
-   outputs, and digests. Then read, in full:
+2. For each entry, note the time (`date +%s`), then run
+   `specthis status <entry>` to get its scripts, outputs, and
+   digests. Then read, in full:
    - the entry's spec section AND the spec's `## Script` / export
      prose (the contract),
    - every spec in the file's `references:` list (the vocabulary the
      contract is written in),
    - every bound script (paths from `specthis status` /
      `specs/bindings.toml`).
+   Keep a tally of what the judgment cost: every file you read and
+   its line count (`wc -l`), and the elapsed seconds (`date +%s`
+   again when the verdict is settled). The human is deciding where
+   audit time goes; your tally is that evidence.
 3. Judge **contract in spirit**, by reading — never by running:
    - Does the code do what the prose demands (model, estimator,
      algorithm, constants the spec pins)?
@@ -73,12 +78,15 @@ the parent session's summary of the code substitute for reading it.
 One table:
 
 ```
-| entry | verdict | basis |
+| entry | verdict | basis | cost |
 ```
 
 - PASS/FAIL rows: the note you recorded.
 - DOUBT rows: what stopped you and what would resolve it (a spec
   clarification, a smaller file, a missing reference).
+- `cost`: what the judgment took — files read / total lines /
+  elapsed, e.g. `4 files / 812 lines / ~3m`. This is how the human
+  sees where audit time goes; never omit it.
 
 Then one line of counts: vouched / rejected / doubts, and remind the
 human that doubts await their own judgment.
@@ -90,8 +98,9 @@ human that doubts await their own judgment.
   `spec-critic (for <name>)`.
 - Never edit any file. Never hand-edit `vouches.toml` / `runs.toml`.
 - Never run project scripts, fits, or exporters — judgment is
-  reading. (`specthis check` / `status` / `vouch` are the only
-  commands you run.)
+  reading. (`specthis check` / `status` / `vouch`, plus the two
+  measuring commands `wc -l` and `date +%s`, are the only commands
+  you run.)
 - Never vouch an entry you could not read completely — that is a
   DOUBT.
 - If the ledger refuses a vouch (standing rejection), report it;

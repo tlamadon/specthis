@@ -42,10 +42,14 @@ ever holds the pen.
 Each spec entry promises one deliverable. Two ledgers record claims
 about it: `specs/vouches.toml` (a named non-author judged that the
 code satisfies the contract, at exact digests — written only by
-`specthis vouch`) and `specs/runs.toml` (the artefact came from this
+`specthis vouch`; the row also records the digests decomposed, so
+when a vouch expires, `check`/`status` attribute the movement — a
+named script, the package blob, or the spec file inside/outside the
+entry's own block — instead of only detecting it) and `specs/runs.toml` (the artefact came from this
 code on these exact inputs, as a composed signature over scripts +
 package + upstream artefact digests + workflow config — written only
-by `specthis run`). `specs/bindings.toml` maps entries to their
+by `specthis run`; the row also records wall-clock `duration_seconds`,
+which is claim metadata: it enters no signature and moves no digest). `specs/bindings.toml` maps entries to their
 scripts and run commands; its `[preview]` table is dashboard-only
 vocabulary (how to render an output type at view time) — a preview
 recipe enters no signature and expires no vouch, and the artifacts it

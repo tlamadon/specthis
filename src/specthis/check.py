@@ -44,6 +44,11 @@ class Report:
     vouch: Vouch | None
     run: Run | None
     moved: list[str] = field(default_factory=list)  # inputs that drifted since the run
+    #: What moved since the vouch (AUDIT_NEEDED with a prior vouch
+    #: only). Attribution needs the decomposed digests on the vouch
+    #: row; rows from before those fields fall back to a bare
+    #: "spec moved" / "code moved".
+    expired: list[str] = field(default_factory=list)
     #: False when the claim stands but the declared output bytes are not
     #: on this disk (they live in the cache / on the machine that ran) —
     #: ready-but-fetchable, never a local break.
@@ -60,21 +65,30 @@ def is_library(entry: Entry) -> bool:
     return entry.spec.kind == "library"
 
 
+def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
+    """The per-file form of ``code_sha``: script -> digest, plus the
+    package blob under the ``"package"`` key.
+
+    Recorded on vouches so that when the composed digest moves, the
+    movement can be attributed (which script? the blob?) instead of
+    only detected.
+    """
+    manifest = {
+        s: hashing.file_sha(project.root / s) or hashing.MISSING
+        for s in entry.binding.scripts
+    }
+    if project.package_globs:
+        manifest["package"] = hashing.package_sha(
+            project.root, project.package_globs, project.library_scripts
+        )
+    return manifest
+
+
 def code_sha(project: Project, entry: Entry) -> str | None:
     """Manifest over the entry's scripts plus the package blob digest."""
     if not code_present(project, entry):
         return None
-    pairs = [(s, hashing.file_sha(project.root / s)) for s in entry.binding.scripts]
-    if project.package_globs:
-        pairs.append(
-            (
-                "package",
-                hashing.package_sha(
-                    project.root, project.package_globs, project.library_scripts
-                ),
-            )
-        )
-    return hashing.manifest_sha(pairs)  # type: ignore[arg-type]
+    return hashing.manifest_sha(code_manifest(project, entry).items())
 
 
 def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dict[str, str]:
@@ -102,6 +116,35 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
             r = runs.get(up)
             inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
     return inputs
+
+
+def expired_since_vouch(
+    project: Project, entry: Entry, v: Vouch, spec_sha_now: str, code_sha_now: str | None
+) -> list[str]:
+    """Attribute a vouch expiry: what moved between the vouched digests
+    and now. Falls back to bare "spec moved" / "code moved" for rows
+    written before the decomposed fields existed."""
+    out: list[str] = []
+    if v.spec_sha != spec_sha_now:
+        fname = entry.spec.path.name
+        if not v.spec_block_sha:
+            out.append(f"spec: {fname} moved")
+        elif v.spec_block_sha == entry.block_sha:
+            out.append(f"spec: {fname} moved outside this entry's block")
+        else:
+            out.append(f"spec: this entry's block in {fname} moved")
+    if v.code_sha != code_sha_now:
+        if v.code_manifest:
+            current = code_manifest(project, entry)
+            moved = [
+                "code: package blob moved" if k == "package" else f"code: {k} moved"
+                for k in sorted(set(current) | set(v.code_manifest))
+                if current.get(k) != v.code_manifest.get(k)
+            ]
+            out.extend(moved or ["code moved"])
+        else:
+            out.append("code moved")
+    return out
 
 
 def topo_order(project: Project) -> list[str]:
@@ -134,6 +177,8 @@ def check_project(
 
         if v is None or (v.spec_sha, v.code_sha) != (s, c):
             report.status = Status.AUDIT_NEEDED if c is not None else Status.UNIMPLEMENTED
+            if v is not None and report.status is Status.AUDIT_NEEDED:
+                report.expired = expired_since_vouch(project, entry, v, s, c)
             continue
         if v.verdict == "rejected":
             report.status = Status.REJECTED

@@ -101,6 +101,9 @@ specthis check                 # the frontier; exit non-zero on any local break
 specthis status [entry]        # table / detail, incl. WHICH input moved
 specthis run <entry>           # resolve+record upstream digests -> dispatch -> runs.toml
 specthis run --stale           # rebuild every machine-repairable entry in dependency order
+                               #   narrates: plan line, [k/N] per entry, wall time, and whether
+                               #   each output moved (consumers now stale) or was reproduced
+                               #   (cascade cut — downstream claims unaffected)
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
 ```
 
@@ -279,10 +282,15 @@ and it's that baseline that makes later drift legible and delegable.
 ## State: three human-readable files, all in git
 
 - **`specs/vouches.toml`** — attested claims:
-  `(spec_sha, code_sha, verdict, attester, when, note)` per entry.
+  `(spec_sha, code_sha, verdict, attester, when, note)` per entry,
+  plus the digests decomposed (`spec_block_sha`, per-file
+  `code_manifest`) so an expired vouch is *attributed* — `check` and
+  `status` say which script, the package blob, or where in the spec
+  file moved — not merely detected.
 - **`specs/runs.toml`** — derived claims: the composed signature, the
-  output digest, the executor, and the full `[inputs]` table
-  (each script, workflow file, the package blob, and one
+  output digest, the executor, the wall-clock `duration_seconds`
+  (claim metadata — enters no signature), and the full `[inputs]`
+  table (each script, workflow file, the package blob, and one
   `upstream:<entry>` digest per consumed artifact — so an upstream
   re-run is never invisible).
 - **`specs/bindings.toml`** — hand-edited vocabulary, not a claim:

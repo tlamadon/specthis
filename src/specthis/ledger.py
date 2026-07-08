@@ -8,7 +8,9 @@ working tree — a ledger row is a claim, not an observation.
 
 from __future__ import annotations
 
+import os
 import sys
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -35,6 +37,13 @@ class Vouch:
     attester: str
     vouched: str  # ISO8601 UTC
     note: str = ""
+    #: Decomposable forms of the two digests, recorded so an expired
+    #: vouch can be attributed (which script, the package blob, or
+    #: where in the spec file the movement happened). Diagnostic only:
+    #: expiry itself is still judged on the composed pair above.
+    #: Empty on rows written before these fields existed.
+    spec_block_sha: str = ""
+    code_manifest: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -45,6 +54,33 @@ class Run:
     ran: str  # ISO8601 UTC
     executor: str
     inputs: dict[str, str] = field(default_factory=dict)
+    #: Wall-clock seconds the run command took. Claim metadata only:
+    #: it enters no signature and moves no digest. ``None`` (omitted
+    #: from the TOML row) for rows that predate the field or were
+    #: adopted from a remote manifest that did not record one.
+    duration_seconds: float | None = None
+
+
+@contextmanager
+def _locked(path: Path):
+    """Serialize a ledger's read-modify-write cycle across processes.
+
+    Parallel critic sessions vouch different entries concurrently; an
+    unserialized cycle would let one rewrite lose the other's row. The
+    ledger file itself is the lock (created empty if absent — same
+    meaning as missing). Non-POSIX platforms degrade to no locking.
+    """
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except ImportError:  # pragma: no cover — Windows
+            pass
+        yield
+    finally:
+        os.close(fd)  # closing drops the flock
 
 
 def _read_toml(path: Path) -> dict:
@@ -81,24 +117,37 @@ def record_vouch(specs_dir: Path, entry: str, vouch: Vouch) -> None:
         raise LedgerError(f"verdict must be 'ok' or 'rejected', got {vouch.verdict!r}")
     if not vouch.attester:
         raise LedgerError("a vouch requires a named attester")
-    vouches = read_vouches(specs_dir)
-    prior = vouches.get(entry)
-    if (
-        vouch.verdict == "ok"
-        and prior is not None
-        and prior.verdict == "rejected"
-        and (prior.spec_sha, prior.code_sha) == (vouch.spec_sha, vouch.code_sha)
-    ):
-        raise LedgerError(
-            f"`{entry}` carries a standing rejection by {prior.attester} at this exact "
-            "(spec, code) pair — change the spec or the code before vouching ok"
-        )
-    vouches[entry] = vouch
-    _write_toml(specs_dir / VOUCHES_FILE, {n: asdict(v) for n, v in sorted(vouches.items())})
+    with _locked(specs_dir / VOUCHES_FILE):
+        vouches = read_vouches(specs_dir)
+        prior = vouches.get(entry)
+        if (
+            vouch.verdict == "ok"
+            and prior is not None
+            and prior.verdict == "rejected"
+            and (prior.spec_sha, prior.code_sha) == (vouch.spec_sha, vouch.code_sha)
+        ):
+            raise LedgerError(
+                f"`{entry}` carries a standing rejection by {prior.attester} at this exact "
+                "(spec, code) pair — change the spec or the code before vouching ok"
+            )
+        vouches[entry] = vouch
+        # TOML has no null: optional fields (note, spec_block_sha,
+        # code_manifest) are omitted when empty.
+        rows = {
+            n: {k: val for k, val in asdict(v).items() if val not in (None, "", {})}
+            for n, v in sorted(vouches.items())
+        }
+        _write_toml(specs_dir / VOUCHES_FILE, rows)
 
 
 def record_run(specs_dir: Path, entry: str, run: Run) -> None:
     """Write one derived claim (replacing any prior row for the entry)."""
-    runs = read_runs(specs_dir)
-    runs[entry] = run
-    _write_toml(specs_dir / RUNS_FILE, {n: asdict(r) for n, r in sorted(runs.items())})
+    with _locked(specs_dir / RUNS_FILE):
+        runs = read_runs(specs_dir)
+        runs[entry] = run
+        # TOML has no null: optional fields (duration_seconds) are omitted.
+        rows = {
+            n: {k: v for k, v in asdict(r).items() if v is not None}
+            for n, r in sorted(runs.items())
+        }
+        _write_toml(specs_dir / RUNS_FILE, rows)

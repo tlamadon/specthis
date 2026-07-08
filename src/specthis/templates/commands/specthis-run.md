@@ -34,10 +34,22 @@ runs.toml is the only ledger touched.
      file) and monitor for milestones/errors instead of tailing —
      or hand off to the `experiment-runner` subagent.
    Quick-tier queues can just run in the foreground.
-4. When the run finishes, run `specthis check` again and report:
-   what was rebuilt, what was fetched from cache, what was skipped as
-   needing a mind (that list is the `/specthis-vouch` queue), and the
-   new frontier.
+4. **Relay progress, not silence.** `specthis run --stale` narrates
+   itself: an upfront plan line (`3 stale entries to rebuild: a -> b
+   -> c`), a `[k/N]` counter per entry, and after each run its wall
+   time plus what it did to the DAG — `output unchanged — downstream
+   claims unaffected` (the cascade is cut there) or `output moved — N
+   consumer(s) now stale: …` (the queue just grew). For a long or
+   background run, surface these lines to the user as they appear —
+   the plan line first, then each `[k/N] recorded run …` milestone —
+   instead of going quiet until the end. Durations are also recorded
+   in the run row (`duration_seconds`) and shown by
+   `specthis status <entry>`, so use past timings to set expectations
+   for a queue before launching it.
+5. When the run finishes, run `specthis check` again and report:
+   what was rebuilt, what was fetched from cache, how long it took,
+   what was skipped as needing a mind (that list is the
+   `/specthis-vouch` queue), and the new frontier.
 
 Never run `specthis vouch` here. If a run fails, report the failure
 and the entry's log tail — nothing is recorded for failed runs, so
