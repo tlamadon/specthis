@@ -41,20 +41,11 @@ from .ledger import (
     record_vouch,
 )
 from .parse import Problem, Project, SpecError, load_project, load_project_lenient
+from .timefmt import fmt_duration as _fmt_duration
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _fmt_duration(seconds: float) -> str:
-    """Human-readable wall time: ``4s``, ``3m 12s``, ``1h 04m``."""
-    s = int(round(seconds))
-    if s < 60:
-        return f"{s}s"
-    if s < 3600:
-        return f"{s // 60}m {s % 60:02d}s"
-    return f"{s // 3600}h {(s % 3600) // 60:02d}m"
 
 
 def _load(project_path: Path) -> Project:
@@ -213,7 +204,12 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
     if r.vouch:
         v = r.vouch
         note = f" — {v.note}" if v.note else ""
-        click.echo(f"vouch:     {v.verdict} by {v.attester} at {v.vouched}{note}")
+        took = (
+            f" (took {_fmt_duration(v.duration_seconds)})"
+            if v.duration_seconds is not None
+            else ""
+        )
+        click.echo(f"vouch:     {v.verdict} by {v.attester} at {v.vouched}{took}{note}")
         if r.expired:
             click.echo("moved since last vouch:")
             for what in r.expired:
@@ -522,8 +518,22 @@ def manifest_cmd(entry: str, executor: str, project_path: Path) -> None:
     help="Record that the code does NOT satisfy the contract at these digests.",
 )
 @click.option("--note", default="", help="Free-text note recorded with the verdict.")
+@click.option(
+    "--took",
+    "took_seconds",
+    type=float,
+    default=None,
+    help="Wall-clock seconds the judgment took — claim metadata, moves no digest.",
+)
 @_path_option
-def vouch_cmd(entry: str, attester: str, reject: bool, note: str, project_path: Path) -> None:
+def vouch_cmd(
+    entry: str,
+    attester: str,
+    reject: bool,
+    note: str,
+    took_seconds: float | None,
+    project_path: Path,
+) -> None:
     """Attest that the entry's code satisfies its contract at the current
     digests. Only someone who did NOT author the change may vouch.
 
@@ -548,6 +558,7 @@ def vouch_cmd(entry: str, attester: str, reject: bool, note: str, project_path: 
         # can say WHAT moved instead of only that something did.
         spec_block_sha=e.block_sha,
         code_manifest=code_manifest(project, e),
+        duration_seconds=took_seconds,
     )
     try:
         record_vouch(project.specs_dir, entry, vouch)

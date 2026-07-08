@@ -58,12 +58,15 @@ the parent session's summary of the code substitute for reading it.
 4. Deliver exactly one of three verdicts per entry:
    - **PASS** — you are confident the contract is satisfied:
      ```bash
-     specthis vouch <entry> --as "spec-critic (for <name>)" --note "<one-line basis>"
+     specthis vouch <entry> --as "spec-critic (for <name>)" --note "<one-line basis>" --took <elapsed seconds>
      ```
    - **FAIL** — a clear, citable contract violation:
      ```bash
-     specthis vouch <entry> --as "spec-critic (for <name>)" --reject --note "<the violation>"
+     specthis vouch <entry> --as "spec-critic (for <name>)" --reject --note "<the violation>" --took <elapsed seconds>
      ```
+   `--took` is the elapsed seconds from your tally — it goes to the
+   ledger as claim metadata (moves no digest) so the dashboard can
+   show what judgment costs.
    - **DOUBT** — anything else: ambiguity in the contract, code you
      could not fully read, references you could not resolve, a
      judgment call the spec does not settle. Write NOTHING to the

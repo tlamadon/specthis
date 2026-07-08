@@ -273,6 +273,7 @@ tr.detail > td { padding: 2px 0 10px; }
 .dag .dag-node:hover .box { stroke: var(--accent); }
 .dag .dag-node text { font-size: 12px; font-weight: 600; fill: var(--fg); }
 .dag .dag-node text.cnt { font-size: 10px; fill: #5a5a5a; }
+.dag .dag-node text.meta { font-size: 10px; font-weight: 400; fill: var(--muted); }
 .dag .dag-node.skipped { opacity: 0.55; }
 .dag .dag-node.skipped .box { stroke-dasharray: 4 3; }
 .dag .edge { fill: none; stroke: #b9b3a7; stroke-width: 1.3; }

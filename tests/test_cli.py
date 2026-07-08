@@ -5,7 +5,7 @@ from click.testing import CliRunner
 
 from specthis.check import Status, check_project
 from specthis.cli import main
-from specthis.ledger import read_runs
+from specthis.ledger import read_runs, read_vouches
 from specthis.parse import load_project
 
 from .conftest import COMPUTE_ALPHA, FIT_ALPHA_PY, fake_run, make_ready, vouch_ok, write
@@ -114,6 +114,16 @@ def test_run_failure_records_nothing(root: Path) -> None:
     result = run_cli("run", "fit-alpha", "--path", str(root))
     assert result.exit_code != 0
     assert not (root / "specs/runs.toml").exists()
+
+
+def test_vouch_took_records_duration(root: Path) -> None:
+    result = run_cli(
+        "vouch", "fit-alpha", "--as", "reviewer", "--took", "212.4", "--path", str(root)
+    )
+    assert result.exit_code == 0, result.output
+    assert read_vouches(root / "specs")["fit-alpha"].duration_seconds == 212.4
+    result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "(took 3m 32s)" in result.output
 
 
 def test_check_attributes_expiry_to_package_blob(root: Path) -> None:

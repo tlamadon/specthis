@@ -55,6 +55,27 @@ def test_dag_page_is_rails_in_story_order(root: Path) -> None:
     assert "rails-hover" in page  # the spotlight JS/CSS ships with the page
 
 
+def test_rails_rows_show_ledger_timing(root: Path) -> None:
+    make_ready(root)  # fixture rows: ran/vouched 2026-01-01, no durations
+    page, _ = render(load_project(root))
+    svg = _svg(page)
+    assert 'class="meta"' in svg
+    assert "ago" in svg
+    # the tooltip itemizes timing per entry
+    assert "fit-alpha: ran" in svg
+
+
+def test_dag_json_carries_ledger_timing(root: Path) -> None:
+    make_ready(root)
+    project = load_project(root)
+    data = dag_json(project, check_project(project))
+    assert data is not None
+    entries = {e["name"]: e for n in data["nodes"] for e in n["entries"]}
+    assert entries["fit-alpha"]["ran"].startswith("2026-01-01")
+    assert entries["fit-alpha"]["vouched"].startswith("2026-01-01")
+    assert entries["fit-alpha"]["run_seconds"] is None  # fixture recorded none
+
+
 def test_dag_standalone_layered_top_down(root: Path) -> None:
     make_ready(root)
     project = load_project(root)
@@ -236,7 +257,16 @@ def test_dag_json_matches_the_svg_picture(root: Path) -> None:
         ("compute-beta", "report-beta"),
     }
     assert by["compute-alpha"]["layer"] < by["compute-beta"]["layer"]
-    assert by["compute-beta"]["entries"] == [{"name": "fit-beta", "status": "ready"}]
+    assert by["compute-beta"]["entries"] == [
+        {
+            "name": "fit-beta",
+            "status": "ready",
+            "ran": "2026-01-01T00:00:00+00:00",
+            "run_seconds": None,
+            "vouched": "2026-01-01T00:00:00+00:00",
+            "vouch_seconds": None,
+        }
+    ]
     assert by["report-beta"]["kind"] == "report"
     assert data["orient"] == "tb"
     # the rails placement rides along: story order respects every edge

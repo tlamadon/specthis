@@ -41,6 +41,7 @@ from html import escape
 from .check import Report, Status
 from .icons import svg_icon
 from .parse import ENTRY_KINDS, Project, SpecFile
+from .timefmt import fmt_ago, fmt_duration
 
 #: entry-dot fill per status — the badge palette, saturated enough to
 #: read at dot size. Entries without a report (dormant) use skip grey.
@@ -71,6 +72,7 @@ _STANDALONE_STYLE = (
     "<style>"
     'text { font: 600 12px -apple-system, "Segoe UI", Roboto, sans-serif; fill: #1a1a1a; }'
     " .cnt { font-size: 10px; fill: #5a5a5a; }"
+    " .meta { font-size: 10px; font-weight: 400; fill: #8a857b; }"
     " .box { fill: #fff; stroke: #d8d4cc; stroke-width: 1.2; }"
     " .skipped { opacity: 0.55; }"
     " .skipped .box { stroke-dasharray: 4 3; }"
@@ -315,9 +317,59 @@ def _chips(
     return "".join(parts)
 
 
-def _summary(spec: SpecFile, groups: list[tuple[str, int, str, list[str]]]) -> str:
+def _entry_timing(r: Report) -> str:
+    """One entry's ledger timing: ``ran 2h ago (3m 12s) · vouched 3d ago``.
+    Durations appear when the row recorded one; "" without any claim."""
+    parts = []
+    if r.run is not None:
+        took = f" ({fmt_duration(r.run.duration_seconds)})" if r.run.duration_seconds else ""
+        parts.append(f"ran {fmt_ago(r.run.ran)}{took}")
+    if r.vouch is not None:
+        took = (
+            f" ({fmt_duration(r.vouch.duration_seconds)})" if r.vouch.duration_seconds else ""
+        )
+        parts.append(f"vouched {fmt_ago(r.vouch.vouched)}{took}")
+    return " · ".join(p for p in parts if p)
+
+
+def _spec_timing(spec: SpecFile, reports: dict[str, Report]) -> str:
+    """The spec-level timing line for the rails row: the most recent run
+    and most recent vouch across the spec's entries, each with its own
+    duration. Per-entry detail lives in the tooltip."""
+    rs = [reports[e.name] for e in spec.entries if e.name in reports]
+    latest_run = max((r.run for r in rs if r.run), key=lambda x: x.ran, default=None)
+    latest_vouch = max((r.vouch for r in rs if r.vouch), key=lambda x: x.vouched, default=None)
+    parts = []
+    if latest_run is not None:
+        took = (
+            f" ({fmt_duration(latest_run.duration_seconds)})"
+            if latest_run.duration_seconds
+            else ""
+        )
+        parts.append(f"ran {fmt_ago(latest_run.ran)}{took}")
+    if latest_vouch is not None:
+        took = (
+            f" ({fmt_duration(latest_vouch.duration_seconds)})"
+            if latest_vouch.duration_seconds
+            else ""
+        )
+        parts.append(f"vouched {fmt_ago(latest_vouch.vouched)}{took}")
+    return " · ".join(p for p in parts if p)
+
+
+def _summary(
+    spec: SpecFile,
+    groups: list[tuple[str, int, str, list[str]]],
+    reports: dict[str, Report],
+) -> str:
     counts = ", ".join(f"{count} {label}" for label, count, _, _ in groups)
-    return escape(f"{spec.path.name} — {counts or spec.kind}")
+    lines = [f"{spec.path.name} — {counts or spec.kind}"]
+    for entry in spec.entries:
+        r = reports.get(entry.name)
+        timing = _entry_timing(r) if r else ""
+        if timing:
+            lines.append(f"{entry.name}: {timing}")
+    return escape("\n".join(lines))
 
 
 @dataclass
@@ -400,6 +452,23 @@ def dag_standalone_svg(
     return f'<?xml version="1.0" encoding="UTF-8"?>\n{svg}\n' if svg else ""
 
 
+def _entry_json(name: str, reports: dict[str, Report]) -> dict:
+    """One entry for ``dag_json``: status plus raw ledger timing (ISO
+    timestamps and seconds; null when the claim or duration is absent)
+    — re-renderers compute their own ages."""
+    r = reports.get(name)
+    run = r.run if r else None
+    vouch = r.vouch if r else None
+    return {
+        "name": name,
+        "status": r.status.value if r else "skipped",
+        "ran": run.ran if run else None,
+        "run_seconds": run.duration_seconds if run else None,
+        "vouched": vouch.vouched if vouch else None,
+        "vouch_seconds": vouch.duration_seconds if vouch else None,
+    }
+
+
 def dag_json(
     project: Project, reports: dict[str, Report], orient: str = "tb"
 ) -> dict | None:
@@ -437,15 +506,7 @@ def dag_json(
                 "height": _NODE_H,
                 "order": story_row[p.spec.name],
                 "lane": lanes[p.spec.name],
-                "entries": [
-                    {
-                        "name": e.name,
-                        "status": (
-                            reports[e.name].status.value if e.name in reports else "skipped"
-                        ),
-                    }
-                    for e in p.spec.entries
-                ],
+                "entries": [_entry_json(e.name, reports) for e in p.spec.entries],
             }
             for p in placed
         ],
@@ -496,7 +557,7 @@ def _render_layered(
         node = (
             f'<g class="dag-node{" skipped" if spec.skip else ""}" '
             f'transform="translate({p.x},{p.y})" data-spec="{escape(spec.name)}">'
-            f"<title>{_summary(spec, groups)}</title>"
+            f"<title>{_summary(spec, groups, reports)}</title>"
             f'<rect class="box" width="{p.width}" height="{_NODE_H}" rx="6"/>'
             f"{svg_icon(spec.kind, 10, 8, 12, _KIND_FILL.get(spec.kind, '#6e6e6e'))}"
             f'<text x="26" y="19">{escape(spec.name)}</text>'
@@ -531,9 +592,18 @@ def _render_rails(project: Project, reports: dict[str, Report], standalone: bool
         ups[d].append(u)
 
     groups = {n: _dot_groups(by_name[n], reports) for n in order}
+    timing = {n: _spec_timing(by_name[n], reports) for n in order}
     label_x = (max(lane.values()) + 1) * _LANE_W + _PAD + 20
     total_w = int(
-        max(label_x + len(n) * 7.2 + 14 + _dots_width(groups[n]) + _PAD for n in order)
+        max(
+            label_x
+            + len(n) * 7.2
+            + 14
+            + _dots_width(groups[n])
+            + (len(timing[n]) * 6.0 + 16 if timing[n] else 0)
+            + _PAD
+            for n in order
+        )
     )
     total_h = len(order) * _RAILS_ROW_H + 2 * _PAD
 
@@ -573,18 +643,26 @@ def _render_rails(project: Project, reports: dict[str, Report], standalone: bool
     for n in order:
         spec = by_name[n]
         worst_fill = groups[n][0][2] if groups[n] else _SKIP_FILL
+        chips_x = int(label_x + len(n) * 7.2 + 14)
+        meta = (
+            f'<text class="meta" x="{chips_x + _dots_width(groups[n]) + 16}" '
+            f'y="{mid + 4}">{escape(timing[n])}</text>'
+            if timing[n]
+            else ""
+        )
         node = (
             f'<g class="dag-node{" skipped" if spec.skip else ""}" '
             f'transform="translate(0,{cy(n) - mid})" data-spec="{escape(n)}" '
             f'data-up="{escape(" ".join(sorted(ups[n])))}">'
-            f"<title>{_summary(spec, groups[n])}</title>"
+            f"<title>{_summary(spec, groups[n], reports)}</title>"
             f'<rect class="hit" width="{total_w}" height="{_RAILS_ROW_H}"/>'
             f'<circle cx="{lx(n)}" cy="{mid}" r="4.5" fill="{worst_fill}" '
             'stroke="#fdfdfc" stroke-width="1.5"/>'
             f"{svg_icon(spec.kind, label_x - 16, mid - 6, 12, _KIND_FILL.get(spec.kind, '#6e6e6e'))}"
             f'<text x="{label_x}" y="{mid + 4}">{escape(n)}</text>'
-            f'<g transform="translate({int(label_x + len(n) * 7.2 + 14)},{mid})">'
+            f'<g transform="translate({chips_x},{mid})">'
             f"{_chips(groups[n], 0)}</g>"
+            f"{meta}"
             "</g>"
         )
         if not standalone:

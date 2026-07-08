@@ -45,7 +45,9 @@ code satisfies the contract, at exact digests — written only by
 `specthis vouch`; the row also records the digests decomposed, so
 when a vouch expires, `check`/`status` attribute the movement — a
 named script, the package blob, or the spec file inside/outside the
-entry's own block — instead of only detecting it) and `specs/runs.toml` (the artefact came from this
+entry's own block — instead of only detecting it, plus wall-clock
+`duration_seconds` when vouched with `--took`; like a run's duration
+it is claim metadata that enters no digest) and `specs/runs.toml` (the artefact came from this
 code on these exact inputs, as a composed signature over scripts +
 package + upstream artefact digests + workflow config — written only
 by `specthis run`; the row also records wall-clock `duration_seconds`,

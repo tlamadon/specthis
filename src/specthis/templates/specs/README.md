@@ -94,7 +94,7 @@ or just patience while upstream heals.
 
 | File | Holds | Written by |
 |---|---|---|
-| `specs/vouches.toml` | attested claims: `(spec_sha, code_sha, verdict, attester, when, note)` per entry, plus the decomposed digests (`spec_block_sha`, `code_manifest`) so an expired vouch can say *what* moved | `specthis vouch` — only |
+| `specs/vouches.toml` | attested claims: `(spec_sha, code_sha, verdict, attester, when, note)` per entry, plus the decomposed digests (`spec_block_sha`, `code_manifest`) so an expired vouch can say *what* moved, and wall-clock `duration_seconds` when vouched with `--took` | `specthis vouch` — only |
 | `specs/runs.toml` | derived claims: composed input signature, output digest, executor, wall-clock `duration_seconds`, and the full `[inputs]` table per entry | `specthis run` — only |
 | `specs/bindings.toml` | entry → scripts, run command, scripthut workflow files, executor; plus `[package]` globs for the shared library and `[preview]` recipes for the dashboard | you, by hand |
 

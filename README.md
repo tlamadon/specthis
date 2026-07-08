@@ -286,7 +286,9 @@ and it's that baseline that makes later drift legible and delegable.
   plus the digests decomposed (`spec_block_sha`, per-file
   `code_manifest`) so an expired vouch is *attributed* — `check` and
   `status` say which script, the package blob, or where in the spec
-  file moved — not merely detected.
+  file moved — not merely detected. `vouch --took SECONDS` records
+  what the judgment cost (claim metadata, moves no digest); the DAG
+  views show each spec's last run/vouch age and duration.
 - **`specs/runs.toml`** — derived claims: the composed signature, the
   output digest, the executor, the wall-clock `duration_seconds`
   (claim metadata — enters no signature), and the full `[inputs]`

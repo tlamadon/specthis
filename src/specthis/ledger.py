@@ -44,6 +44,10 @@ class Vouch:
     #: Empty on rows written before these fields existed.
     spec_block_sha: str = ""
     code_manifest: dict[str, str] = field(default_factory=dict)
+    #: Wall-clock seconds the judgment took (``vouch --took``). Claim
+    #: metadata like a run's duration: enters no digest, omitted from
+    #: the TOML row when unknown.
+    duration_seconds: float | None = None
 
 
 @dataclass
