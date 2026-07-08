@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "specthis"
-version = "0.0.24"
+version = "0.0.25"
 description = "A notary for a research pipeline DAG: specs promise, code delivers, artifacts are receipts — one git-versioned ledger says which claims still hold and whether repair needs a mind, a machine, or patience."
 readme = "README.md"
 requires-python = ">=3.10"
