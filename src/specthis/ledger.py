@@ -87,23 +87,38 @@ def _locked(path: Path):
         os.close(fd)  # closing drops the flock
 
 
-def _read_toml(path: Path) -> dict:
+def _read_toml(path: Path, shared_lock: bool = True) -> dict:
+    """Read a ledger, by default under a shared lock so a reader racing
+    a writer (`run --stale -p N` checks statuses while workers record)
+    sees a complete file, never a truncated rewrite mid-flight. A
+    missing file is read as empty without creating it — reads stay
+    writeless. ``shared_lock=False`` is for reads already inside a
+    ``_locked`` cycle: flock conflicts across descriptors even within
+    one process, so re-locking there would self-deadlock."""
     if not path.is_file():
         return {}
-    return tomllib.loads(path.read_text(encoding="utf-8"))
+    with open(path, "rb") as f:
+        if shared_lock:
+            try:
+                import fcntl
+
+                fcntl.flock(f, fcntl.LOCK_SH)
+            except ImportError:  # pragma: no cover — Windows
+                pass
+        return tomllib.load(f)
 
 
 def _write_toml(path: Path, data: dict) -> None:
     path.write_text(tomli_w.dumps(data), encoding="utf-8")
 
 
-def read_vouches(specs_dir: Path) -> dict[str, Vouch]:
-    raw = _read_toml(specs_dir / VOUCHES_FILE)
+def read_vouches(specs_dir: Path, _shared_lock: bool = True) -> dict[str, Vouch]:
+    raw = _read_toml(specs_dir / VOUCHES_FILE, shared_lock=_shared_lock)
     return {name: Vouch(**row) for name, row in raw.items()}
 
 
-def read_runs(specs_dir: Path) -> dict[str, Run]:
-    raw = _read_toml(specs_dir / RUNS_FILE)
+def read_runs(specs_dir: Path, _shared_lock: bool = True) -> dict[str, Run]:
+    raw = _read_toml(specs_dir / RUNS_FILE, shared_lock=_shared_lock)
     return {name: Run(**row) for name, row in raw.items()}
 
 
@@ -122,7 +137,7 @@ def record_vouch(specs_dir: Path, entry: str, vouch: Vouch) -> None:
     if not vouch.attester:
         raise LedgerError("a vouch requires a named attester")
     with _locked(specs_dir / VOUCHES_FILE):
-        vouches = read_vouches(specs_dir)
+        vouches = read_vouches(specs_dir, _shared_lock=False)
         prior = vouches.get(entry)
         if (
             vouch.verdict == "ok"
@@ -147,7 +162,7 @@ def record_vouch(specs_dir: Path, entry: str, vouch: Vouch) -> None:
 def record_run(specs_dir: Path, entry: str, run: Run) -> None:
     """Write one derived claim (replacing any prior row for the entry)."""
     with _locked(specs_dir / RUNS_FILE):
-        runs = read_runs(specs_dir)
+        runs = read_runs(specs_dir, _shared_lock=False)
         runs[entry] = run
         # TOML has no null: optional fields (duration_seconds) are omitted.
         rows = {

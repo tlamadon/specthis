@@ -269,6 +269,8 @@ specthis status [entry]        # every entry's status / one entry in detail,
 specthis run <entry>           # resolve + record upstream digests, dispatch
                                #   (local or scripthut per bindings), write runs.toml
 specthis run --stale           # rebuild every machine-repairable entry in dependency order
+                               #   (-p 4: up to 4 independent entries at once; an entry
+                               #   still waits for all its upstreams' recorded claims)
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
                                # attest — someone other than the author, always named
 specthis serve                 # live dashboard (a regenerated view; writes nothing,

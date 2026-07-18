@@ -341,6 +341,84 @@ def _try_fetch(project: Project, name: str) -> bool:
     return False
 
 
+def _run_stale_parallel(
+    project: Project, jobs: int, do_fetch: bool, do_push: bool
+) -> tuple[int, int, list[tuple[str, str]], list[str]]:
+    """The --stale walk with a worker pool: an entry is examined the
+    moment its last upstream finishes, so independent branches of the
+    DAG rebuild concurrently.
+
+    The serial pass's guarantee survives: no entry starts until every
+    upstream's claim is recorded, so each worker composes exactly the
+    signature a serial pass would have. Ledger writes are already
+    flock-serialized; reads take the shared lock. On a failure nothing
+    new is scheduled — in-flight entries finish and are recorded.
+    """
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    from graphlib import TopologicalSorter
+
+    idx = {n: i for i, n in enumerate(topo_order(project))}
+    sorter = TopologicalSorter({n: e.consumes for n, e in project.entries.items()})
+    sorter.prepare()
+    ran = fetched = dispatched = 0
+    skipped: list[tuple[str, str]] = []
+    failures: list[str] = []
+    unseen = set(project.entries)  # neither dispatched nor resolved yet
+
+    def build(name: str, position: str) -> str:
+        if do_fetch and _try_fetch(project, name):
+            return "fetched"
+        _execute_entry(project, name, push_after=do_push, position=position)
+        return "ran"
+
+    def materialize(name: str) -> str:
+        return "fetched" if _try_fetch(project, name) else ""
+
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures: dict = {}
+        while True:
+            if not failures and sorter.is_active():
+                ready = sorted(sorter.get_ready(), key=idx.__getitem__)
+                # One derivation per ready batch: a node's staleness is
+                # settled once its upstreams are done, and cousins still
+                # running cannot move it.
+                reports = check_project(project) if ready else {}
+                for name in ready:
+                    unseen.discard(name)
+                    report = reports[name]
+                    if report.status is Status.STALE:
+                        dispatched += 1
+                        left = sum(1 for m in unseen if reports[m].status is Status.STALE)
+                        pos = f"[{dispatched}/{dispatched + left}]"
+                        futures[pool.submit(build, name, pos)] = name
+                    elif do_fetch and not report.materialized:
+                        futures[pool.submit(materialize, name)] = name
+                    else:
+                        if report.status in LOCAL_BREAKS:
+                            skipped.append((name, report.status.value))
+                        sorter.done(name)
+            if futures:
+                done_set, _ = wait(list(futures), return_when=FIRST_COMPLETED)
+                for fut in done_set:
+                    name = futures.pop(fut)
+                    try:
+                        outcome = fut.result()
+                    except click.ClickException as exc:
+                        failures.append(exc.message)
+                        click.echo(f"  {exc.message}", err=True)
+                    except Exception as exc:  # a worker crash, not a failed build
+                        failures.append(f"`{name}`: {exc}")
+                        click.echo(f"  `{name}`: {exc}", err=True)
+                    else:
+                        ran += outcome == "ran"
+                        fetched += outcome == "fetched"
+                    sorter.done(name)
+                continue
+            if failures or not sorter.is_active():
+                break
+    return ran, fetched, skipped, failures
+
+
 @main.command("run")
 @click.argument("entry", required=False)
 @click.option(
@@ -348,6 +426,16 @@ def _try_fetch(project: Project, name: str) -> bool:
     "run_stale",
     is_flag=True,
     help="Rebuild every machine-repairable entry in dependency order.",
+)
+@click.option(
+    "-p",
+    "--parallel",
+    "jobs",
+    type=click.IntRange(min=1),
+    default=1,
+    metavar="N",
+    help="With --stale: rebuild up to N independent entries at once. DAG order "
+    "still holds — an entry starts only after all its upstreams have recorded.",
 )
 @click.option(
     "--fetch",
@@ -374,6 +462,7 @@ def _try_fetch(project: Project, name: str) -> bool:
 def run_cmd(
     entry: str | None,
     run_stale: bool,
+    jobs: int,
     do_fetch: bool,
     do_push: bool,
     do_adopt: bool,
@@ -385,7 +474,8 @@ def run_cmd(
     an entry whose recorded claim already matches today's inputs is
     materialized from the cache instead of recomputed. With --adopt,
     nothing runs and no bytes move: the claim certified where the
-    entry ran (`specthis manifest`) is recorded here.
+    entry ran (`specthis manifest`) is recorded here. With --stale -p N,
+    independent branches of the DAG rebuild concurrently.
     """
     project = _load(project_path)
     if run_stale == (entry is not None):
@@ -394,6 +484,10 @@ def run_cmd(
         raise click.ClickException(
             "--adopt records a remote claim for one entry; it does not run, "
             "fetch, or push bytes"
+        )
+    if jobs > 1 and not run_stale:
+        raise click.ClickException(
+            "-p/--parallel applies to --stale — a single entry is one run"
         )
     if entry is not None:
         _require_active(project, entry)
@@ -423,35 +517,40 @@ def run_cmd(
     order = topo_order(project)
     queue = [n for n in order if check_project(project)[n].status is Status.STALE]
     if queue:
+        par = f" (up to {jobs} in parallel)" if jobs > 1 else ""
         click.echo(
-            f"{len(queue)} stale entr{'y' if len(queue) == 1 else 'ies'} to rebuild: "
+            f"{len(queue)} stale entr{'y' if len(queue) == 1 else 'ies'} to rebuild{par}: "
             + " -> ".join(queue)
         )
     started = time.monotonic()
-    ran, fetched, skipped = 0, 0, []
-    for i, name in enumerate(order):
-        # Re-derive after every run: an upstream rebuild makes new entries stale.
-        reports = check_project(project)
-        report = reports[name]
-        if report.status is Status.STALE:
-            if do_fetch and _try_fetch(project, name):
+    failures: list[str] = []
+    if jobs > 1:
+        ran, fetched, skipped, failures = _run_stale_parallel(project, jobs, do_fetch, do_push)
+    else:
+        ran, fetched, skipped = 0, 0, []
+        for i, name in enumerate(order):
+            # Re-derive after every run: an upstream rebuild makes new entries stale.
+            reports = check_project(project)
+            report = reports[name]
+            if report.status is Status.STALE:
+                if do_fetch and _try_fetch(project, name):
+                    fetched += 1
+                    continue
+                # The queue can grow mid-run (an upstream whose output moved
+                # makes new entries stale), so the total is re-counted live.
+                done = ran + fetched
+                left = sum(1 for m in order[i + 1 :] if reports[m].status is Status.STALE)
+                _execute_entry(
+                    project, name, push_after=do_push, position=f"[{done + 1}/{done + 1 + left}]"
+                )
+                ran += 1
+            elif do_fetch and not report.materialized and _try_fetch(project, name):
+                # Claim stands, bytes elsewhere: --fetch is the explicit demand
+                # to materialize; without it the entry is left alone (never
+                # recomputed just because the bytes are not local).
                 fetched += 1
-                continue
-            # The queue can grow mid-run (an upstream whose output moved
-            # makes new entries stale), so the total is re-counted live.
-            done = ran + fetched
-            left = sum(1 for m in order[i + 1 :] if reports[m].status is Status.STALE)
-            _execute_entry(
-                project, name, push_after=do_push, position=f"[{done + 1}/{done + 1 + left}]"
-            )
-            ran += 1
-        elif do_fetch and not report.materialized and _try_fetch(project, name):
-            # Claim stands, bytes elsewhere: --fetch is the explicit demand
-            # to materialize; without it the entry is left alone (never
-            # recomputed just because the bytes are not local).
-            fetched += 1
-        elif report.status in LOCAL_BREAKS:
-            skipped.append((name, report.status.value))
+            elif report.status in LOCAL_BREAKS:
+                skipped.append((name, report.status.value))
     summary = f"rebuilt {ran} stale entr{'y' if ran == 1 else 'ies'}"
     if fetched:
         summary += f", fetched {fetched} from cache"
@@ -460,6 +559,11 @@ def run_cmd(
     click.echo(summary)
     for name, why in skipped:
         click.echo(f"  skipped {name}: {why} (needs a mind, not a machine)", err=True)
+    if failures:
+        n = len(failures)
+        raise click.ClickException(
+            f"{n} entr{'y' if n == 1 else 'ies'} failed; nothing recorded for failed runs"
+        )
 
 
 # ------------------------------------------------------------- manifest

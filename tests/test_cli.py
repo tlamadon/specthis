@@ -8,7 +8,7 @@ from specthis.cli import main
 from specthis.ledger import read_runs, read_vouches
 from specthis.parse import load_project
 
-from .conftest import COMPUTE_ALPHA, FIT_ALPHA_PY, fake_run, make_ready, vouch_ok, write
+from .conftest import PY, COMPUTE_ALPHA, FIT_ALPHA_PY, fake_run, make_ready, vouch_ok, write
 
 
 def run_cli(*args: str):
@@ -230,6 +230,93 @@ def test_run_stale_rebuilds_in_topo_order_and_skips_minds(root: Path) -> None:
     (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
     result = run_cli("run", "--stale", "--path", str(root))
     assert "skipped fit-alpha: audit needed" in result.output
+
+
+HANDSHAKE_PY = """\
+import pathlib, sys, time
+me, other = sys.argv[1], sys.argv[2]
+pathlib.Path("results").mkdir(exist_ok=True)
+pathlib.Path(f"results/{me}.started").write_text("x")
+deadline = time.time() + 30
+while not pathlib.Path(f"results/{other}.started").exists():
+    if time.time() > deadline:
+        raise SystemExit(f"never saw {other} start — the queue ran serially")
+    time.sleep(0.05)
+pathlib.Path(f"results/{me}.json").write_text("{}")
+"""
+
+
+def add_handshake_pair(root: Path) -> None:
+    """Two independent quick entries whose scripts each wait to see the
+    other one start: both finish only if the scheduler truly overlaps them."""
+    for name, other in (("left", "right"), ("right", "left")):
+        write(
+            root,
+            f"specs/compute-{name}.md",
+            f"""\
+---
+name: compute-{name}
+kind: compute
+tier: quick
+---
+
+# {name}
+
+## Entry
+
+### fit-{name}
+
+Handshake with fit-{other}.
+
+Output: `results/{name}.json`
+""",
+        )
+        with open(root / "specs/bindings.toml", "a", encoding="utf-8") as f:
+            f.write(
+                f'\n[entries.fit-{name}]\n'
+                f'scripts = ["scripts/handshake.py"]\n'
+                f"run = '{PY} scripts/handshake.py {name} {other}'\n"
+            )
+    write(root, "scripts/handshake.py", HANDSHAKE_PY)
+
+
+def test_run_stale_parallel_overlaps_independent_entries(root: Path) -> None:
+    add_handshake_pair(root)
+    vouch_ok(root, "fit-left")
+    vouch_ok(root, "fit-right")  # the original chain stays unvouched: skipped as minds
+    result = run_cli("run", "--stale", "-p", "2", "--path", str(root))
+    assert result.exit_code == 0, result.output
+    assert "(up to 2 in parallel)" in result.output
+    assert "rebuilt 2 stale entries" in result.output
+    assert (root / "results/left.json").exists()
+    assert (root / "results/right.json").exists()
+
+
+def test_run_stale_parallel_respects_chain_order(root: Path) -> None:
+    for entry in ("fit-alpha", "fit-beta", "fig-beta"):
+        vouch_ok(root, entry)  # a strict chain: workers must wait on upstream claims
+    result = run_cli("run", "--stale", "-p", "4", "--path", str(root))
+    assert result.exit_code == 0, result.output
+    assert "rebuilt 3 stale entries" in result.output
+    reports = check_project(load_project(root))
+    assert {r.status for r in reports.values()} == {Status.READY}
+
+
+def test_run_parallel_requires_stale(root: Path) -> None:
+    result = run_cli("run", "fit-alpha", "-p", "2", "--path", str(root))
+    assert result.exit_code != 0
+    assert "--stale" in result.output
+
+
+def test_run_stale_parallel_failure_schedules_nothing_new(root: Path) -> None:
+    (root / "scripts/fit_alpha.py").write_text("raise SystemExit(3)\n")
+    for entry in ("fit-alpha", "fit-beta", "fig-beta"):
+        vouch_ok(root, entry)  # vouched at the failing digests: all STALE
+    result = run_cli("run", "--stale", "-p", "4", "--path", str(root))
+    assert result.exit_code != 0
+    assert "exit 3" in result.output
+    assert "1 entry failed" in result.output
+    assert not (root / "specs/runs.toml").exists(), "failed runs record nothing"
 
 
 def test_init_scaffold_passes_check(tmp_path: Path) -> None:

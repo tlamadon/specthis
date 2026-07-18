@@ -14,6 +14,13 @@ runs.toml is the only ledger touched.
      `specthis run <entry>`, upstream-first if several.
    - No arguments → `specthis run --stale` (topo order, skips
      entries that need a mind).
+   - Add `-p 4` (`--parallel`) when the stale queue spans independent
+     branches of the DAG — independent entries rebuild concurrently,
+     and an entry still starts only after all its upstreams have
+     recorded their claims. Keep intensive-tier queues serial unless
+     the user asked for parallelism: `-p` multiplies concurrent
+     compute burn. On a failure nothing new is scheduled; in-flight
+     entries finish and are recorded.
    - Add `--fetch` when a cache is configured (`[cache] url` in
      `specs/bindings.toml` or `SPECTHIS_CACHE_URL` is set) — verified
      bytes beat recompute. Add `--push` too if the user asked to

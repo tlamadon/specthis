@@ -157,7 +157,8 @@ After (or as part of) an audit:
   contract and its code have diverged, and machine repairs downstream
   of them are wasted until a mind rules.
 - Then **stale** entries, in dependency order — that is one
-  `specthis run --stale` away.
+  `specthis run --stale` away (`-p 4` rebuilds independent branches
+  concurrently; dependency order still holds).
 - Then **unimplemented** entries whose contract is a small variant of
   a ready one — the natural next authoring step.
 

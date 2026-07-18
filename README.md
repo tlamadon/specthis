@@ -104,6 +104,9 @@ specthis run --stale           # rebuild every machine-repairable entry in depen
                                #   narrates: plan line, [k/N] per entry, wall time, and whether
                                #   each output moved (consumers now stale) or was reproduced
                                #   (cascade cut — downstream claims unaffected)
+specthis run --stale -p 4      # same queue, but independent branches of the DAG rebuild
+                               #   concurrently (an entry still starts only after all its
+                               #   upstreams have recorded their claims)
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
 ```
 
@@ -238,6 +241,7 @@ vouch is just compute:
 ```bash
 specthis run --stale     # topo order; skips audit-needed entries
                          # ("needs a mind, not a machine")
+specthis run --stale -p 4  # up to 4 independent entries at once, DAG order intact
 ```
 
 **Reject bad work.** A critic reads an implementation and disagrees
