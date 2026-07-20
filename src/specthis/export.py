@@ -3,14 +3,18 @@
 The page is an mkdocs-style spec browser: a sticky sidebar lists every
 spec file grouped by frontmatter ``group:`` (ranked by ``priority:``,
 higher first; untagged specs fall back to kind groups below, each row
-carrying a small kind/tier pill), hash routing shows one spec at a time (the
-full markdown contract, rendered), and a "Status dashboard" section
-carries a spec-level DAG (:mod:`specthis.dag` — a git-log-style rails
-list in story order, trust flowing down status-colored rails, entry
-statuses as counted dots) above the cross-project entry table — sortable
-by any column, each row expandable into a detail card (repair hint,
-upstream/downstream neighbors, ledger facts), and focusable on one
-entry so only its upstream/downstream slice stays visible. Everything is
+carrying a small kind/tier pill), and hash routing shows one page at a
+time. The two trees get one page each: the **Vouch tree** (the
+landing) carries every definition's trust state — attester, vouch
+date, judgment cost, what moved since — above the spec-level DAG
+(:mod:`specthis.dag` — a git-log-style rails list in story order;
+on this page rails AND entry dots speak the vouch axis), with rows
+expandable into detail cards and focusable on one entry's
+upstream/downstream slice; the **Run tree** carries every
+realization's state — ran when, via what, duration, byte locality,
+what moved — for entries with a run axis (libraries stop at code).
+An **Activity log** lists each entry's current ledger claims plus the
+journal, newest first. Everything is
 a *regenerated view*, never a source of truth: it joins the parsed
 specs (:mod:`specthis.parse`), the derived statuses
 (:mod:`specthis.check`), and the journal narratives
@@ -420,15 +424,17 @@ _ROUTER_JS = """
     });
   });
 
-  // Entry focus + detail cards. Rows carry the DAG (data-consumes);
-  // focusing an entry hides everything outside its upstream/downstream
-  // closure. Clicking a row toggles its detail card. Focus survives
-  // the live-reload cycle via sessionStorage, like scroll does.
+  // Entry focus + detail cards. Vouch-tree rows carry the DAG
+  // (data-consumes); focusing an entry there hides everything outside
+  // its upstream/downstream closure. Clicking ANY entry row (either
+  // tree page) toggles its detail card. Focus survives the
+  // live-reload cycle via sessionStorage, like scroll does.
   const entryRows = Array.from(document.querySelectorAll('tr.entry-row'));
+  const focusRows = Array.from(document.querySelectorAll('#vouch tr.entry-row'));
   if (entryRows.length) {
     const up = {};
     const down = {};
-    entryRows.forEach((tr) => {
+    focusRows.forEach((tr) => {
       const name = tr.dataset.name;
       up[name] = (tr.dataset.consumes || '').split(' ').filter(Boolean);
       up[name].forEach((c) => { (down[c] = down[c] || []).push(name); });
@@ -454,7 +460,7 @@ _ROUTER_JS = """
       const ups = name ? closure(name, up) : null;
       const downs = name ? closure(name, down) : null;
       let shown = 0;
-      entryRows.forEach((tr) => {
+      focusRows.forEach((tr) => {
         const n = tr.dataset.name;
         const visible = !name || n === name || ups.has(n) || downs.has(n);
         tr.hidden = !visible;
@@ -474,7 +480,7 @@ _ROUTER_JS = """
           document.getElementById('focus-name').textContent = name;
           document.getElementById('focus-counts').textContent =
             '\\u2014 ' + ups.size + ' upstream, ' + downs.size +
-            ' downstream (' + shown + ' of ' + entryRows.length + ' entries shown)';
+            ' downstream (' + shown + ' of ' + focusRows.length + ' entries shown)';
         }
       }
       if (name) sessionStorage.setItem('specsFocus', name);
@@ -496,7 +502,7 @@ _ROUTER_JS = """
     const clear = document.getElementById('focus-clear');
     if (clear) clear.addEventListener('click', () => apply(null));
     const saved = sessionStorage.getItem('specsFocus');
-    if (saved && entryRows.some((tr) => tr.dataset.name === saved)) apply(saved);
+    if (saved && focusRows.some((tr) => tr.dataset.name === saved)) apply(saved);
   }
 
   // DAG rails: hovering a row spotlights the rails feeding it (its
@@ -891,8 +897,10 @@ def _sidebar(
         f"<h1>{_e(project.root.name)} &middot; specs/</h1>",
         f'<div class="meta-line">{len(project.specs) + len(broken)} files &middot; generated {_e(generated[:10])}</div>',
         '<div class="nav-group">'
-        '<div class="nav-file" data-file-anchor="status">'
-        '<a href="#status">Status dashboard</a></div>'
+        '<div class="nav-file" data-file-anchor="vouch">'
+        '<a href="#vouch">Vouch tree</a></div>'
+        '<div class="nav-file" data-file-anchor="run">'
+        '<a href="#run">Run tree</a></div>'
         '<div class="nav-file" data-file-anchor="activity">'
         '<a href="#activity">Activity log</a></div></div>',
     ]
@@ -981,20 +989,6 @@ def _broken_section(root: Path, filename: str, problems: list[Problem]) -> str:
     )
 
 
-def _frontier_cell(r: Report) -> str:
-    """Frontier column: which actor this entry is waiting for — a mind
-    (vouch tree), a machine (run tree), or both. The diagnosis lives in
-    the row's detail card; membership is for scanning."""
-    mind = r.certification is not Certification.CERTIFIED
-    machine = machine_repairable(r)
-    if not mind and not machine:
-        return '<td data-sort="3"><span class="empty">—</span></td>'
-    label, rank = ("mind + machine", 0) if mind and machine else (
-        ("mind", 1) if mind else ("machine", 2)
-    )
-    return f'<td class="frontier-yes" data-sort="{rank}"><b>{label}</b></td>'
-
-
 def _why(r: Report, entry: Entry, project: Project, reports: dict[str, Report]) -> str:
     """One line of diagnosis for the detail card: the per-tree repair
     hints for local breaks, the blocking upstreams for a waiting entry."""
@@ -1060,20 +1054,7 @@ def _detail_row(
         f'<div class="dep"><span class="lbl">{_e(label)}</span> {value}</div>'
         for label, value in lines
     )
-    return f'<tr class="detail"><td colspan="9"><div class="detail-card">{body}</div></td></tr>'
-
-
-def _updated_cell(r: Report) -> str:
-    """Last-update column: the most recent vouch or run timestamp."""
-    stamps = [
-        t
-        for t in (r.vouch.vouched if r.vouch else None, r.run.ran if r.run else None)
-        if t
-    ]
-    if not stamps:
-        return '<td data-sort=""><span class="empty">—</span></td>'
-    latest = max(stamps)
-    return f'<td data-sort="{_e(latest)}">{_e(latest[:10])}</td>'
+    return f'<tr class="detail"><td colspan="8"><div class="detail-card">{body}</div></td></tr>'
 
 
 def _cached_cell(r: Report, entry: Entry) -> str:
@@ -1095,98 +1076,151 @@ def _cached_cell(r: Report, entry: Entry) -> str:
     return '<td data-sort="1">disk</td>'
 
 
-def _status_section(
+_EMPTY = '<span class="empty">—</span>'
+
+
+def _chip_row(tallies: list[tuple[str, int]]) -> str:
+    return "".join(
+        f'<span class="chip"><b>{n}</b> {_e(label)}</span>' for label, n in tallies if n
+    ) or '<span class="chip">no entries yet</span>'
+
+
+def _stamp_cell(iso: str | None) -> str:
+    """A date cell sorting by the full ISO stamp; em-dash without one."""
+    if not iso:
+        return f'<td data-sort="">{_EMPTY}</td>'
+    return f'<td data-sort="{_e(iso)}" title="{_e(iso)}">{_e(iso[:10])}</td>'
+
+
+def _took_cell(seconds: float | None) -> str:
+    return f"<td>{_e(fmt_duration(seconds))}</td>" if seconds else f"<td>{_EMPTY}</td>"
+
+
+def _vouch_section(
     project: Project,
     reports: dict[str, Report],
     problems: list[Problem],
 ) -> str:
-    # One chip group per tree (broken states only), then composition.
+    """The landing page: the vouch tree. Every definition's trust
+    state with its judgment facts (who vouched, when, at what cost,
+    what moved since), above the DAG — on this page rails AND dots
+    speak the vouch axis. Run-tree facts live on the Run tree page."""
     rs = list(reports.values())
-    tallies = [
-        (n, sum(1 for r in rs if r.certification is c))
-        for c, n in [
-            (Certification.UNIMPLEMENTED, "unimplemented"),
-            (Certification.UNVOUCHED, "unvouched"),
-            (Certification.REJECTED, "rejected"),
-        ]
-    ] + [
-        (n, sum(1 for r in rs if r.realization is x))
-        for x, n in [
-            (Realization.STALE, "stale"),
-            (Realization.NEVER_RUN, "never-run"),
-        ]
-    ]
     ready = sum(1 for r in rs if r.computable and r.realized)
-    waiting = sum(
-        1
-        for r in rs
-        if r.certification is Certification.CERTIFIED
-        and not machine_repairable(r)
-        and not (r.computable and r.realized)
-    )
-    tallies += [("waiting", waiting), ("ready", ready)]
-    chips = "".join(
-        f'<span class="chip"><b>{n}</b> {_e(label)}</span>' for label, n in tallies if n
-    ) or '<span class="chip">no entries yet</span>'
+    tallies = [
+        (c.value, sum(1 for r in rs if r.certification is c)) for c in Certification
+    ] + [("ready", ready)]
+    chips = _chip_row(tallies)
     if project.skipped_entries:
-        chips += (
-            f'<span class="chip"><b>{len(project.skipped_entries)}</b> skipped</span>'
-        )
-    remote_bytes = sum(1 for r in reports.values() if not r.materialized)
-    if remote_bytes:
-        chips += f'<span class="chip"><b>{remote_bytes}</b> bytes remote</span>'
+        chips += f'<span class="chip"><b>{len(project.skipped_entries)}</b> skipped</span>'
 
     consumed_by = _consumed_by(project)
-    all_rows = "".join(
-        f'<tr class="entry-row" data-name="{_e(name)}" '
-        f'data-consumes="{_e(" ".join(e.consumes))}">'
-        '<td class="focus-cell"><button class="focus-btn" '
-        'title="focus — show only its upstream/downstream">&#8982;</button>'
-        '<span class="dir"></span></td>'
-        f'<td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
-        f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
-        f'<td data-sort="{_CERT_RANK[reports[name].certification]}">'
-        f"{_cert_badge(reports[name])}</td>"
-        f'<td data-sort="{_real_rank(reports[name])}">'
-        f"{_real_badge(reports[name])}</td>"
-        f"<td>{_e(e.spec.kind if e.spec.kind == 'library' else f'{e.spec.kind}/{e.tier}')}</td>"
-        f"{_frontier_cell(reports[name])}"
-        f"{_updated_cell(reports[name])}"
-        f"{_cached_cell(reports[name], e)}</tr>"
-        + _detail_row(e, reports[name], project, reports, consumed_by)
-        for name, e in sorted(project.entries.items())
-    )
+    rows = []
+    for name, e in sorted(project.entries.items()):
+        r = reports[name]
+        v = r.vouch
+        expired = (
+            f'<span class="who">{_e("; ".join(r.expired))}</span>' if r.expired else _EMPTY
+        )
+        rows.append(
+            f'<tr class="entry-row" data-name="{_e(name)}" '
+            f'data-consumes="{_e(" ".join(e.consumes))}">'
+            '<td class="focus-cell"><button class="focus-btn" '
+            'title="focus — show only its upstream/downstream">&#8982;</button>'
+            '<span class="dir"></span></td>'
+            f'<td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
+            f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
+            f'<td data-sort="{_CERT_RANK[r.certification]}">{_cert_badge(r)}</td>'
+            f"<td>{_e(v.attester) if v else _EMPTY}</td>"
+            f"{_stamp_cell(v.vouched if v else None)}"
+            f"{_took_cell(v.duration_seconds if v else None)}"
+            f"<td>{expired}</td></tr>"
+            + _detail_row(e, r, project, reports, consumed_by)
+        )
     focus_bar = (
         '<div class="focus-bar" id="focus-bar" hidden>'
         "<span>&#8982; focused on <b id=\"focus-name\"></b> "
         '<span class="who" id="focus-counts"></span></span>'
         '<button id="focus-clear">clear</button></div>'
     )
-    all_table = (
+    table = (
         focus_bar
         + '<table class="sortable"><thead><tr><th class="no-sort"></th>'
-        "<th>entry</th><th>spec</th><th>vouch</th><th>run</th><th>kind/tier</th>"
-        "<th>frontier</th><th>last update</th><th>cached</th></tr></thead>"
-        f"<tbody>{all_rows}</tbody></table>"
-        if all_rows
+        "<th>entry</th><th>spec</th><th>vouch state</th><th>by</th>"
+        "<th>vouched</th><th>took</th><th>moved since vouch</th></tr></thead>"
+        f'<tbody>{"".join(rows)}</tbody></table>'
+        if rows
         else '<p class="empty">No entries yet.</p>'
     )
 
-    dag = dag_svg(project, reports)
+    dag = dag_svg(project, reports, axis="vouch")
     if dag:
         dag += (
             '<div class="dag-caption">artefact flow (<code>consumes</code>): '
-            "every spec sits below its inputs; rail color is the upstream's "
-            "vouch state (trust flows down), dots count entries by run state "
-            "(vouch state for libraries) &mdash; hover a row to trace it, "
-            "click to open the spec</div>"
+            "every spec sits below its inputs; rails and dots are vouch "
+            "states — trust flows down. Run states live on the "
+            '<a href="#run">Run tree</a> page &mdash; hover a row to trace '
+            "it, click to open the spec</div>"
         )
 
     return (
-        '<section class="spec" id="status">'
-        '<h2 class="spec-title">Status dashboard</h2>'
+        '<section class="spec" id="vouch">'
+        '<h2 class="spec-title">Vouch tree</h2>'
+        '<div class="spec-meta"><span class="who">the definitions — judged by '
+        "minds; a vouch covers one (spec, code) pair and expires when either "
+        "moves</span></div>"
         f'<div class="chips">{chips}</div>'
-        f"{_problems_box(problems)}{dag}{all_table}</section>"
+        f"{_problems_box(problems)}{dag}{table}</section>"
+    )
+
+
+def _run_section(project: Project, reports: dict[str, Report]) -> str:
+    """The run tree: every realization's state with its ledger facts
+    (when it ran, via what, at what cost, where the bytes are).
+    Library entries have no run axis and do not appear."""
+    rs = [r for r in reports.values() if r.realization is not None]
+    ready = sum(1 for r in reports.values() if r.computable and r.realized)
+    tallies = [(x.value, sum(1 for r in rs if r.realization is x)) for x in Realization]
+    remote = sum(1 for r in rs if not r.materialized)
+    tallies += [("bytes remote", remote), ("ready", ready)]
+    chips = _chip_row(tallies)
+
+    consumed_by = _consumed_by(project)
+    rows = []
+    for name, e in sorted(project.entries.items()):
+        r = reports[name]
+        if r.realization is None:  # library: the chain stops at code
+            continue
+        run = r.run
+        moved = f'<span class="who">{_e(", ".join(r.moved))}</span>' if r.moved else _EMPTY
+        rows.append(
+            f'<tr class="entry-row" data-name="{_e(name)}">'
+            f'<td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
+            f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
+            f'<td data-sort="{_real_rank(r)}">{_real_badge(r)}{_bytes_badge(r)}</td>'
+            f"{_stamp_cell(run.ran if run else None)}"
+            f"<td>{_e(run.executor) if run else _EMPTY}</td>"
+            f"{_took_cell(run.duration_seconds if run else None)}"
+            f"{_cached_cell(r, e)}"
+            f"<td>{moved}</td></tr>"
+            + _detail_row(e, r, project, reports, consumed_by)
+        )
+    table = (
+        '<table class="sortable"><thead><tr>'
+        "<th>entry</th><th>spec</th><th>run state</th><th>ran</th>"
+        "<th>via</th><th>took</th><th>cached</th><th>moved</th></tr></thead>"
+        f'<tbody>{"".join(rows)}</tbody></table>'
+        if rows
+        else '<p class="empty">No runnable entries (libraries stop at code).</p>'
+    )
+    return (
+        '<section class="spec" id="run">'
+        '<h2 class="spec-title">Run tree</h2>'
+        '<div class="spec-meta"><span class="who">the realizations — rebuilt by '
+        "machines; a run claim pins exact input bytes to exact output bytes and "
+        "goes stale when either moves</span></div>"
+        f'<div class="chips">{chips}</div>'
+        f"{table}</section>"
     )
 
 
@@ -1382,7 +1416,8 @@ def render_html(
     spec_names = {s.name for s in project.specs}
     journal_stems = {j.stem for j in journal}
     sections = (
-        [_status_section(project, reports, problems)]
+        [_vouch_section(project, reports, problems)]
+        + [_run_section(project, reports)]
         + [_activity_section(reports, journal, generated)]
         + [
             _broken_section(project.root, filename, problems)
@@ -1408,7 +1443,7 @@ def render_html(
 <main class="content">
 {"".join(sections)}
 </main></div>
-<a class="back-to-status" href="#status">status</a>
+<a class="back-to-status" href="#vouch">vouch tree</a>
 <script>{_ROUTER_JS}</script></body></html>
 """
 

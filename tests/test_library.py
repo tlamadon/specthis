@@ -114,6 +114,12 @@ def test_library_lives_only_on_the_vouch_axis(root: Path) -> None:
     r = check_project(load_project(root))["estimator-core"]
     assert r.realization is None  # no run, no output: no value-level existence
     assert r.computable and r.realized
+    # and therefore appears on the vouch page but not the run page
+    page, _ = render(load_project(root))
+    vouch_body = page.split('id="vouch">')[1].split("</section>")[0]
+    run_body = page.split('id="run">')[1].split("</section>")[0]
+    assert 'data-name="estimator-core"' in vouch_body
+    assert 'data-name="estimator-core"' not in run_body  # neighbor links only
 
 
 def test_spec_edit_is_finally_picked_up(root: Path) -> None:

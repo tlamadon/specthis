@@ -93,16 +93,15 @@ def test_dag_cli_orient_lr(root: Path) -> None:
 
 
 def test_dag_dots_follow_status(root: Path) -> None:
-    # nothing vouched or run yet: the rail origin dots speak the vouch
-    # axis (unvouched orange), the entry chips the run axis (never-run
-    # grey) — the two trees visible on one drawing.
+    # the page's DAG lives on the vouch-tree page: rails, origin dots
+    # AND entry chips all speak the vouch axis there. Nothing vouched
+    # yet — everything unvouched orange.
     svg = _svg(render(load_project(root))[0])
-    assert svg.count('fill="#c06a1f"') == 3  # origin dots: unvouched
-    assert svg.count('fill="#9a958c"') == 3  # entry chips: never-run
-    assert "never-run (1): fit-alpha" in svg  # group tooltip names the entries
+    assert svg.count('fill="#c06a1f"') == 6  # origin dots + chips: unvouched
+    assert "unvouched (1): fit-alpha" in svg  # group tooltip names the entries
     make_ready(root)
     svg = _svg(render(load_project(root))[0])
-    assert svg.count('fill="#4d9367"') == 6  # certified origins + current chips
+    assert svg.count('fill="#4d9367"') == 6  # everything certified
 
 
 _REPORT_MANY = """\
@@ -146,7 +145,7 @@ def test_dag_dots_aggregate_per_status(root: Path) -> None:
     # count (plus the row's vouch-axis dot on the rail)
     assert node.count("<circle") == 2
     assert ">3</text>" in node
-    assert "never-run (3): exp-one, exp-two, exp-three" in node
+    assert "unimplemented (3): exp-one, exp-two, exp-three" in node
 
 
 def test_dag_omitted_when_no_flow(tmp_path: Path) -> None:

@@ -267,11 +267,13 @@ def _lanes(order: list[str], edges: list[tuple[str, str]]) -> dict[str, int]:
 
 
 def _dot_groups(
-    spec: SpecFile, reports: dict[str, Report]
+    spec: SpecFile, reports: dict[str, Report], axis: str = "run"
 ) -> list[tuple[str, int, str, list[str]]]:
-    """Entry dots collapsed per run state: (label, count, fill, entry
-    names), severity-ordered (most broken first, skipped last). Library
-    entries have no run axis, so their vouch state stands in. One dot
+    """Entry dots collapsed per state: (label, count, fill, entry
+    names), severity-ordered (most broken first, skipped last).
+    ``axis="run"`` groups by run state (library entries have no run
+    axis, so their vouch state stands in); ``axis="vouch"`` groups
+    every entry by vouch state — the vouch-tree page's view. One dot
     per state keeps a spec with dozens of same-state entries from
     bloating into a bar of identical dots."""
     groups: dict[tuple[int, str, str], list[str]] = defaultdict(list)
@@ -279,7 +281,7 @@ def _dot_groups(
         r = reports.get(entry.name)  # None when dormant under skip: true
         if r is None:
             key = (99, "skipped", _SKIP_FILL)
-        elif r.realization is None:  # library: the vouch axis is the whole story
+        elif axis == "vouch" or r.realization is None:
             c = r.certification
             key = (list(Certification).index(c), c.value, _CERT_FILL[c])
         else:
@@ -447,14 +449,19 @@ def _layout(
 
 
 def dag_svg(
-    project: Project, reports: dict[str, Report], orient: str = "tb", view: str = "rails"
+    project: Project,
+    reports: dict[str, Report],
+    orient: str = "tb",
+    view: str = "rails",
+    axis: str = "run",
 ) -> str:
     """The dashboard block — rails by default, the scanning view. "" when
-    there is no flow to picture."""
+    there is no flow to picture. ``axis`` picks what the entry dots
+    speak (rails always speak the vouch axis)."""
     if view == "rails":
-        svg = _render_rails(project, reports, standalone=False)
+        svg = _render_rails(project, reports, standalone=False, axis=axis)
     else:
-        svg = _render_layered(project, reports, standalone=False, orient=orient)
+        svg = _render_layered(project, reports, standalone=False, orient=orient, axis=axis)
     return f'<div class="dag-wrap">{svg}</div>' if svg else ""
 
 
@@ -536,7 +543,11 @@ def dag_json(
 
 
 def _render_layered(
-    project: Project, reports: dict[str, Report], standalone: bool, orient: str
+    project: Project,
+    reports: dict[str, Report],
+    standalone: bool,
+    orient: str,
+    axis: str = "run",
 ) -> str:
     laid = _layout(project, reports, orient)
     if laid is None:
@@ -574,7 +585,7 @@ def _render_layered(
         )
     for p in placed:
         spec = p.spec
-        groups = _dot_groups(spec, reports)
+        groups = _dot_groups(spec, reports, axis)
         node = (
             f'<g class="dag-node{" skipped" if spec.skip else ""}" '
             f'transform="translate({p.x},{p.y})" data-spec="{escape(spec.name)}">'
@@ -593,7 +604,9 @@ def _render_layered(
     return "".join(parts)
 
 
-def _render_rails(project: Project, reports: dict[str, Report], standalone: bool) -> str:
+def _render_rails(
+    project: Project, reports: dict[str, Report], standalone: bool, axis: str = "run"
+) -> str:
     """The git-log-style list. Rails render under the rows: one spine
     per upstream down its lane, a curve branching into each consumer's
     row. Rows carry data-spec/data-up so the page JS can spotlight a
@@ -612,7 +625,7 @@ def _render_rails(project: Project, reports: dict[str, Report], standalone: bool
         children[u].append(d)
         ups[d].append(u)
 
-    groups = {n: _dot_groups(by_name[n], reports) for n in order}
+    groups = {n: _dot_groups(by_name[n], reports, axis) for n in order}
     timing = {n: _spec_timing(by_name[n], reports) for n in order}
     label_x = (max(lane.values()) + 1) * _LANE_W + _PAD + 20
     total_w = int(

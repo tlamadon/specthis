@@ -26,7 +26,7 @@ def test_export_writes_html_and_index(root: Path) -> None:
     page = (root / "specs/specs.html").read_text()
     for needle in ("fit-alpha", "fit-beta", "fig-beta", "compute-alpha", "ready"):
         assert needle in page
-    assert "frontier-yes" not in page  # everything is ready — frontier column empty
+    assert 'badge stale">' not in page  # everything is ready — no broken badges
 
     index = json.loads((root / "specs/_index.json").read_text())
     by_name = {s["name"]: s for s in index["specs"]}
@@ -79,6 +79,25 @@ def test_activity_log_lists_ledger_claims_and_journal_newest_first(root: Path) -
     assert 'data-sort="2026-01-01T00:00:00+00:00"' in body  # sortable by raw stamp
 
 
+def test_vouch_tree_is_landing_and_run_tree_excludes_libraries(root: Path) -> None:
+    """The vouch tree is the first section (the router's default page);
+    the run page lists only entries with a run axis."""
+    make_ready(root)
+    page, _ = render(load_project(root))
+    first = page.index('<section class="spec" id="vouch">')
+    second = page.index('<section class="spec" id="run">')
+    assert first < second
+    assert '<a href="#vouch">Vouch tree</a>' in page
+    assert '<a href="#run">Run tree</a>' in page
+    # the DAG (vouch axis) sits on the vouch page, before the run page
+    assert first < page.index('<svg class="dag"') < second
+    # focus machinery lives on the vouch page; run rows still get detail cards
+    assert page.index('id="focus-bar"') < second
+    run_body = page.split('id="run">')[1].split("</section>")[0]
+    assert '<tr class="detail">' in run_body
+    assert "focus-btn" not in run_body
+
+
 def test_spec_page_vouch_note_is_tooltip_only(root: Path) -> None:
     """The spec-page entries table shows verdict/attester/date; the long
     vouch note lives in a title tooltip, not inline in the cell."""
@@ -106,23 +125,29 @@ def test_export_shows_frontier_and_escapes_html(root: Path) -> None:
     vouch_ok(root, "fit-alpha", attester='critic <b>"x"</b>')
     project = load_project(root)
     page, _ = render(project)
-    assert "frontier-yes" in page  # fit-alpha is now stale (re-vouched, not re-run)
+    assert 'badge stale">stale<' in page  # fit-alpha re-vouched, not re-run
     assert "&lt;b&gt;" in page and '<b>"x"</b>' not in page  # attester name escaped
-    assert "upstream-unverified" in page or "stale" in page
 
 
-def test_status_table_columns_and_sorter(root: Path) -> None:
+def test_tree_pages_columns_and_sorter(root: Path) -> None:
     make_ready(root)
-    (root / "reports/fig_beta.dat").unlink()  # fig-beta -> ready, bytes remote
+    (root / "reports/fig_beta.dat").unlink()  # fig-beta -> current, bytes remote
     page, index = render(load_project(root))
-    for th in ("<th>frontier</th>", "<th>last update</th>", "<th>cached</th>"):
+    # each tree page carries its own schema
+    for th in ("<th>vouch state</th>", "<th>by</th>", "<th>vouched</th>",
+               "<th>moved since vouch</th>"):
         assert th in page
+    for th in ("<th>run state</th>", "<th>ran</th>", "<th>via</th>", "<th>cached</th>"):
+        assert th in page
+    assert '<section class="spec" id="vouch">' in page
+    assert '<section class="spec" id="run">' in page
     assert '<table class="sortable">' in page
     assert "table.sortable" in page  # the click-to-sort JS ships inline
     assert ">disk</td>" in page  # fit-alpha/fit-beta bytes on this disk
     assert ">remote</span>" in page  # fig-beta claim stands, bytes elsewhere
-    # last update: sort key is the full stamp, the cell shows the date
-    assert 'data-sort="2026-01-01T00:00:00+00:00">2026-01-01<' in page
+    # stamp cells: sort key is the full ISO stamp, the cell shows the date
+    assert 'data-sort="2026-01-01T00:00:00+00:00"' in page
+    assert ">2026-01-01</td>" in page
     flat = {e["name"]: e for s in index["specs"] for e in s["entries"]}
     assert flat["fit-alpha"]["materialized"] is True
     assert flat["fig-beta"]["materialized"] is False
@@ -185,9 +210,10 @@ def test_markdown_spec_links_are_hash_routed(root: Path) -> None:
 def test_sidebar_and_hash_routing(root: Path) -> None:
     project = load_project(root)
     page, _ = render(project)
-    # one nav entry per spec file, grouped by kind, plus the status shortcut
+    # one nav entry per spec file, grouped by kind, plus the tree pages
     assert '<nav class="sidebar">' in page
-    assert 'data-file-anchor="status"' in page
+    assert 'data-file-anchor="vouch"' in page
+    assert 'data-file-anchor="run"' in page
     for anchor in ("spec-compute-alpha", "spec-compute-beta", "spec-report-beta", "spec-models"):
         assert f'data-file-anchor="{anchor}"' in page
         assert f'<section class="spec" id="{anchor}">' in page
