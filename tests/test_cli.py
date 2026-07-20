@@ -16,10 +16,14 @@ def run_cli(*args: str):
 
 
 def test_check_exit_codes_and_frontier(root: Path) -> None:
+    # fresh project: every entry is unvouched (mind queue) and, being
+    # mechanically runnable, never-run (machine queue) at once
     result = run_cli("check", "--path", str(root))
     assert result.exit_code == 1
-    assert "frontier" in result.output
-    assert "audit needed" in result.output
+    assert "definitions needing a mind" in result.output
+    assert "unvouched" in result.output
+    assert "realizations needing a machine" in result.output
+    assert "never-run" in result.output
 
     make_ready(root)
     result = run_cli("check", "--path", str(root))
@@ -34,7 +38,9 @@ def test_check_summarizes_downstream(root: Path) -> None:
     assert result.exit_code == 1
     assert "fit-alpha" in result.output
     assert "fit-beta" not in result.output  # downstream is a count, not a row
-    assert "2 upstream-unverified" in result.output
+    # both trees are blocked upstream: the lineage has an uncertified
+    # definition and a stale call
+    assert "waiting on upstream: 2 (2 on minds, 2 on machines)" in result.output
 
 
 def test_status_detail_names_the_moved_input(root: Path) -> None:
@@ -204,10 +210,10 @@ def test_run_stale_narrates_plan_and_progress(root: Path) -> None:
         vouch_ok(root, entry)  # all vouched, none run: everything STALE
     result = run_cli("run", "--stale", "--path", str(root))
     assert result.exit_code == 0, result.output
-    assert "3 stale entries to rebuild: fit-alpha -> fit-beta -> fig-beta" in result.output
+    assert "3 entries in the machine queue: fit-alpha -> fit-beta -> fig-beta" in result.output
     assert "[1/3]" in result.output
     assert "[3/3]" in result.output
-    assert "rebuilt 3 stale entries in " in result.output
+    assert "rebuilt 3 entries in " in result.output
 
 
 def test_run_stale_rebuilds_in_topo_order_and_skips_minds(root: Path) -> None:
@@ -226,10 +232,42 @@ def test_run_stale_rebuilds_in_topo_order_and_skips_minds(root: Path) -> None:
     assert result.exit_code == 0
     assert "rebuilt 2" in result.output  # beta then fig-beta, topo order
 
-    # an unvouched entry is a mind's problem, not the machine's
+    # mechanical policy: unvouched is no bar to compute — the machine
+    # rebuilds while a mind audits the definition in parallel
     (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
     result = run_cli("run", "--stale", "--path", str(root))
-    assert "skipped fit-alpha: audit needed" in result.output
+    assert result.exit_code == 0
+    assert "rebuilt 1" in result.output
+    assert "skipped" not in result.output
+
+
+def test_run_stale_skips_rejected_definitions(root: Path) -> None:
+    """The one certification state that gates compute: a machine must
+    not realize a definition a mind refused."""
+    from specthis.check import code_sha
+    from specthis.ledger import Vouch, record_vouch
+
+    make_ready(root)
+    project = load_project(root)
+    e = project.entries["fit-alpha"]
+    c = code_sha(project, e)
+    assert c is not None
+    record_vouch(
+        project.specs_dir,
+        "fit-alpha",
+        Vouch(
+            spec_sha=e.spec.spec_sha,
+            code_sha=c,
+            verdict="rejected",
+            attester="critic",
+            vouched="2026-01-02T00:00:00+00:00",
+        ),
+    )
+    write(root, "hut.fit-alpha.json", '{"backend": "pbs"}\n')  # stale, rejection stands
+    result = run_cli("run", "--stale", "--path", str(root))
+    assert result.exit_code == 0
+    assert "rebuilt 0" in result.output
+    assert "skipped fit-alpha: rejected (needs a mind, not a machine)" in result.output
 
 
 HANDSHAKE_PY = """\
@@ -281,13 +319,14 @@ Output: `results/{name}.json`
 
 
 def test_run_stale_parallel_overlaps_independent_entries(root: Path) -> None:
+    make_ready(root)  # the original chain is READY: only the pair queues
     add_handshake_pair(root)
     vouch_ok(root, "fit-left")
-    vouch_ok(root, "fit-right")  # the original chain stays unvouched: skipped as minds
+    vouch_ok(root, "fit-right")
     result = run_cli("run", "--stale", "-p", "2", "--path", str(root))
     assert result.exit_code == 0, result.output
     assert "(up to 2 in parallel)" in result.output
-    assert "rebuilt 2 stale entries" in result.output
+    assert "rebuilt 2 entries" in result.output
     assert (root / "results/left.json").exists()
     assert (root / "results/right.json").exists()
 
@@ -297,7 +336,7 @@ def test_run_stale_parallel_respects_chain_order(root: Path) -> None:
         vouch_ok(root, entry)  # a strict chain: workers must wait on upstream claims
     result = run_cli("run", "--stale", "-p", "4", "--path", str(root))
     assert result.exit_code == 0, result.output
-    assert "rebuilt 3 stale entries" in result.output
+    assert "rebuilt 3 entries" in result.output
     reports = check_project(load_project(root))
     assert {r.status for r in reports.values()} == {Status.READY}
 

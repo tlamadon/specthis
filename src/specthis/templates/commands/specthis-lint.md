@@ -34,11 +34,11 @@ and `specs/bindings.toml`, and nothing else.
    - **consumes/references unknown targets** — usually a typo or a
      renamed entry; grep the specs for near-matches before asking.
 3. Warn the user where a fix will move digests: editing a spec file
-   returns its entries to *audit needed*, and adding/changing a
+   returns its entries to *unvouched*, and adding/changing a
    binding does the same for that entry. That is correct behavior,
    not damage — say so plainly. (The one exception: `[preview]`
    stanzas are dashboard-only and move no digest.)
 4. Never touch `vouches.toml` / `runs.toml`, never run
    `specthis vouch`, never run project scripts.
 5. Re-run `specthis lint` until clean, then finish with
-   `specthis check` so the user sees the frontier.
+   `specthis check` so the user sees both queues.

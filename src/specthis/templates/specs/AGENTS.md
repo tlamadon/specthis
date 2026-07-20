@@ -57,14 +57,21 @@ vocabulary (how to render an output type at view time) — a preview
 recipe enters no signature and expires no vouch, and the artifacts it
 renders live in a cache outside the repo: never treat either as
 project state or audit material. `specthis check` re-derives everything and
-reports, per entry: **unimplemented** / **audit needed** /
-**rejected** (a mind's work), **stale** (a machine's work), or
-**upstream-unverified** (patience — fix upstream and it heals).
-Status is never written anywhere; it is derived. Nothing consults
-mtime.
+reports two queues, one per tree. Every entry carries two independent
+coordinates: its **vouch state** (unimplemented / unvouched /
+rejected / certified — a judgment about the definition; repair needs
+a mind) and its **run state** (never-run / stale / current — whether
+the recorded call matches today's inputs; repair needs a machine;
+library entries have no run state). An entry can be broken on both
+axes at once — the mind audits while the machine reruns. *Ready* is
+the conjunction: certified and current, with the whole upstream
+lineage the same. Entries green on both axes but blocked upstream are
+summarized as waiting (split by which tree blocks them). Status is
+never written anywhere; it is derived. Nothing consults mtime.
 
-A ready entry may additionally be marked **bytes remote** (in `check`
-output, `status`, and the dashboard): its claim stands but the output
+An entry with a current claim may additionally be marked **bytes
+remote** (in `check` output, `status`, and the dashboard): its claim
+stands but the output
 bytes are not on this disk — they live in the byte cache, certified
 there by `specthis manifest` on the machine that ran the entry. This
 is a byte-locality fact, NOT a break: never re-run an entry to "fix"
@@ -89,7 +96,7 @@ against the claim) if a local step actually needs them.
   Optional `title:`, `group:` / `priority:` (int, higher first) only
   name and organize specs in the dashboard.
 - The whole file, frontmatter included, is the contract: any edit
-  returns its entries to *audit needed*. Sole carve-out: the
+  returns its entries to *unvouched*. Sole carve-out: the
   display-only `title:` / `group:` / `priority:` lines are stripped
   before `spec_sha`, so retitling or retagging never disturbs vouches.
 
@@ -122,18 +129,19 @@ Start mechanical, end judgmental:
    it names exactly which input moved). This replaces every
    existence / freshness / hash check you would otherwise do by hand.
    Never re-derive status yourself; never infer it from mtimes.
-2. For each entry on the frontier, characterise the repair:
-   - **stale** — machine work. Report it; `specthis run --stale` (or
-     the user) fixes it. Nothing to judge. (An entry that is *ready
-     (bytes remote)* is NOT on the frontier and needs no repair —
-     absent bytes are not staleness.)
-   - **audit needed / rejected** — a mind's work. Open the entry's
-     spec section and its scripts (paths are in `specthis status
-     <entry>` / `specs/bindings.toml`) and judge **contract in
+2. The check output is already split by repair kind:
+   - the **machine queue** (stale / never-run) — compute. Report it;
+     `specthis run --stale` (or the user) clears it, including
+     unvouched entries (certification does not gate compute). Nothing
+     to judge. (An entry that is *current (bytes remote)* is NOT
+     queued and needs no repair — absent bytes are not staleness.)
+   - the **mind queue** (unvouched / rejected) — judgment. Open the
+     entry's spec section and its scripts (paths are in `specthis
+     status <entry>` / `specs/bindings.toml`) and judge **contract in
      spirit**: does the code do what the prose demands? Read enough to
      decide; do not run it.
-   - **upstream-unverified** — do nothing locally; point at the
-     frontier entry it is waiting on.
+   - **waiting** entries — do nothing locally; point at the queued
+     entry they are waiting on.
 3. While reading, also flag: compute-spec scope creep (compute code
    writing under `reports/` or importing plotting libraries, or a
    compute `Output:` naming a `reports/` path), spec state
@@ -141,7 +149,7 @@ Start mechanical, end judgmental:
    `## Artefact design` on report entries, and `references:` targets
    never mentioned in the body.
 4. Report as a table: entry / status / repair kind (mind, machine,
-   patience) / notes. For entries you judged, end each note with a
+   mind + machine, patience) / notes. For entries you judged, end each note with a
    **proposed verdict** — "propose vouch ok" or "propose reject:
    <reason>" — for the human or a critic session to act on. Do not
    act on it yourself (see the one rule).
@@ -153,12 +161,13 @@ existence is enough), do not compile anything under `reports/`.
 
 After (or as part of) an audit:
 
-- **rejected** or **audit needed** entries outrank everything: a
-  contract and its code have diverged, and machine repairs downstream
-  of them are wasted until a mind rules.
-- Then **stale** entries, in dependency order — that is one
-  `specthis run --stale` away (`-p 4` rebuilds independent branches
-  concurrently; dependency order still holds).
+- The **mind queue** (rejected / unvouched) outranks everything: a
+  contract and its code have diverged, and only a mind can rule. The
+  machine queue clears in parallel — reruns are mechanical and do not
+  wait on judgment (only a *rejected* definition blocks its rerun).
+- The **machine queue** (stale / never-run), in dependency order, is
+  one `specthis run --stale` away (`-p 4` rebuilds independent
+  branches concurrently; dependency order still holds).
 - Then **unimplemented** entries whose contract is a small variant of
   a ready one — the natural next authoring step.
 
@@ -187,7 +196,7 @@ Only when explicitly asked:
 ### 4. Refresh memory at the start of a session
 
 1. Read `specs/README.md`, then this file.
-2. Run `specthis check` for the live frontier.
+2. Run `specthis check` for the live queues.
 3. Read the spec(s) relevant to the user's topic plus their
    `references:`.
 4. Then ask what they want, or audit if they implicitly asked.

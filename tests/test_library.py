@@ -108,6 +108,14 @@ def test_library_ladder_stops_at_the_vouch(root: Path) -> None:
     assert statuses(root)["estimator-core"] is Status.READY  # no run needed, ever
 
 
+def test_library_lives_only_on_the_vouch_axis(root: Path) -> None:
+    add_library(root)
+    ready_all(root)
+    r = check_project(load_project(root))["estimator-core"]
+    assert r.realization is None  # no run, no output: no value-level existence
+    assert r.computable and r.realized
+
+
 def test_spec_edit_is_finally_picked_up(root: Path) -> None:
     """THE motivating case: an estimators.md edit must reach the ledger."""
     add_library(root)

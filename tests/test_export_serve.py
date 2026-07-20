@@ -35,6 +35,9 @@ def test_export_writes_html_and_index(root: Path) -> None:
     assert entry["status"] == "ready"
     assert entry["vouch"]["attester"] == "critic"
     assert entry["run"]["executor"] == "local"
+    assert entry["certification"] == "certified"
+    assert entry["realization"] == "current"
+    assert entry["computable"] and entry["realized"]
 
 
 def test_activity_log_lists_ledger_claims_and_journal_newest_first(root: Path) -> None:
@@ -144,9 +147,12 @@ def test_status_table_focus_and_detail(root: Path) -> None:
 
 def test_detail_card_diagnoses_broken_entries(root: Path) -> None:
     make_ready(root)
-    (root / "scripts/fit_beta.py").write_text("# edited\n")  # fit-beta -> audit
+    (root / "scripts/fit_beta.py").write_text("# edited\n")  # fit-beta -> both queues
     page, _ = render(load_project(root))
-    assert '<span class="lbl">why</span> spec or code moved since vouch' in page
+    assert (
+        '<span class="lbl">why</span> mind: spec or code moved since vouch; '
+        "machine: moved: scripts/fit_beta.py" in page
+    )
     assert '<span class="lbl">why</span> waiting on fit-beta' in page  # fig-beta
 
 
@@ -344,7 +350,7 @@ def test_dashboard_rerenders_only_on_change(root: Path) -> None:
     write(root, "scripts/fit_alpha.py", "# edited\n")
     assert dash.refresh() is True
     assert dash.token == token + 1
-    assert "audit needed" in dash.html
+    assert "unvouched" in dash.html
 
 
 def test_dashboard_survives_parse_errors(root: Path) -> None:
@@ -383,7 +389,7 @@ def test_server_end_to_end(root: Path) -> None:
         _, body = get("/__state")
         assert json.loads(body)["token"] == token + 1
         _, body = get("/")
-        assert b"audit needed" in body
+        assert b"unvouched" in body
     finally:
         httpd.shutdown()
         httpd.server_close()

@@ -43,20 +43,28 @@ computed; computation need not be judged.
 **Claims are shallow; trust propagates.** A vouch covers only the
 entry's own blobs, never its dependencies' contents. When something
 upstream moves, downstream vouches do not expire — they get flagged.
-`specthis check` walks the DAG and diagnoses, per entry, which repair
-is needed:
+`specthis check` walks the DAG and reports every entry on two
+independent axes — the two trees the ledgers already keep apart:
 
-- **audit needed** — your own spec or code moved (or was never judged);
-  re-judge, then vouch.
-- **rejected** — a judge said no at exactly these digests; something
-  must change.
-- **stale** — inputs moved, or output bytes were edited in place;
-  re-run. Machine work, no judgment.
-- **upstream-unverified** — your claim stands but rests on ground that
-  moved; fix upstream and this heals for free.
+- the **vouch state** (the definition, a mind's tree): **unvouched** —
+  your spec or code moved, or was never judged; re-judge, then vouch.
+  **rejected** — a judge said no at exactly these digests; something
+  must change. **unimplemented** — no code yet. **certified** —
+  a non-author vouched at the current digests.
+- the **run state** (the realization, a machine's tree): **stale** —
+  inputs moved, or output bytes were edited in place; re-run, no
+  judgment. **never-run** — no recorded call. **current** — the
+  recorded call matches today's inputs. (Library entries have no run
+  state — their chain stops at code.)
+
+An entry can be broken on both axes at once: the machine reruns it
+while a mind audits it — only a *rejected* definition blocks its
+rerun. **ready** is the conjunction (certified · current, whole
+lineage included); an entry green on both axes but resting on moved
+ground is **waiting** — fix upstream and it heals for free.
 
 Absent bytes are none of these. An entry whose claim stands but whose
-declared outputs are not on this disk reads **ready** marked *bytes
+declared outputs are not on this disk reads **current** marked *bytes
 remote* — a byte-locality fact, not a break. Nothing recomputes it,
 downstream signatures still compose (they read the recorded digest),
 and `specthis cache fetch <entry>` materializes the bytes — verified
@@ -184,7 +192,7 @@ references:                # other spec FILES read for vocabulary —
 ```
 
 The entire file — frontmatter included — is the contract: any edit
-returns the file's entries to *audit needed*. There is no `depends_on:`
+returns the file's entries to *unvouched*. There is no `depends_on:`
 (retired: it conflated the two edge kinds) and no `Status:` anywhere —
 status is derived, never authored.
 
@@ -198,13 +206,13 @@ reshuffling groups never touches the ledger. They carry no semantics:
 not edges, not status, just navigation.
 
 `skip: true` comments a spec out while developing: its entries leave
-the frontier and every count, `run`/`vouch` refuse them, their ledger
+both queues and every count, `run`/`vouch` refuse them, their ledger
 rows stay but go dormant, and the body is not grammar-checked (a
 half-written entry block is fine). The dashboard still renders the
 spec, greyed and marked *skipped*. Anything that `consumes:` a skipped
 entry becomes a lint problem — skip downstream too, or unwire the
 edge. Honesty is content-addressed: a spec edited while skipped comes
-back as *audit needed* (its bytes moved), while a pure skip/un-skip
+back as *unvouched* (its bytes moved), while a pure skip/un-skip
 round-trip restores the exact vouched bytes and trust returns with
 them.
 
@@ -214,7 +222,7 @@ Valid `kind:` values:
 |---------------|---------|
 | `meta`        | About specs themselves: index, agent behaviour. |
 | `definitions` | Pure vocabulary other specs reference (conventions, notation). No entries — and therefore invisible to the ledger; use `library` when the vocabulary is implemented by code. |
-| `library`     | Contracts on **package code with no artefact** — the chain stops at code. Entries carry no `Output:`; each MUST be bound to its module(s) in `bindings.toml` (no convention default). Status ladder stops at the vouch: a library entry is *ready* when a non-author vouched it at the current digests. Consumable: downstream `consumes:` edges take its code manifest as the upstream digest, so a module edit flags the entry *audit needed* and makes its consumers *stale*. Library-bound modules are carved out of the `[package]` blob. |
+| `library`     | Contracts on **package code with no artefact** — the chain stops at code. Entries carry no `Output:`; each MUST be bound to its module(s) in `bindings.toml` (no convention default). A library entry lives only on the vouch axis (no run state): it is *ready* when a non-author vouched it at the current digests. Consumable: downstream `consumes:` edges take its code manifest as the upstream digest, so a module edit flags the entry *unvouched* and makes its consumers *stale*. Library-bound modules are carved out of the `[package]` blob. |
 | `templates`   | Reusable table / figure patterns: palette, layout, reference implementation. |
 | `compute`     | Named entries with an `Output:` contract that produce JSON / data. Usually `tier: intensive`. |
 | `report`      | Named entries with an `Export outputs:` contract that produce figures/tables. Quick. |
@@ -222,7 +230,7 @@ Valid `kind:` values:
 The `definitions` / `library` split answers "when does an edit get
 picked up?": a `definitions` edit is picked up only when a human next
 reads the file; a `library` edit is picked up by the ledger — the
-entry returns to *audit needed* and everything consuming it waits on
+entry returns to *unvouched* and everything consuming it waits on
 the re-vouch.
 
 ## What a specification looks like
@@ -262,9 +270,10 @@ is split across two files — `compute-<name>.md` for the fit,
 ## The five verbs
 
 ```bash
-specthis check                 # the frontier: local breaks itemized,
-                               #   downstream summarized; non-zero exit on any local break
-specthis status [entry]        # every entry's status / one entry in detail,
+specthis check                 # the two queues (mind: definitions, machine: realizations)
+                               #   itemized, waiting summarized per tree; non-zero exit
+                               #   while either queue is non-empty
+specthis status [entry]        # every entry's status + both axes / one entry in detail,
                                #   including WHICH input moved
 specthis run <entry>           # resolve + record upstream digests, dispatch
                                #   (local or scripthut per bindings), write runs.toml

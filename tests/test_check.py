@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from specthis.check import CheckError, Status, check_project, frontier
+from specthis.check import (
+    Certification,
+    CheckError,
+    Realization,
+    Status,
+    check_project,
+    frontier,
+)
 from specthis.parse import load_project
 
 from .conftest import COMPUTE_ALPHA, fake_run, make_ready, vouch_ok, write
@@ -170,3 +177,57 @@ def test_check_never_writes(root: Path) -> None:
     before = [p.read_bytes() for p in ledgers]
     check_project(load_project(root))
     assert [p.read_bytes() for p in ledgers] == before
+
+
+# ------------------------------------------------------------- the two axes
+#
+# ``status`` flattens two independent coordinates (certification breaks
+# win); the axes keep the corners the single word cannot say.
+
+
+def test_code_edit_breaks_both_axes(root: Path) -> None:
+    """A code edit expires the vouch AND moves the run signature: the
+    flattened word can only say AUDIT_NEEDED, the axes say both."""
+    make_ready(root)
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    r = report(root, "fit-alpha")
+    assert r.status is Status.AUDIT_NEEDED  # legacy word unchanged
+    assert r.certification is Certification.UNVOUCHED
+    assert r.realization is Realization.STALE
+    assert r.moved == ["scripts/fit_alpha.py"]  # run-axis attribution, never vouch-gated
+
+
+def test_spec_prose_edit_breaks_only_the_vouch_axis(root: Path) -> None:
+    """Pure mind-work: the definition moved, every byte is current."""
+    make_ready(root)
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + "\nTighter contract.\n")
+    r = report(root, "fit-alpha")
+    assert r.status is Status.AUDIT_NEEDED
+    assert r.certification is Certification.UNVOUCHED
+    assert r.realization is Realization.CURRENT
+
+
+def test_composition_separates_waiting_on_mind_from_machine(root: Path) -> None:
+    make_ready(root)
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + "\nTighter contract.\n")
+    down = report(root, "fit-beta")
+    assert down.status is Status.UPSTREAM_UNVERIFIED
+    assert down.certification is Certification.CERTIFIED
+    assert down.realization is Realization.CURRENT
+    assert not down.computable  # a mind must re-certify fit-alpha first
+    assert down.realized  # nothing anywhere for a machine to redo
+
+
+def test_ready_is_exactly_computable_and_realized(root: Path) -> None:
+    """The conjunction identity across joint states: fresh project, all
+    green, mind-break upstream, then machine-break on top."""
+    changes = [
+        lambda: None,  # fresh: nothing vouched, nothing run
+        lambda: make_ready(root),
+        lambda: write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + "\nEdit.\n"),
+        lambda: write(root, "hut.fit-alpha.json", '{"backend": "pbs"}\n'),
+    ]
+    for change in changes:
+        change()
+        for r in check_project(load_project(root)).values():
+            assert (r.status is Status.READY) == (r.computable and r.realized), r.entry

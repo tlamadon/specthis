@@ -23,7 +23,7 @@ completion.
    `specs/bindings.toml`) to confirm the expected output path and any
    milestone-log markers (search for `print(`, `logger.info`, `tqdm`).
    If the experiment is a spec entry, run `specthis status <entry>`
-   first — if it is not `stale` (and has a recorded run), ask the
+   first — if its run state is not `stale` or `never-run`, ask the
    parent whether to force-rerun before launching anything. Never
    infer freshness from mtimes.
 2. **Launch in the background.** If the experiment is a spec entry,

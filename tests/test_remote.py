@@ -235,7 +235,7 @@ def test_run_stale_leaves_remote_bytes_alone(root: Path, store: Path) -> None:
 
     result = run_cli("run", "--stale", "--path", str(root))
     assert result.exit_code == 0, result.output
-    assert "rebuilt 0 stale" in result.output
+    assert "rebuilt 0 entries" in result.output
     assert not (root / "results/alpha/fit.json").exists(), (
         "never recomputed just because the bytes are not local"
     )

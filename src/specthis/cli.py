@@ -19,15 +19,17 @@ import click
 
 from . import __version__, hashing
 from .check import (
-    LOCAL_BREAKS,
+    Certification,
+    Realization,
     Report,
     Status,
     check_project,
     code_manifest,
     code_sha,
     expected_inputs,
-    frontier,
     is_library,
+    machine_repairable,
+    queues,
     topo_order,
 )
 from .install import init_specs_dir, install_agents, install_commands
@@ -91,20 +93,26 @@ def _path_option(f):
     )(f)
 
 
-def _hint(report: Report, project: Project) -> str:
-    if report.status is Status.UNIMPLEMENTED:
+def _mind_hint(report: Report, project: Project) -> str:
+    """Why this definition needs a mind (the vouch-axis diagnosis)."""
+    if report.certification is Certification.UNIMPLEMENTED:
         scripts = project.entries[report.entry].binding.scripts
         return "no code at " + ", ".join(scripts)
-    if report.status is Status.AUDIT_NEEDED:
+    if report.certification is Certification.UNVOUCHED:
         if report.expired:
             return "moved since vouch: " + "; ".join(report.expired)
         return "spec or code moved since vouch" if report.vouch else "never vouched"
-    if report.status is Status.REJECTED and report.vouch is not None:
+    if report.certification is Certification.REJECTED and report.vouch is not None:
         v = report.vouch
         return f"rejected by {v.attester}" + (f": {v.note}" if v.note else "")
-    if report.status is Status.STALE:
-        if report.run is None:
-            return "never run"
+    return ""
+
+
+def _machine_hint(report: Report) -> str:
+    """Why this realization needs a machine (the run-axis diagnosis)."""
+    if report.realization is Realization.NEVER_RUN:
+        return "never run"
+    if report.realization is Realization.STALE:
         return "moved: " + ", ".join(report.moved)
     return ""
 
@@ -121,32 +129,57 @@ def main() -> None:
 @main.command("check")
 @_path_option
 def check_cmd(project_path: Path) -> None:
-    """Report the frontier: local breaks itemized, downstream summarized.
+    """Report the two queues: definitions needing a mind, realizations
+    needing a machine. An entry can sit in both (the mind audits while
+    the machine reruns). Downstream waiting is summarized per tree.
 
-    Exits non-zero if any entry is broken for local reasons
-    (unimplemented / audit needed / rejected / stale) or the spec
-    directory has grammar problems (see `specthis lint`).
+    Exits non-zero if either queue is non-empty or the spec directory
+    has grammar problems (see `specthis lint`).
     """
     project, problems = _load_lenient(project_path)
     _echo_problems(problems)
     reports = check_project(project)
-    local, waiting, ready = frontier(reports)
-    if local:
-        click.echo("frontier (broken for local reasons):")
-        for r in sorted(local, key=lambda r: r.entry):
-            click.echo(f"  {r.status.value:<15} {r.entry:<28} {_hint(r, project)}")
+    mind, machine = queues(reports)
+    if mind:
+        click.echo("vouch tree — definitions needing a mind:")
+        for r in sorted(mind, key=lambda r: r.entry):
+            click.echo(f"  {r.certification.value:<14} {r.entry:<28} {_mind_hint(r, project)}")
+    if machine:
+        click.echo("run tree — realizations needing a machine:")
+        for r in sorted(machine, key=lambda r: r.entry):
+            joint = "" if r.certification is Certification.CERTIFIED else " (unvouched)"
+            real = r.realization.value if r.realization else ""
+            click.echo(f"  {real:<14} {r.entry:<28} {_machine_hint(r)}{joint}")
+    waiting = [
+        r
+        for r in reports.values()
+        if r.certification is Certification.CERTIFIED
+        and not machine_repairable(r)
+        and not (r.computable and r.realized)
+    ]
     if waiting:
-        click.echo(f"waiting on the frontier: {waiting} upstream-unverified")
+        minds_up = sum(1 for r in waiting if not r.computable)
+        machines_up = sum(1 for r in waiting if not r.realized)
+        detail = ", ".join(
+            part
+            for part in (
+                f"{minds_up} on minds" if minds_up else "",
+                f"{machines_up} on machines" if machines_up else "",
+            )
+            if part
+        )
+        click.echo(f"waiting on upstream: {len(waiting)} ({detail})")
     remote = sorted(r.entry for r in reports.values() if not r.materialized)
     if remote:
         click.echo(
             f"bytes not local (claim stands; `specthis cache fetch` materializes): "
             f"{', '.join(remote)}"
         )
+    ready = sum(1 for r in reports.values() if r.computable and r.realized)
     skipped = f" (+{len(project.skipped_entries)} skipped)" if project.skipped_entries else ""
     click.echo(f"ready: {ready}/{len(reports)}{skipped}")
 
-    if local or problems:
+    if mind or machine or problems:
         sys.exit(1)
 
 
@@ -188,13 +221,17 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
             e = project.entries[name]
             kind = e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}"
             marker = "" if r.materialized else "   [bytes remote]"
-            click.echo(f"  {r.status.value:<20} {name:<28} {kind}{marker}")
+            axes = r.certification.value + (
+                f" · {r.realization.value}" if r.realization else ""
+            )
+            click.echo(f"  {r.status.value:<20} {axes:<24} {name:<28} {kind}{marker}")
         return
     _require_active(project, entry)
     r = reports[entry]
     e = project.entries[entry]
     click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.spec.kind}/{e.tier})")
-    click.echo(f"status:    {r.status.value}")
+    axes = r.certification.value + (f" · {r.realization.value}" if r.realization else "")
+    click.echo(f"status:    {r.status.value}  ({axes})")
     click.echo(f"spec_sha:  {r.spec_sha}")
     click.echo(f"code_sha:  {r.code_sha or '(code missing)'}")
     click.echo(f"scripts:   {', '.join(e.binding.scripts)}")
@@ -386,16 +423,16 @@ def _run_stale_parallel(
                 for name in ready:
                     unseen.discard(name)
                     report = reports[name]
-                    if report.status is Status.STALE:
+                    if machine_repairable(report):
                         dispatched += 1
-                        left = sum(1 for m in unseen if reports[m].status is Status.STALE)
+                        left = sum(1 for m in unseen if machine_repairable(reports[m]))
                         pos = f"[{dispatched}/{dispatched + left}]"
                         futures[pool.submit(build, name, pos)] = name
                     elif do_fetch and not report.materialized:
                         futures[pool.submit(materialize, name)] = name
                     else:
-                        if report.status in LOCAL_BREAKS:
-                            skipped.append((name, report.status.value))
+                        if report.certification is not Certification.CERTIFIED:
+                            skipped.append((name, report.certification.value))
                         sorter.done(name)
             if futures:
                 done_set, _ = wait(list(futures), return_when=FIRST_COMPLETED)
@@ -468,9 +505,12 @@ def run_cmd(
     do_adopt: bool,
     project_path: Path,
 ) -> None:
-    """Run one entry (or every stale one) and record the derived claim.
+    """Run one entry (or the whole machine queue) and record the claim.
 
-    Writes runs.toml only; never touches vouches.toml. With --fetch,
+    Writes runs.toml only; never touches vouches.toml. --stale takes
+    the machine queue: every stale or never-run entry with code whose
+    definition is not rejected — certification does not gate compute
+    (an unvouched entry rebuilds while a mind audits it). With --fetch,
     an entry whose recorded claim already matches today's inputs is
     materialized from the cache instead of recomputed. With --adopt,
     nothing runs and no bytes move: the claim certified where the
@@ -515,12 +555,12 @@ def run_cmd(
         _execute_entry(project, entry, push_after=do_push)
         return
     order = topo_order(project)
-    queue = [n for n in order if check_project(project)[n].status is Status.STALE]
+    queue = [n for n in order if machine_repairable(check_project(project)[n])]
     if queue:
         par = f" (up to {jobs} in parallel)" if jobs > 1 else ""
         click.echo(
-            f"{len(queue)} stale entr{'y' if len(queue) == 1 else 'ies'} to rebuild{par}: "
-            + " -> ".join(queue)
+            f"{len(queue)} entr{'y' if len(queue) == 1 else 'ies'} in the machine "
+            f"queue{par}: " + " -> ".join(queue)
         )
     started = time.monotonic()
     failures: list[str] = []
@@ -532,14 +572,14 @@ def run_cmd(
             # Re-derive after every run: an upstream rebuild makes new entries stale.
             reports = check_project(project)
             report = reports[name]
-            if report.status is Status.STALE:
+            if machine_repairable(report):
                 if do_fetch and _try_fetch(project, name):
                     fetched += 1
                     continue
                 # The queue can grow mid-run (an upstream whose output moved
                 # makes new entries stale), so the total is re-counted live.
                 done = ran + fetched
-                left = sum(1 for m in order[i + 1 :] if reports[m].status is Status.STALE)
+                left = sum(1 for m in order[i + 1 :] if machine_repairable(reports[m]))
                 _execute_entry(
                     project, name, push_after=do_push, position=f"[{done + 1}/{done + 1 + left}]"
                 )
@@ -549,9 +589,9 @@ def run_cmd(
                 # to materialize; without it the entry is left alone (never
                 # recomputed just because the bytes are not local).
                 fetched += 1
-            elif report.status in LOCAL_BREAKS:
-                skipped.append((name, report.status.value))
-    summary = f"rebuilt {ran} stale entr{'y' if ran == 1 else 'ies'}"
+            elif report.certification is not Certification.CERTIFIED:
+                skipped.append((name, report.certification.value))
+    summary = f"rebuilt {ran} entr{'y' if ran == 1 else 'ies'}"
     if fetched:
         summary += f", fetched {fetched} from cache"
     if ran or fetched:

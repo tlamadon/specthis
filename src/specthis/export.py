@@ -35,7 +35,13 @@ from urllib.parse import quote
 
 import markdown as _markdown
 
-from .check import LOCAL_BREAKS, Report, Status, check_project
+from .check import (
+    Certification,
+    Realization,
+    Report,
+    check_project,
+    machine_repairable,
+)
 from .dag import dag_svg
 from .icons import ICONS
 from .journal import JournalEntry, load_journal
@@ -51,18 +57,6 @@ _KIND_ORDER = {
     "report": 5,
 }
 
-_STATUS_CLASS = {
-    Status.READY: "ready",
-    Status.STALE: "stale",
-    Status.AUDIT_NEEDED: "audit",
-    Status.REJECTED: "rejected",
-    Status.UNIMPLEMENTED: "unimplemented",
-    Status.UPSTREAM_UNVERIFIED: "upstream",
-}
-
-#: sort key for the status column: enum order is severity order
-#: (most broken first), which beats alphabetical badge text.
-_STATUS_RANK = {s: i for i, s in enumerate(Status)}
 
 
 def _consumed_by(project: Project) -> dict[str, list[str]]:
@@ -95,6 +89,10 @@ def build_index(
                 {
                     "name": entry.name,
                     "status": r.status.value,
+                    "certification": r.certification.value,
+                    "realization": r.realization.value if r.realization else None,
+                    "computable": r.computable,
+                    "realized": r.realized,
                     "outputs": entry.outputs,
                     "scripts": entry.binding.scripts,
                     "workflows": entry.binding.workflows,
@@ -647,8 +645,36 @@ def _output_chip(root: Path, rel: str) -> str:
     return chip
 
 
-def _badge(status: Status) -> str:
-    return f'<span class="badge {_STATUS_CLASS[status]}">{_e(status.value)}</span>'
+#: badge word per axis state, reusing the status palette classes.
+_CERT_CLASS = {
+    Certification.UNIMPLEMENTED: "unimplemented",
+    Certification.UNVOUCHED: "audit",
+    Certification.REJECTED: "rejected",
+    Certification.CERTIFIED: "ready",
+}
+_REAL_CLASS = {
+    Realization.NEVER_RUN: "unimplemented",
+    Realization.STALE: "stale",
+    Realization.CURRENT: "ready",
+}
+#: sort keys: enum order is severity order (most broken first).
+_CERT_RANK = {c: i for i, c in enumerate(Certification)}
+_REAL_RANK = {r: i for i, r in enumerate(Realization)}
+
+
+def _real_rank(r: Report) -> int:
+    return _REAL_RANK[r.realization] if r.realization is not None else 9  # library last
+
+
+def _cert_badge(r: Report) -> str:
+    c = r.certification
+    return f'<span class="badge {_CERT_CLASS[c]}">{_e(c.value)}</span>'
+
+
+def _real_badge(r: Report) -> str:
+    if r.realization is None:  # library: no run axis
+        return '<span class="empty">—</span>'
+    return f'<span class="badge {_REAL_CLASS[r.realization]}">{_e(r.realization.value)}</span>'
 
 
 def _bytes_badge(report: Report) -> str:
@@ -661,16 +687,24 @@ def _bytes_badge(report: Report) -> str:
     )
 
 
-def _hint(report: Report, project: Project) -> str:
-    if report.status is Status.UNIMPLEMENTED:
+def _mind_hint(report: Report, project: Project) -> str:
+    """Why this definition needs a mind (the vouch-axis diagnosis)."""
+    if report.certification is Certification.UNIMPLEMENTED:
         return "no code at " + ", ".join(project.entries[report.entry].binding.scripts)
-    if report.status is Status.AUDIT_NEEDED:
+    if report.certification is Certification.UNVOUCHED:
         return "spec or code moved since vouch" if report.vouch else "never vouched"
-    if report.status is Status.REJECTED and report.vouch is not None:
+    if report.certification is Certification.REJECTED and report.vouch is not None:
         v = report.vouch
         return f"rejected by {v.attester}" + (f": {v.note}" if v.note else "")
-    if report.status is Status.STALE:
-        return "never run" if report.run is None else "moved: " + ", ".join(report.moved)
+    return ""
+
+
+def _machine_hint(report: Report) -> str:
+    """Why this realization needs a machine (the run-axis diagnosis)."""
+    if report.realization is Realization.NEVER_RUN:
+        return "never run"
+    if report.realization is Realization.STALE:
+        return "moved: " + ", ".join(report.moved)
     return ""
 
 
@@ -723,13 +757,13 @@ def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) ->
         )
         moved = (
             f'<div class="moved">moved: {_e(", ".join(r.moved))}</div>'
-            if r.moved and r.status is Status.STALE
+            if r.moved and r.realization is Realization.STALE
             else ""
         )
         rows.append(
             f'<tr id="{_e(_entry_anchor(entry.name))}">'
             f"<td><b>{_e(entry.name)}</b></td>"
-            f"<td>{_badge(r.status)}{_bytes_badge(r)}{moved}</td>"
+            f"<td>{_cert_badge(r)} {_real_badge(r)}{_bytes_badge(r)}{moved}</td>"
             f"<td>{outputs}</td>"
             f"<td>{vouch}</td>"
             f"<td>{run}</td></tr>"
@@ -773,12 +807,12 @@ def _rewrite_spec_links(
 def _worst_dot(spec: SpecFile, reports: dict[str, Report]) -> str:
     if spec.skip:
         return '<span class="dot dot-skip"></span>'
-    statuses = {reports[e.name].status for e in spec.entries}
-    if not statuses:
+    rs = [reports[e.name] for e in spec.entries]
+    if not rs:
         return ""
-    if statuses & LOCAL_BREAKS:
+    if any(r.certification is not Certification.CERTIFIED or machine_repairable(r) for r in rs):
         return '<span class="dot dot-break"></span>'
-    if Status.UPSTREAM_UNVERIFIED in statuses:
+    if any(not (r.computable and r.realized) for r in rs):
         return '<span class="dot dot-wait"></span>'
     return '<span class="dot dot-ready"></span>'
 
@@ -948,21 +982,34 @@ def _broken_section(root: Path, filename: str, problems: list[Problem]) -> str:
 
 
 def _frontier_cell(r: Report) -> str:
-    """Frontier column: broken for local reasons, yes or —. The reason
-    lives in the row's detail card, not here — membership is for
-    scanning, diagnosis is for drilling down."""
-    if r.status not in LOCAL_BREAKS:
-        return '<td data-sort="1"><span class="empty">—</span></td>'
-    return '<td class="frontier-yes" data-sort="0"><b>yes</b></td>'
+    """Frontier column: which actor this entry is waiting for — a mind
+    (vouch tree), a machine (run tree), or both. The diagnosis lives in
+    the row's detail card; membership is for scanning."""
+    mind = r.certification is not Certification.CERTIFIED
+    machine = machine_repairable(r)
+    if not mind and not machine:
+        return '<td data-sort="3"><span class="empty">—</span></td>'
+    label, rank = ("mind + machine", 0) if mind and machine else (
+        ("mind", 1) if mind else ("machine", 2)
+    )
+    return f'<td class="frontier-yes" data-sort="{rank}"><b>{label}</b></td>'
 
 
 def _why(r: Report, entry: Entry, project: Project, reports: dict[str, Report]) -> str:
-    """One line of diagnosis for the detail card: the repair hint for
-    local breaks, the blocking upstreams for a waiting entry."""
-    if r.status in LOCAL_BREAKS:
-        return _hint(r, project)
-    if r.status is Status.UPSTREAM_UNVERIFIED:
-        broken = [u for u in entry.consumes if reports[u].status is not Status.READY]
+    """One line of diagnosis for the detail card: the per-tree repair
+    hints for local breaks, the blocking upstreams for a waiting entry."""
+    parts = []
+    hint = _mind_hint(r, project)
+    if hint:
+        parts.append(f"mind: {hint}")
+    if machine_repairable(r):
+        parts.append(f"machine: {_machine_hint(r)}")
+    if parts:
+        return "; ".join(parts)
+    if not (r.computable and r.realized):
+        broken = [
+            u for u in entry.consumes if not (reports[u].computable and reports[u].realized)
+        ]
         return "waiting on " + ", ".join(broken)
     return ""
 
@@ -1013,7 +1060,7 @@ def _detail_row(
         f'<div class="dep"><span class="lbl">{_e(label)}</span> {value}</div>'
         for label, value in lines
     )
-    return f'<tr class="detail"><td colspan="8"><div class="detail-card">{body}</div></td></tr>'
+    return f'<tr class="detail"><td colspan="9"><div class="detail-card">{body}</div></td></tr>'
 
 
 def _updated_cell(r: Report) -> str:
@@ -1030,15 +1077,13 @@ def _updated_cell(r: Report) -> str:
 
 
 def _cached_cell(r: Report, entry: Entry) -> str:
-    """Cached column: where the certified bytes are. ``disk`` when the
-    standing claim's outputs are on this disk, ``remote`` when the claim
-    stands but the bytes live in the cache (fetchable), em-dash when
-    there are no outputs or no standing claim."""
-    claim_stands = (
-        r.run is not None
-        and r.status in (Status.READY, Status.UPSTREAM_UNVERIFIED)
-        and entry.outputs
-    )
+    """Cached column: where the claimed bytes are — a run-tree fact.
+    ``disk`` when the standing claim's outputs are on this disk,
+    ``remote`` when the claim stands but the bytes live in the cache
+    (fetchable), em-dash when there are no outputs or no standing
+    claim. Certification does not enter: an unvouched entry's bytes
+    are still exactly where its run row says."""
+    claim_stands = r.run is not None and r.realization is Realization.CURRENT and entry.outputs
     if not claim_stands:
         return '<td data-sort=""><span class="empty">—</span></td>'
     if not r.materialized:
@@ -1055,13 +1100,33 @@ def _status_section(
     reports: dict[str, Report],
     problems: list[Problem],
 ) -> str:
-    counts: dict[Status, int] = {}
-    for r in reports.values():
-        counts[r.status] = counts.get(r.status, 0) + 1
+    # One chip group per tree (broken states only), then composition.
+    rs = list(reports.values())
+    tallies = [
+        (n, sum(1 for r in rs if r.certification is c))
+        for c, n in [
+            (Certification.UNIMPLEMENTED, "unimplemented"),
+            (Certification.UNVOUCHED, "unvouched"),
+            (Certification.REJECTED, "rejected"),
+        ]
+    ] + [
+        (n, sum(1 for r in rs if r.realization is x))
+        for x, n in [
+            (Realization.STALE, "stale"),
+            (Realization.NEVER_RUN, "never-run"),
+        ]
+    ]
+    ready = sum(1 for r in rs if r.computable and r.realized)
+    waiting = sum(
+        1
+        for r in rs
+        if r.certification is Certification.CERTIFIED
+        and not machine_repairable(r)
+        and not (r.computable and r.realized)
+    )
+    tallies += [("waiting", waiting), ("ready", ready)]
     chips = "".join(
-        f'<span class="chip"><b>{counts[s]}</b> {_e(s.value)}</span>'
-        for s in Status
-        if counts.get(s)
+        f'<span class="chip"><b>{n}</b> {_e(label)}</span>' for label, n in tallies if n
     ) or '<span class="chip">no entries yet</span>'
     if project.skipped_entries:
         chips += (
@@ -1080,8 +1145,10 @@ def _status_section(
         '<span class="dir"></span></td>'
         f'<td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
         f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
-        f'<td data-sort="{_STATUS_RANK[reports[name].status]}">'
-        f"{_badge(reports[name].status)}</td>"
+        f'<td data-sort="{_CERT_RANK[reports[name].certification]}">'
+        f"{_cert_badge(reports[name])}</td>"
+        f'<td data-sort="{_real_rank(reports[name])}">'
+        f"{_real_badge(reports[name])}</td>"
         f"<td>{_e(e.spec.kind if e.spec.kind == 'library' else f'{e.spec.kind}/{e.tier}')}</td>"
         f"{_frontier_cell(reports[name])}"
         f"{_updated_cell(reports[name])}"
@@ -1098,7 +1165,7 @@ def _status_section(
     all_table = (
         focus_bar
         + '<table class="sortable"><thead><tr><th class="no-sort"></th>'
-        "<th>entry</th><th>spec</th><th>status</th><th>kind/tier</th>"
+        "<th>entry</th><th>spec</th><th>vouch</th><th>run</th><th>kind/tier</th>"
         "<th>frontier</th><th>last update</th><th>cached</th></tr></thead>"
         f"<tbody>{all_rows}</tbody></table>"
         if all_rows
@@ -1110,8 +1177,9 @@ def _status_section(
         dag += (
             '<div class="dag-caption">artefact flow (<code>consumes</code>): '
             "every spec sits below its inputs; rail color is the upstream's "
-            "status, dots count entries by status &mdash; hover a row to "
-            "trace it, click to open the spec</div>"
+            "vouch state (trust flows down), dots count entries by run state "
+            "(vouch state for libraries) &mdash; hover a row to trace it, "
+            "click to open the spec</div>"
         )
 
     return (

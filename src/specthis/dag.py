@@ -4,9 +4,11 @@ The status table answers *which entry, what repair*; these views answer
 *what feeds what*. One node per spec that participates in artefact flow
 (the kinds with entries), one edge per spec-level projection of
 ``consumes:`` — ``references:`` is vocabulary and stays out of the
-picture. Entries collapse to one dot per status with a count (thirty
-same-status entries are one dot, not a bar of thirty), so the frontier
-reads as a boundary: green upstream, a break, its wake downstream.
+picture. Entries collapse to one dot per run state with a count
+(thirty same-state entries are one dot, not a bar of thirty; library
+entries show their vouch state — they have no run axis), so the
+frontier reads as a boundary: green upstream, a break, its wake
+downstream.
 
 Two views share the graph pass:
 
@@ -15,8 +17,9 @@ Two views share the graph pass:
   below the inputs only it consumes; shared foundations float to the
   top, the final deliverable lands last, edgeless specs trail). Edges
   run as vertical rails in a left gutter, one lane per upstream shared
-  by all its out-edges and colored by that upstream's status — trust
-  visibly flows down the page. Scales as a list: no horizontal scroll.
+  by all its out-edges and colored by that upstream's vouch state —
+  trust visibly flows down the page. Scales as a list: no horizontal
+  scroll.
 - **layered** (the figure, `specthis dag`'s default): a Sugiyama-lite
   node-link diagram — longest-path layering, a few barycenter sweeps —
   that shows the pipeline's shape at a glance. Top-down by default
@@ -38,20 +41,24 @@ from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from html import escape
 
-from .check import Report, Status
+from .check import Certification, Realization, Report
 from .icons import svg_icon
 from .parse import ENTRY_KINDS, Project, SpecFile
 from .timefmt import fmt_ago, fmt_duration
 
-#: entry-dot fill per status — the badge palette, saturated enough to
-#: read at dot size. Entries without a report (dormant) use skip grey.
-_DOT_FILL = {
-    Status.READY: "#4d9367",
-    Status.STALE: "#c39117",
-    Status.AUDIT_NEEDED: "#c06a1f",
-    Status.REJECTED: "#a40e26",
-    Status.UNIMPLEMENTED: "#9a958c",
-    Status.UPSTREAM_UNVERIFIED: "#4a7fb5",
+#: axis fills — the badge palette, saturated enough to read at dot
+#: size. Rails and library dots speak the vouch axis; entry dots the
+#: run axis. Entries without a report (dormant) use skip grey.
+_CERT_FILL = {
+    Certification.UNIMPLEMENTED: "#9a958c",
+    Certification.UNVOUCHED: "#c06a1f",
+    Certification.REJECTED: "#a40e26",
+    Certification.CERTIFIED: "#4d9367",
+}
+_REAL_FILL = {
+    Realization.NEVER_RUN: "#9a958c",
+    Realization.STALE: "#c39117",
+    Realization.CURRENT: "#4d9367",
 }
 _SKIP_FILL = "#b9b3a7"
 
@@ -262,24 +269,36 @@ def _lanes(order: list[str], edges: list[tuple[str, str]]) -> dict[str, int]:
 def _dot_groups(
     spec: SpecFile, reports: dict[str, Report]
 ) -> list[tuple[str, int, str, list[str]]]:
-    """Entry dots collapsed per status: (label, count, fill, entry names),
-    severity-ordered (most broken first, skipped last). One dot per
-    status keeps a spec with dozens of same-status entries from
+    """Entry dots collapsed per run state: (label, count, fill, entry
+    names), severity-ordered (most broken first, skipped last). Library
+    entries have no run axis, so their vouch state stands in. One dot
+    per state keeps a spec with dozens of same-state entries from
     bloating into a bar of identical dots."""
-    groups: dict[Status | None, list[str]] = defaultdict(list)
+    groups: dict[tuple[int, str, str], list[str]] = defaultdict(list)
     for entry in spec.entries:
         r = reports.get(entry.name)  # None when dormant under skip: true
-        groups[r.status if r else None].append(entry.name)
+        if r is None:
+            key = (99, "skipped", _SKIP_FILL)
+        elif r.realization is None:  # library: the vouch axis is the whole story
+            c = r.certification
+            key = (list(Certification).index(c), c.value, _CERT_FILL[c])
+        else:
+            x = r.realization
+            key = (10 + list(Realization).index(x), x.value, _REAL_FILL[x])
+        groups[key].append(entry.name)
     return [
-        (
-            status.value if status else "skipped",
-            len(groups[status]),
-            _DOT_FILL[status] if status else _SKIP_FILL,
-            groups[status],
-        )
-        for status in [*Status, None]
-        if status in groups
+        (label, len(names), fill, names)
+        for (_, label, fill), names in sorted(groups.items())
     ]
+
+
+def _rail_fill(spec: SpecFile, reports: dict[str, Report]) -> str:
+    """Rail + origin-dot color: the spec's worst vouch state — trust is
+    what flows down a rail, and trust is the vouch tree's word."""
+    certs = [reports[e.name].certification for e in spec.entries if e.name in reports]
+    if not certs:
+        return _SKIP_FILL
+    return _CERT_FILL[min(certs, key=list(Certification).index)]
 
 
 def _group_advance(count: int) -> int:
@@ -462,6 +481,8 @@ def _entry_json(name: str, reports: dict[str, Report]) -> dict:
     return {
         "name": name,
         "status": r.status.value if r else "skipped",
+        "certification": r.certification.value if r else None,
+        "realization": r.realization.value if r and r.realization else None,
         "ran": run.ran if run else None,
         "run_seconds": run.duration_seconds if run else None,
         "vouched": vouch.vouched if vouch else None,
@@ -625,7 +646,7 @@ def _render_rails(project: Project, reports: dict[str, Report], standalone: bool
         kids = children[u]
         if not kids:
             continue
-        color = groups[u][0][2] if groups[u] else _SKIP_FILL  # severity-ordered: worst first
+        color = _rail_fill(by_name[u], reports)  # trust: the vouch axis
         x = lx(u)
         parts.append(
             f'<path class="rail" data-src="{escape(u)}" stroke="{color}" '
@@ -642,7 +663,7 @@ def _render_rails(project: Project, reports: dict[str, Report], standalone: bool
     mid = _RAILS_ROW_H // 2
     for n in order:
         spec = by_name[n]
-        worst_fill = groups[n][0][2] if groups[n] else _SKIP_FILL
+        worst_fill = _rail_fill(spec, reports)  # the rail's origin speaks trust too
         chips_x = int(label_x + len(n) * 7.2 + 14)
         meta = (
             f'<text class="meta" x="{chips_x + _dots_width(groups[n]) + 16}" '

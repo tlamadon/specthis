@@ -93,15 +93,16 @@ def test_dag_cli_orient_lr(root: Path) -> None:
 
 
 def test_dag_dots_follow_status(root: Path) -> None:
-    # nothing vouched yet: code exists, so every entry is audit-needed.
-    # rails rows show the worst-status dot on the rail plus the chips —
-    # two fills per single-status spec.
+    # nothing vouched or run yet: the rail origin dots speak the vouch
+    # axis (unvouched orange), the entry chips the run axis (never-run
+    # grey) — the two trees visible on one drawing.
     svg = _svg(render(load_project(root))[0])
-    assert svg.count('fill="#c06a1f"') == 6
-    assert "audit needed (1): fit-alpha" in svg  # group tooltip names the entries
+    assert svg.count('fill="#c06a1f"') == 3  # origin dots: unvouched
+    assert svg.count('fill="#9a958c"') == 3  # entry chips: never-run
+    assert "never-run (1): fit-alpha" in svg  # group tooltip names the entries
     make_ready(root)
     svg = _svg(render(load_project(root))[0])
-    assert svg.count('fill="#4d9367"') == 6
+    assert svg.count('fill="#4d9367"') == 6  # certified origins + current chips
 
 
 _REPORT_MANY = """\
@@ -141,11 +142,11 @@ def test_dag_dots_aggregate_per_status(root: Path) -> None:
     )
     assert m is not None
     node = m.group(0)
-    # three same-status entries collapse to one chip dot carrying the
-    # count (plus the row's worst-status dot on the rail)
+    # three same-state entries collapse to one chip dot carrying the
+    # count (plus the row's vouch-axis dot on the rail)
     assert node.count("<circle") == 2
     assert ">3</text>" in node
-    assert "unimplemented (3): exp-one, exp-two, exp-three" in node
+    assert "never-run (3): exp-one, exp-two, exp-three" in node
 
 
 def test_dag_omitted_when_no_flow(tmp_path: Path) -> None:
@@ -261,6 +262,8 @@ def test_dag_json_matches_the_svg_picture(root: Path) -> None:
         {
             "name": "fit-beta",
             "status": "ready",
+            "certification": "certified",
+            "realization": "current",
             "ran": "2026-01-01T00:00:00+00:00",
             "run_seconds": None,
             "vouched": "2026-01-01T00:00:00+00:00",

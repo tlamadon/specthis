@@ -1,20 +1,21 @@
 ---
-description: Rebuild the machine-repairable (stale) spec entries in dependency order, fetching from the cache when configured, and report the new frontier.
+description: Rebuild the machine queue (stale and never-run spec entries) in dependency order, fetching from the cache when configured, and report both queues after.
 ---
 
-The user ran `/specthis-run $ARGUMENTS` — clear the machine-repairable
-part of the frontier. This is machine work: no judgment, no vouching,
-runs.toml is the only ledger touched.
+The user ran `/specthis-run $ARGUMENTS` — clear the machine queue.
+This is machine work: no judgment, no vouching, runs.toml is the only
+ledger touched. An unvouched entry still rebuilds — certification
+does not gate compute; only a `rejected` definition does.
 
-1. Run `specthis check`. If nothing is `stale`, report the frontier
-   as-is and stop — what remains needs a mind (`/specthis-vouch`) or
-   an author, not a machine.
+1. Run `specthis check`. If there is no "realizations needing a
+   machine" section, report the queues as-is and stop — what remains
+   needs a mind (`/specthis-vouch`) or an author, not a machine.
 2. Decide the command:
    - Arguments given → they are entry names: run each with
      `specthis run <entry>`, upstream-first if several.
-   - No arguments → `specthis run --stale` (topo order, skips
-     entries that need a mind).
-   - Add `-p 4` (`--parallel`) when the stale queue spans independent
+   - No arguments → `specthis run --stale` (topo order, the machine
+     queue; skips only `rejected` and `unimplemented` definitions).
+   - Add `-p 4` (`--parallel`) when the machine queue spans independent
      branches of the DAG — independent entries rebuild concurrently,
      and an entry still starts only after all its upstreams have
      recorded their claims. Keep intensive-tier queues serial unless
@@ -25,14 +26,14 @@ runs.toml is the only ledger touched.
      `specs/bindings.toml` or `SPECTHIS_CACHE_URL` is set) — verified
      bytes beat recompute. Add `--push` too if the user asked to
      share results.
-   - Entries reading `ready` with `bytes not local` are NOT stale and
-     need nothing: the claim stands, the bytes live in the cache.
+   - Entries reading `current` with `bytes not local` are NOT stale
+     and need nothing: the claim stands, the bytes live in the cache.
      `--fetch` materializes them only if a local step actually needs
      the files; never re-run an entry just to get bytes back.
    - An entry that ran remotely and was certified there
      (`specthis manifest` on the compute machine) is recorded here
      with `specthis run <entry> --adopt` — no execution, no bytes.
-3. **Respect the tiers.** If the stale queue contains
+3. **Respect the tiers.** If the machine queue contains
    `tier: intensive` entries (check the spec frontmatter or
    `specs/_index.json`), do not block on them casually:
    - confirm with the user before launching anything expected to burn
@@ -42,8 +43,8 @@ runs.toml is the only ledger touched.
      or hand off to the `experiment-runner` subagent.
    Quick-tier queues can just run in the foreground.
 4. **Relay progress, not silence.** `specthis run --stale` narrates
-   itself: an upfront plan line (`3 stale entries to rebuild: a -> b
-   -> c`), a `[k/N]` counter per entry, and after each run its wall
+   itself: an upfront plan line (`3 entries in the machine queue:
+   a -> b -> c`), a `[k/N]` counter per entry, and after each run its wall
    time plus what it did to the DAG — `output unchanged — downstream
    claims unaffected` (the cascade is cut there) or `output moved — N
    consumer(s) now stale: …` (the queue just grew). For a long or
@@ -55,8 +56,9 @@ runs.toml is the only ledger touched.
    for a queue before launching it.
 5. When the run finishes, run `specthis check` again and report:
    what was rebuilt, what was fetched from cache, how long it took,
-   what was skipped as needing a mind (that list is the
-   `/specthis-vouch` queue), and the new frontier.
+   what was skipped (rejected/unimplemented definitions), and both
+   queues fresh — anything under "definitions needing a mind" is the
+   `/specthis-vouch` queue.
 
 Never run `specthis vouch` here. If a run fails, report the failure
 and the entry's log tail — nothing is recorded for failed runs, so
