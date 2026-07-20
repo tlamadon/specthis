@@ -223,7 +223,7 @@ Valid `kind:` values:
 | `meta`        | About specs themselves: index, agent behaviour. |
 | `definitions` | Pure vocabulary other specs reference (conventions, notation). No entries — and therefore invisible to the ledger; use `library` when the vocabulary is implemented by code. |
 | `library`     | Contracts on **package code with no artefact** — the chain stops at code. Entries carry no `Output:`; each MUST be bound to its module(s) in `bindings.toml` (no convention default). A library entry lives only on the vouch axis (no run state): it is *ready* when a non-author vouched it at the current digests. Consumable: downstream `consumes:` edges take its code manifest as the upstream digest, so a module edit flags the entry *unvouched* and makes its consumers *stale*. Library-bound modules are carved out of the `[package]` blob. |
-| `templates`   | Reusable table / figure patterns: palette, layout, reference implementation. |
+| `templates`   | Reusable table / figure patterns: palette, layout, captioning rules, a reference snippet to copy. No entries — ledger-invisible like `definitions`; report specs pull one in via `references:`. See "Templates" below. |
 | `compute`     | Named entries with an `Output:` contract that produce JSON / data. Usually `tier: intensive`. |
 | `report`      | Named entries with an `Export outputs:` contract that produce figures/tables. Quick. |
 
@@ -232,6 +232,35 @@ picked up?": a `definitions` edit is picked up only when a human next
 reads the file; a `library` edit is picked up by the ledger — the
 entry returns to *unvouched* and everything consuming it waits on
 the re-vouch.
+
+## Templates: reusable artefact patterns
+
+A `templates` spec pins how a *family* of figures or tables should
+look: palette, axis and unit conventions, layout grid, captioning
+rules — plus a short reference snippet exporters copy from. Report
+specs adopt a pattern by listing the file in `references:` and saying
+so in their `## Artefact design` prose ("follows `fig-style.md`").
+
+Three look-alike kinds, one decision rule:
+
+- prose vocabulary other specs cite → `definitions`;
+- a figure/table pattern reports should follow (prose + a copyable
+  snippet) → `templates`;
+- shared code whose correctness should carry trust (a plotting module
+  the exporters import) → `library`, bound to its module(s) in
+  `bindings.toml`.
+
+Like `definitions`, a `templates` spec has no entries: nothing to
+run, nothing to vouch, invisible to both ledgers. The pattern is
+enforced by the minds that write and judge the report entries — a
+critic auditing a report whose spec references a template reads the
+template too and judges "follows the pattern" as part of contract in
+spirit. Consequently a template edit is picked up when a mind next
+reads it (reports vouched against the old pattern stay vouched); if
+you need the *machine* to notice a change — restyle once, every
+consumer goes stale — put the shared part in a `library` module and
+let the exporters import it. The `references:` edge is deliberately
+ledger-invisible either way.
 
 ## What a specification looks like
 
