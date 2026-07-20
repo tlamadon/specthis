@@ -1054,7 +1054,7 @@ def _detail_row(
         f'<div class="dep"><span class="lbl">{_e(label)}</span> {value}</div>'
         for label, value in lines
     )
-    return f'<tr class="detail"><td colspan="8"><div class="detail-card">{body}</div></td></tr>'
+    return f'<tr class="detail"><td colspan="9"><div class="detail-card">{body}</div></td></tr>'
 
 
 def _cached_cell(r: Report, entry: Entry) -> str:
@@ -1077,6 +1077,12 @@ def _cached_cell(r: Report, entry: Entry) -> str:
 
 
 _EMPTY = '<span class="empty">—</span>'
+
+
+def _kind_tier(e: Entry) -> str:
+    """`library` bare (tier is meaningless there), `kind/tier` otherwise —
+    on the run page the tier is the rebuild-cost signal next to `stale`."""
+    return _e(e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}")
 
 
 def _chip_row(tallies: list[tuple[str, int]]) -> str:
@@ -1130,6 +1136,7 @@ def _vouch_section(
             '<span class="dir"></span></td>'
             f'<td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
             f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
+            f"<td>{_kind_tier(e)}</td>"
             f'<td data-sort="{_CERT_RANK[r.certification]}">{_cert_badge(r)}</td>'
             f"<td>{_e(v.attester) if v else _EMPTY}</td>"
             f"{_stamp_cell(v.vouched if v else None)}"
@@ -1146,7 +1153,7 @@ def _vouch_section(
     table = (
         focus_bar
         + '<table class="sortable"><thead><tr><th class="no-sort"></th>'
-        "<th>entry</th><th>spec</th><th>vouch state</th><th>by</th>"
+        "<th>entry</th><th>spec</th><th>kind/tier</th><th>vouch state</th><th>by</th>"
         "<th>vouched</th><th>took</th><th>moved since vouch</th></tr></thead>"
         f'<tbody>{"".join(rows)}</tbody></table>'
         if rows
@@ -1197,6 +1204,7 @@ def _run_section(project: Project, reports: dict[str, Report]) -> str:
             f'<tr class="entry-row" data-name="{_e(name)}">'
             f'<td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
             f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
+            f"<td>{_kind_tier(e)}</td>"
             f'<td data-sort="{_real_rank(r)}">{_real_badge(r)}{_bytes_badge(r)}</td>'
             f"{_stamp_cell(run.ran if run else None)}"
             f"<td>{_e(run.executor) if run else _EMPTY}</td>"
@@ -1207,7 +1215,7 @@ def _run_section(project: Project, reports: dict[str, Report]) -> str:
         )
     table = (
         '<table class="sortable"><thead><tr>'
-        "<th>entry</th><th>spec</th><th>run state</th><th>ran</th>"
+        "<th>entry</th><th>spec</th><th>kind/tier</th><th>run state</th><th>ran</th>"
         "<th>via</th><th>took</th><th>cached</th><th>moved</th></tr></thead>"
         f'<tbody>{"".join(rows)}</tbody></table>'
         if rows

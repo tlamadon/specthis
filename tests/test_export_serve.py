@@ -139,6 +139,8 @@ def test_tree_pages_columns_and_sorter(root: Path) -> None:
         assert th in page
     for th in ("<th>run state</th>", "<th>ran</th>", "<th>via</th>", "<th>cached</th>"):
         assert th in page
+    assert page.count("<th>kind/tier</th>") == 2  # on both tree pages
+    assert ">compute/quick</td>" in page
     assert '<section class="spec" id="vouch">' in page
     assert '<section class="spec" id="run">' in page
     assert '<table class="sortable">' in page
