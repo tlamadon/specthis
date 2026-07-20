@@ -40,6 +40,7 @@ from .dag import dag_svg
 from .icons import ICONS
 from .journal import JournalEntry, load_journal
 from .parse import _FRONTMATTER, Entry, Problem, Project, SpecFile, load_project_lenient
+from .timefmt import fmt_ago, fmt_duration
 
 _KIND_ORDER = {
     "meta": 0,
@@ -221,6 +222,9 @@ section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
 .badge.upstream      { background: #dce9f5; color: #23629c; }
 .badge.skipped       { background: #eeece6; color: #8a857a; }
 .badge.remote-bytes  { background: #e8e4f4; color: #4b3d8f; }
+.badge.evt-vouch     { background: #dff0e4; color: #1a5c33; }
+.badge.evt-run       { background: #dce9f5; color: #23629c; }
+.badge.evt-journal   { background: #eeece6; color: #8a857a; }
 .warnings { background: #fff; border: 1px solid var(--border);
   border-left: 4px solid #b85a1e; border-radius: 8px; padding: 12px 16px;
   margin-bottom: 20px; font-size: 0.9rem; }
@@ -700,10 +704,13 @@ def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) ->
             )
             continue
         if r.vouch:
-            note = f" — {r.vouch.note}" if r.vouch.note else ""
+            # Full note is a wall of text — keep the cell to verdict/attester/date
+            # and stash the note in a hover tooltip.
+            title = f' title="{_e(r.vouch.note)}"' if r.vouch.note else ""
             vouch = (
-                f'{_e(r.vouch.verdict)} <span class="who">by {_e(r.vouch.attester)}, '
-                f"{_e(r.vouch.vouched[:10])}{_e(note)}</span>"
+                f"<span{title}>{_e(r.vouch.verdict)} "
+                f'<span class="who">by {_e(r.vouch.attester)}, '
+                f"{_e(r.vouch.vouched[:10])}</span></span>"
             )
         else:
             vouch = '<span class="empty">—</span>'
@@ -851,7 +858,9 @@ def _sidebar(
         f'<div class="meta-line">{len(project.specs) + len(broken)} files &middot; generated {_e(generated[:10])}</div>',
         '<div class="nav-group">'
         '<div class="nav-file" data-file-anchor="status">'
-        '<a href="#status">Status dashboard</a></div></div>',
+        '<a href="#status">Status dashboard</a></div>'
+        '<div class="nav-file" data-file-anchor="activity">'
+        '<a href="#activity">Activity log</a></div></div>',
     ]
     if broken:
         parts.append(
@@ -1170,6 +1179,84 @@ def _spec_section(
     )
 
 
+def _when_cell(iso: str, now: datetime) -> str:
+    ago = fmt_ago(iso, now)
+    return (
+        f'<td data-sort="{_e(iso)}" title="{_e(iso)}">{_e(ago)} '
+        f'<span class="who">{_e(iso[:10])}</span></td>'
+    )
+
+
+def _activity_section(
+    reports: dict[str, Report],
+    journal: list[JournalEntry],
+    generated: str,
+) -> str:
+    """The activity log: every entry's current vouch and run, plus the
+    journal, as one feed newest-first. The ledgers keep one row per
+    entry (a re-vouch or re-run replaces the prior claim), so this is
+    each entry's latest happening of each kind — not an append-only
+    history."""
+    now = datetime.fromisoformat(generated)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    empty = '<span class="empty">—</span>'
+    events: list[tuple[str, str]] = []  # (ISO stamp — the sort key, <tr> html)
+    for name, r in sorted(reports.items()):
+        link = f'<a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a>'
+        if r.vouch:
+            v = r.vouch
+            badge = (
+                '<span class="badge rejected">rejected</span>'
+                if v.verdict == "rejected"
+                else '<span class="badge evt-vouch">vouched ok</span>'
+            )
+            note = f' title="{_e(v.note)}"' if v.note else ""
+            took = _e(fmt_duration(v.duration_seconds)) if v.duration_seconds else empty
+            events.append(
+                (
+                    v.vouched,
+                    f"<tr>{_when_cell(v.vouched, now)}<td{note}>{badge}</td>"
+                    f"<td>{link}</td><td>{_e(v.attester)}</td><td>{took}</td></tr>",
+                )
+            )
+        if r.run:
+            took = _e(fmt_duration(r.run.duration_seconds)) if r.run.duration_seconds else empty
+            events.append(
+                (
+                    r.run.ran,
+                    f'<tr>{_when_cell(r.run.ran, now)}<td><span class="badge evt-run">ran</span></td>'
+                    f"<td>{link}</td><td>{_e(r.run.executor)}</td><td>{took}</td></tr>",
+                )
+            )
+    for j in journal:
+        jlink = f'<a href="#{_e(_journal_anchor(j.stem))}">{_e(j.title)}</a>'
+        when = _when_cell(j.date, now) if j.date else f'<td data-sort="">{empty}</td>'
+        events.append(
+            (
+                j.date,
+                f'<tr>{when}<td><span class="badge evt-journal">journal</span></td>'
+                f"<td>{jlink}</td><td>{empty}</td><td>{empty}</td></tr>",
+            )
+        )
+    events.sort(key=lambda e: e[0], reverse=True)
+    table = (
+        '<table class="sortable"><thead><tr><th>when</th><th>event</th>'
+        "<th>what</th><th>by / via</th><th>took</th></tr></thead>"
+        f'<tbody>{"".join(row for _, row in events)}</tbody></table>'
+        if events
+        else '<p class="empty">Nothing recorded yet.</p>'
+    )
+    return (
+        '<section class="spec" id="activity">'
+        '<h2 class="spec-title">Activity log</h2>'
+        '<div class="spec-meta"><span class="who">each entry&#8217;s latest vouch and run '
+        "(the ledgers keep the most recent claim per entry), plus the journal — "
+        "newest first</span></div>"
+        f"{table}</section>"
+    )
+
+
 def _journal_index_section(journal: list[JournalEntry]) -> str:
     """The filterable card grid over every journal entry, newest first."""
     cards = []
@@ -1228,6 +1315,7 @@ def render_html(
     journal_stems = {j.stem for j in journal}
     sections = (
         [_status_section(project, reports, problems)]
+        + [_activity_section(reports, journal, generated)]
         + [
             _broken_section(project.root, filename, problems)
             for filename in _broken_files(project, problems)

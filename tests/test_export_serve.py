@@ -37,6 +37,64 @@ def test_export_writes_html_and_index(root: Path) -> None:
     assert entry["run"]["executor"] == "local"
 
 
+def test_activity_log_lists_ledger_claims_and_journal_newest_first(root: Path) -> None:
+    """#activity is a routable feed: one row per current vouch/run claim
+    plus one per journal entry, sorted newest first."""
+    make_ready(root)  # all vouches and runs stamped 2026-01-01
+    write(root, "journal/2025-12-15-kickoff.md", "# Kickoff\n\nFirst narrative.\n")
+    # bump one vouch to a later stamp so ordering is observable
+    from specthis.check import code_sha
+    from specthis.ledger import Vouch, record_vouch
+
+    project = load_project(root)
+    e = project.entries["fit-alpha"]
+    c = code_sha(project, e)
+    assert c is not None
+    record_vouch(
+        project.specs_dir,
+        "fit-alpha",
+        Vouch(
+            spec_sha=e.spec.spec_sha,
+            code_sha=c,
+            verdict="ok",
+            attester="critic",
+            vouched="2026-02-01T00:00:00+00:00",
+        ),
+    )
+    page, _ = render(load_project(root))
+
+    assert '<section class="spec" id="activity">' in page
+    assert '<a href="#activity">Activity log</a>' in page
+    body = page.split('id="activity">')[1].split("</section>")[0]
+    assert body.count('badge evt-vouch">vouched ok<') == 3
+    assert body.count('badge evt-run">ran<') == 3
+    assert body.count('badge evt-journal">journal<') == 1
+    # newest first: the Feb re-vouch, then the Jan events, the Dec journal last
+    rows = body.split("<tbody>")[1].split("<tr>")[1:]
+    assert "2026-02-01" in rows[0] and 'evt-vouch">' in rows[0]
+    assert "2025-12-15" in rows[-1] and 'evt-journal">' in rows[-1]
+    assert 'data-sort="2026-01-01T00:00:00+00:00"' in body  # sortable by raw stamp
+
+
+def test_spec_page_vouch_note_is_tooltip_only(root: Path) -> None:
+    """The spec-page entries table shows verdict/attester/date; the long
+    vouch note lives in a title tooltip, not inline in the cell."""
+    from specthis.export import _entry_rows
+
+    from .conftest import vouch_ok
+
+    make_ready(root)
+    note = 'All 11 "symbols" present — long rationale prose'
+    vouch_ok(root, "fit-alpha", note=note)
+    project = load_project(root)
+    reports = check_project(project)
+    spec = project.entries["fit-alpha"].spec
+    rows = _entry_rows(spec, project, reports)
+    assert 'title="All 11 &quot;symbols&quot; present — long rationale prose"' in rows
+    assert f" — {note}" not in rows  # no inline wall of text
+    assert '<span class="who">by critic, 2026-01-01</span>' in rows
+
+
 def test_export_shows_frontier_and_escapes_html(root: Path) -> None:
     make_ready(root)
     (root / "scripts/fit_alpha.py").write_text("# <script>alert(1)</script>\n")

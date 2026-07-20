@@ -155,7 +155,7 @@ def root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def vouch_ok(root: Path, entry: str, attester: str = "critic") -> None:
+def vouch_ok(root: Path, entry: str, attester: str = "critic", note: str = "") -> None:
     project = load_project(root)
     e = project.entries[entry]
     c = code_sha(project, e)
@@ -169,6 +169,7 @@ def vouch_ok(root: Path, entry: str, attester: str = "critic") -> None:
             verdict="ok",
             attester=attester,
             vouched="2026-01-01T00:00:00+00:00",
+            note=note,
         ),
     )
 
