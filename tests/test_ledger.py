@@ -124,6 +124,27 @@ def test_rejection_expires_on_digest_movement(tmp_path: Path) -> None:
     assert read_vouches(tmp_path)["e"].verdict == "ok"
 
 
+def _blocked(verdict: str, spec_sha: str, block_sha: str) -> Vouch:
+    v = _vouch(verdict, spec_sha=spec_sha)
+    v.spec_block_sha = block_sha
+    return v
+
+
+def test_rejection_binds_to_the_block_not_the_file(tmp_path: Path) -> None:
+    """A sibling entry's edit moves the file digest but must not lift a
+    standing rejection — the mirror of `check.spec_moved`."""
+    record_vouch(tmp_path, "e", _blocked("rejected", "file1", "block1"))
+    with pytest.raises(LedgerError, match="standing rejection"):
+        record_vouch(tmp_path, "e", _blocked("ok", "file2", "block1"))
+    assert read_vouches(tmp_path)["e"].verdict == "rejected"
+
+
+def test_rejection_lifts_when_the_block_itself_moves(tmp_path: Path) -> None:
+    record_vouch(tmp_path, "e", _blocked("rejected", "file1", "block1"))
+    record_vouch(tmp_path, "e", _blocked("ok", "file1", "block2"))
+    assert read_vouches(tmp_path)["e"].verdict == "ok"
+
+
 def test_vouch_requires_attester_and_valid_verdict(tmp_path: Path) -> None:
     with pytest.raises(LedgerError, match="attester"):
         record_vouch(tmp_path, "e", Vouch("s", "c", "ok", "", "t"))

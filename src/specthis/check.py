@@ -152,6 +152,19 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
     return inputs
 
 
+def spec_moved(entry: Entry, v: Vouch) -> bool:
+    """Has the *judged text* moved since this vouch?
+
+    A vouch's subject is the entry's own block, never the whole file:
+    editing a sibling entry must not expire this one. Rows written
+    before ``spec_block_sha`` existed fall back to the file digest —
+    coarser, so they over-expire rather than under-expire.
+    """
+    if v.spec_block_sha:
+        return v.spec_block_sha != entry.block_sha
+    return v.spec_sha != entry.spec.spec_sha
+
+
 def expired_since_vouch(
     project: Project, entry: Entry, v: Vouch, spec_sha_now: str, code_sha_now: str | None
 ) -> list[str]:
@@ -159,14 +172,12 @@ def expired_since_vouch(
     and now. Falls back to bare "spec moved" / "code moved" for rows
     written before the decomposed fields existed."""
     out: list[str] = []
-    if v.spec_sha != spec_sha_now:
+    if spec_moved(entry, v):
         fname = entry.spec.path.name
-        if not v.spec_block_sha:
-            out.append(f"spec: {fname} moved")
-        elif v.spec_block_sha == entry.block_sha:
-            out.append(f"spec: {fname} moved outside this entry's block")
-        else:
+        if v.spec_block_sha:
             out.append(f"spec: this entry's block in {fname} moved")
+        else:
+            out.append(f"spec: {fname} moved")
     if v.code_sha != code_sha_now:
         if v.code_manifest:
             current = code_manifest(project, entry)
@@ -193,8 +204,12 @@ def topo_order(project: Project) -> list[str]:
 def _certify(
     project: Project, entry: Entry, v: Vouch | None, s: str, c: str | None
 ) -> tuple[Certification, list[str]]:
-    """The vouch axis, with expiry attribution when a prior vouch exists."""
-    if v is None or (v.spec_sha, v.code_sha) != (s, c):
+    """The vouch axis, with expiry attribution when a prior vouch exists.
+
+    Expiry is judged on the entry's *block*, not its file (``spec_moved``):
+    a sibling entry's edit is somebody else's business.
+    """
+    if v is None or v.code_sha != c or spec_moved(entry, v):
         if c is None:
             return Certification.UNIMPLEMENTED, []
         expired = expired_since_vouch(project, entry, v, s, c) if v is not None else []

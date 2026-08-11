@@ -148,28 +148,45 @@ def test_check_attributes_expiry_to_the_script(root: Path) -> None:
     assert "package blob" not in result.output  # the blob is innocent
 
 
-def test_status_attributes_spec_movement_relative_to_block(root: Path) -> None:
+def test_spec_prose_outside_the_block_does_not_expire_the_vouch(root: Path) -> None:
+    """A vouch's subject is the entry's own block, never the whole file."""
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
-    # prose outside the entry's ### block moves: file-level expiry, but
-    # the diagnosis says the entry's own contract text is untouched
     outside = COMPUTE_ALPHA.replace(
         "Fit the alpha model per models.md.",
         "Fit the alpha model per models.md. Now with more prose.",
     )
     write(root, "specs/compute-alpha.md", outside)
     result = run_cli("status", "fit-alpha", "--path", str(root))
-    assert "moved since last vouch:" in result.output
-    assert "compute-alpha.md moved outside this entry's block" in result.output
+    assert "certified" in result.output
+    assert "moved since last vouch:" not in result.output
 
-    # re-vouch at the new digests, then edit inside the block
+
+def test_status_attributes_spec_movement_inside_the_block(root: Path) -> None:
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
-    inside = outside.replace(
+    inside = COMPUTE_ALPHA.replace(
         "The fit must converge and record its loss.",
         "The fit must converge quickly and record its loss.",
     )
     write(root, "specs/compute-alpha.md", inside)
     result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "moved since last vouch:" in result.output
     assert "this entry's block in compute-alpha.md moved" in result.output
+
+
+def test_sibling_entry_edit_does_not_expire_this_entrys_vouch(root: Path) -> None:
+    """The defect this replaced: editing entry B expired entry A."""
+    two = COMPUTE_ALPHA + (
+        "\n### fit-sibling\n\nA second entry sharing the file.\n\n"
+        "- consumes: data-raw\n\nOutput: `results/sibling/fit.json`\n"
+    )
+    write(root, "specs/compute-alpha.md", two)
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    write(root, "specs/compute-alpha.md", two.replace(
+        "A second entry sharing the file.", "Rewritten sibling prose."
+    ))
+    result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "certified" in result.output
+    assert "moved since last vouch:" not in result.output
 
 
 def test_legacy_vouch_without_manifest_still_attributes_coarsely(root: Path) -> None:
