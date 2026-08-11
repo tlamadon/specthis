@@ -30,12 +30,12 @@ is in the engine, the work is in the surfaces.
 
 ---
 
-## Phase 1 — pure wins (v0.0.33)
+## Phase 1 — pure wins ✅ **done** (2026-08-11, 220 tests green)
 
-No format change, no delegation. Independently valuable; do these even
-if everything after is deferred.
+No format change, no delegation. Independently valuable; done even
+though everything after is still open.
 
-### 1.1 `spec:block` decides certification
+### 1.1 `spec:block` decides certification — **done** (`e4e4309`)
 
 `check.py:197` compares file-level `spec_sha`. Compare the entry's
 `block_sha` instead — the field is already recorded
@@ -47,10 +47,11 @@ while expiring anyway).
 - **Tests:** editing entry B must not expire entry A's vouch in the same
   file; legacy fallback still expires.
 
-*Smallest correctness win available. Removes a whole class of false
-expiry.*
+**Also done:** the rejection rule in `record_vouch` used the same pair
+as identity, so a sibling edit would have *lifted* a standing rejection.
+`ledger.same_subject` now mirrors the predicate.
 
-### 1.2 Tables authoritative
+### 1.2 Tables authoritative — **done** (`d98d989`)
 
 `_certify` and `_realize` decide on composed digests with the tables
 alongside them marked *"diagnostic only"* (`ledger.py:40`). Invert:
@@ -61,16 +62,31 @@ compare tables, keep composed digests as a fast path.
 - Add `+path` / `-path` / `~path` to the diff vocabulary.
 - **Tests:** added file, removed file, edited file each report distinctly.
 
-### 1.3 Retire the fused status word
+**Outcome:** `code_manifest` and `Run.inputs` decide; composed digests
+are a fast path; legacy rows without tables fall back to them. Adding an
+unjudged file to a binding used to read as `code moved`, indistinguishable
+from an edit to a file already judged — it now reads `code: +path`.
+
+### 1.3 Retire the fused status word — **done, scoped** (`8e3d032`)
 
 Two coordinates, no flattened enum. Vocabulary-only, and the largest
 surface in this phase: `Status` flows through `check.py`, `cli.py`,
 `export.py`, `dag.py`, `icons.py`.
 
-- Do it **before** anything structural — it is what makes the state
-  legible while the rest lands.
-- **Tests:** `test_cli`, `test_export_serve`, `test_dag` all assert on
-  status strings today; expect churn.
+**Much cheaper than estimated.** `Status` had only five consumption
+sites and just one in control flow. `frontier()`/`LOCAL_BREAKS` were
+already dead in `src` — `check` moved to the two queues in v0.0.29 and
+never came back.
+
+- Deleted `frontier()`/`LOCAL_BREAKS`; the two tests that used them now
+  assert on `queues()`.
+- The vouch command's upstream note asked `status is not READY`; it now
+  asks `verified()` — the two-coordinate form.
+- `Status` survives as a **display value** and says so in its docstring.
+
+**Left for its own commit:** removing the word from the dashboard. That
+is a UI change, not a vocabulary one, and half-doing it would leave two
+idioms on screen at once.
 
 ---
 
