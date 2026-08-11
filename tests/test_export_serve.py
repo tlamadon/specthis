@@ -178,7 +178,7 @@ def test_detail_card_diagnoses_broken_entries(root: Path) -> None:
     page, _ = render(load_project(root))
     assert (
         '<span class="lbl">why</span> mind: spec or code moved since vouch; '
-        "machine: moved: scripts/fit_beta.py" in page
+        "machine: moved: ~scripts/fit_beta.py" in page
     )
     assert '<span class="lbl">why</span> waiting on fit-beta' in page  # fig-beta
 

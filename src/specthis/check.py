@@ -165,6 +165,32 @@ def spec_moved(entry: Entry, v: Vouch) -> bool:
     return v.spec_sha != entry.spec.spec_sha
 
 
+def table_diff(before: dict[str, str], after: dict[str, str], prefix: str = "") -> list[str]:
+    """Rows that differ between a recorded table and an implied one.
+
+    ``+path`` entered the claim's scope, ``-path`` left it, ``~path``
+    kept its place and moved its content. A composed digest can only
+    say that *something* differs; the table says which, and how.
+    """
+    out: list[str] = []
+    for k in sorted(set(before) | set(after)):
+        b, a = before.get(k), after.get(k)
+        if b == a:
+            continue
+        mark = "+" if b is None else "-" if a is None else "~"
+        out.append(f"{prefix}{mark}{'package blob' if k == 'package' else k}")
+    return out
+
+
+def code_moved(project: Project, entry: Entry, v: Vouch, code_sha_now: str | None) -> bool:
+    """Has the judged code moved? Decided on the recorded *table*; rows
+    written before ``code_manifest`` existed fall back to the composed
+    digest, which detects the same movements but cannot attribute them."""
+    if v.code_manifest:
+        return code_manifest(project, entry) != v.code_manifest
+    return v.code_sha != code_sha_now
+
+
 def expired_since_vouch(
     project: Project, entry: Entry, v: Vouch, spec_sha_now: str, code_sha_now: str | None
 ) -> list[str]:
@@ -178,15 +204,12 @@ def expired_since_vouch(
             out.append(f"spec: this entry's block in {fname} moved")
         else:
             out.append(f"spec: {fname} moved")
-    if v.code_sha != code_sha_now:
+    if code_moved(project, entry, v, code_sha_now):
         if v.code_manifest:
-            current = code_manifest(project, entry)
-            moved = [
-                "code: package blob moved" if k == "package" else f"code: {k} moved"
-                for k in sorted(set(current) | set(v.code_manifest))
-                if current.get(k) != v.code_manifest.get(k)
-            ]
-            out.extend(moved or ["code moved"])
+            out.extend(
+                table_diff(v.code_manifest, code_manifest(project, entry), "code: ")
+                or ["code moved"]
+            )
         else:
             out.append("code moved")
     return out
@@ -206,14 +229,17 @@ def _certify(
 ) -> tuple[Certification, list[str]]:
     """The vouch axis, with expiry attribution when a prior vouch exists.
 
-    Expiry is judged on the entry's *block*, not its file (``spec_moved``):
-    a sibling entry's edit is somebody else's business.
+    Decided on the two recorded tables — the entry's own block
+    (``spec_moved``) and its code manifest (``code_moved``). A sibling
+    entry's edit is somebody else's business, and a composed digest is
+    only a fast path.
     """
-    if v is None or v.code_sha != c or spec_moved(entry, v):
-        if c is None:
-            return Certification.UNIMPLEMENTED, []
-        expired = expired_since_vouch(project, entry, v, s, c) if v is not None else []
-        return Certification.UNVOUCHED, expired
+    if c is None:
+        return Certification.UNIMPLEMENTED, []
+    if v is None:
+        return Certification.UNVOUCHED, []
+    if spec_moved(entry, v) or code_moved(project, entry, v, c):
+        return Certification.UNVOUCHED, expired_since_vouch(project, entry, v, s, c)
     if v.verdict == "rejected":
         return Certification.REJECTED, []
     return Certification.CERTIFIED, []
@@ -231,11 +257,11 @@ def _realize(
     expected = expected_inputs(project, entry, runs)
     if r is None:
         return Realization.NEVER_RUN, [], True
-    if r.signature != hashing.signature(expected):
-        moved = sorted(
-            k for k in set(expected) | set(r.inputs) if expected.get(k) != r.inputs.get(k)
-        )
-        return Realization.STALE, moved, True
+    if r.inputs:  # decided on the recorded table
+        if r.inputs != expected:
+            return Realization.STALE, table_diff(r.inputs, expected), True
+    elif r.signature != hashing.signature(expected):  # legacy row: no table to diff
+        return Realization.STALE, ["inputs moved"], True
     disk_sha = hashing.output_sha(project.root, entry.outputs)
     if disk_sha is None:
         return Realization.CURRENT, [], False

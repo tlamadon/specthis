@@ -102,7 +102,7 @@ def test_workflow_file_edit_is_stale_not_audit(root: Path) -> None:
     write(root, "hut.fit-alpha.json", '{"backend": "pbs"}\n')
     r = report(root, "fit-alpha")
     assert r.status is Status.STALE
-    assert r.moved == ["hut.fit-alpha.json"]
+    assert r.moved == ["~hut.fit-alpha.json"]
 
 
 def test_output_edited_on_disk_is_stale(root: Path) -> None:
@@ -135,7 +135,7 @@ def test_upstream_rerun_makes_downstream_stale(root: Path) -> None:
     s = statuses(root)
     assert s["fit-alpha"] is Status.READY
     assert s["fit-beta"] is Status.STALE, "upstream re-run must not be invisible"
-    assert "upstream:fit-alpha" in report(root, "fit-beta").moved
+    assert "~upstream:fit-alpha" in report(root, "fit-beta").moved
 
 
 # ------------------------------------------------------------ propagation
@@ -194,7 +194,7 @@ def test_code_edit_breaks_both_axes(root: Path) -> None:
     assert r.status is Status.AUDIT_NEEDED  # legacy word unchanged
     assert r.certification is Certification.UNVOUCHED
     assert r.realization is Realization.STALE
-    assert r.moved == ["scripts/fit_alpha.py"]  # run-axis attribution, never vouch-gated
+    assert r.moved == ["~scripts/fit_alpha.py"]  # run-axis attribution, never vouch-gated
 
 
 def test_spec_prose_edit_breaks_only_the_vouch_axis(root: Path) -> None:

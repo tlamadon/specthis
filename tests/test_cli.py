@@ -8,7 +8,9 @@ from specthis.cli import main
 from specthis.ledger import read_runs, read_vouches
 from specthis.parse import load_project
 
-from .conftest import PY, COMPUTE_ALPHA, FIT_ALPHA_PY, fake_run, make_ready, vouch_ok, write
+from .conftest import (
+    PY, BINDINGS, COMPUTE_ALPHA, FIT_ALPHA_PY, fake_run, make_ready, vouch_ok, write,
+)
 
 
 def run_cli(*args: str):
@@ -136,7 +138,7 @@ def test_check_attributes_expiry_to_package_blob(root: Path) -> None:
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
     write(root, "src/pkg/helpers.py", "X = 2\n")
     result = run_cli("check", "--path", str(root))
-    assert "moved since vouch: code: package blob moved" in result.output
+    assert "moved since vouch: code: ~package blob" in result.output
     assert "fit_alpha.py moved" not in result.output  # the script is innocent
 
 
@@ -144,8 +146,32 @@ def test_check_attributes_expiry_to_the_script(root: Path) -> None:
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
     (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
     result = run_cli("check", "--path", str(root))
-    assert "moved since vouch: code: scripts/fit_alpha.py moved" in result.output
+    assert "moved since vouch: code: ~scripts/fit_alpha.py" in result.output
     assert "package blob" not in result.output  # the blob is innocent
+
+
+def test_check_attributes_a_file_added_to_the_binding(root: Path) -> None:
+    """A composed digest can only say "code moved"; the table says which
+    file entered the entry's scope, and that it was never judged."""
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    write(root, "scripts/helpers.py", "def winsor(x, p): return x\n")
+    write(root, "specs/bindings.toml", BINDINGS.replace(
+        '[entries.fit-alpha]\nscripts = ["scripts/fit_alpha.py"]',
+        '[entries.fit-alpha]\nscripts = ["scripts/fit_alpha.py", "scripts/helpers.py"]',
+    ))
+    result = run_cli("check", "--path", str(root))
+    assert "moved since vouch: code: +scripts/helpers.py" in result.output
+    assert "~scripts/fit_alpha.py" not in result.output  # untouched, and says so
+
+
+def test_check_attributes_a_file_removed_from_the_binding(root: Path) -> None:
+    run_cli("vouch", "fit-beta", "--as", "reviewer", "--path", str(root))
+    write(root, "specs/bindings.toml", BINDINGS.replace(
+        '[entries.fit-beta]\nscripts = ["scripts/fit_beta.py"]',
+        '[entries.fit-beta]\nscripts = []',
+    ))
+    result = run_cli("check", "--path", str(root))
+    assert "-scripts/fit_beta.py" in result.output or "unimplemented" in result.output
 
 
 def test_spec_prose_outside_the_block_does_not_expire_the_vouch(root: Path) -> None:

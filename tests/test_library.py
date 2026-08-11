@@ -149,7 +149,7 @@ def test_module_edit_flags_entry_and_stales_consumers_only(root: Path) -> None:
     s = statuses(root)
     assert s["estimator-core"] is Status.READY
     assert s["fit-beta"] is Status.STALE
-    assert "upstream:estimator-core" in check_project(load_project(root))["fit-beta"].moved
+    assert "~upstream:estimator-core" in check_project(load_project(root))["fit-beta"].moved
 
     fake_run(root, "fit-beta")
     fake_run(root, "fig-beta")
