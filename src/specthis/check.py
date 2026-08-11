@@ -1,10 +1,14 @@
-"""Status derivation and the frontier report. Pure — zero writes.
+"""Status derivation. Pure — zero writes.
 
-``status()`` answers, per entry, whether its claims still hold and
-what kind of repair a broken one needs: a mind (AUDIT_NEEDED /
-REJECTED), a machine (STALE), or patience (UPSTREAM_UNVERIFIED).
-Everything derives from content digests and the two ledgers; nothing
-here consults mtime or writes a byte.
+Per entry, two independent coordinates — ``Certification`` (the logic
+axis: is the definition judged?) and ``Realization`` (the compute axis:
+do the recorded bytes follow?) — plus per-tree propagation. Together
+they say what a broken claim needs: a mind, a machine, or patience.
+
+Everything is decided on the recorded *tables* (``code_manifest``,
+``Run.inputs``) against the tables today's content implies; composed
+digests are a fast path, and ``Status`` is a rendering of the pair, not
+an input to anything. Nothing here consults mtime or writes a byte.
 """
 
 from __future__ import annotations
@@ -19,6 +23,14 @@ from .parse import Entry, Project
 
 
 class Status(Enum):
+    """The flattened single word — **display only**.
+
+    Derived from the two axes (certification breaks win, then
+    staleness, then composition). Nothing decides on it; ``verified()``
+    is the two-coordinate form of ``READY``. Retired from every surface
+    per `docs/specification.md` §11.
+    """
+
     UNIMPLEMENTED = "unimplemented"
     AUDIT_NEEDED = "audit needed"
     REJECTED = "rejected"
@@ -47,10 +59,6 @@ class Realization(Enum):
     NEVER_RUN = "never-run"
     STALE = "stale"  # signature mismatch, or output bytes edited on disk
     CURRENT = "current"
-
-
-#: Broken for reasons local to the entry — itemized on the frontier.
-LOCAL_BREAKS = {Status.UNIMPLEMENTED, Status.AUDIT_NEEDED, Status.REJECTED, Status.STALE}
 
 
 class CheckError(Exception):
@@ -353,15 +361,10 @@ def queues(reports: dict[str, Report]) -> tuple[list[Report], list[Report]]:
     return mind, machine
 
 
-def frontier(reports: dict[str, Report]) -> tuple[list[Report], int, int]:
-    """Split reports into (itemized local breaks, waiting count, ready count).
+def verified(r: Report) -> bool:
+    """Every claim in this entry's lineage holds, on both trees.
 
-    The frontier itemizes entries broken for their own reasons; entries
-    that are merely downstream of a break are summarized as a count —
-    fixing the frontier heals them for free. Never report only "the
-    first broken link": this is a DAG.
+    The two-coordinate form of what the flattened word calls "ready".
+    Nothing decides on ``Status``; it is a rendering of this pair.
     """
-    local = [r for r in reports.values() if r.status in LOCAL_BREAKS]
-    waiting = sum(1 for r in reports.values() if r.status is Status.UPSTREAM_UNVERIFIED)
-    ready = sum(1 for r in reports.values() if r.status is Status.READY)
-    return local, waiting, ready
+    return r.computable and r.realized

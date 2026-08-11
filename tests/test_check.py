@@ -10,7 +10,8 @@ from specthis.check import (
     Realization,
     Status,
     check_project,
-    frontier,
+    queues,
+    verified,
 )
 from specthis.parse import load_project
 
@@ -122,9 +123,10 @@ def test_output_deleted_reads_ready_bytes_remote(root: Path) -> None:
     r = report(root, "fig-beta")
     assert r.status is Status.READY
     assert not r.materialized
-    local, _waiting, ready = frontier(check_project(load_project(root)))
-    assert "fig-beta" not in {x.entry for x in local}
-    assert ready == 3
+    reports = check_project(load_project(root))
+    mind, machine = queues(reports)
+    assert "fig-beta" not in {x.entry for x in [*mind, *machine]}
+    assert sum(1 for x in reports.values() if verified(x)) == 3
 
 
 def test_upstream_rerun_makes_downstream_stale(root: Path) -> None:
@@ -150,13 +152,16 @@ def test_upstream_break_propagates_without_expiring_vouches(root: Path) -> None:
     assert s["fig-beta"] is Status.UPSTREAM_UNVERIFIED  # transitive
 
 
-def test_frontier_itemizes_local_summarizes_downstream(root: Path) -> None:
+def test_queues_itemize_local_breaks_and_downstream_is_a_count(root: Path) -> None:
     make_ready(root)
     (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
-    local, waiting, ready = frontier(check_project(load_project(root)))
-    assert [r.entry for r in local] == ["fit-alpha"]
-    assert waiting == 2
-    assert ready == 0
+    reports = check_project(load_project(root))
+    mind, machine = queues(reports)
+    # the edit broke both axes of one entry; downstream is never itemized
+    assert [r.entry for r in mind] == ["fit-alpha"]
+    assert [r.entry for r in machine] == ["fit-alpha"]
+    assert sum(1 for r in reports.values() if not verified(r)) == 3
+    assert sum(1 for r in reports.values() if verified(r)) == 0
 
 
 def test_consumes_cycle_is_an_error(root: Path) -> None:

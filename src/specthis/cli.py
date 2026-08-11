@@ -22,7 +22,6 @@ from .check import (
     Certification,
     Realization,
     Report,
-    Status,
     check_project,
     code_manifest,
     code_sha,
@@ -31,6 +30,7 @@ from .check import (
     machine_repairable,
     queues,
     topo_order,
+    verified,
 )
 from .install import init_specs_dir, install_agents, install_commands
 from .ledger import (
@@ -714,7 +714,7 @@ def vouch_cmd(
     # won't read `ready` yet.
     if vouch.verdict == "ok" and e.consumes:
         reports = check_project(project)
-        pending = sorted(up for up in e.consumes if reports[up].status is not Status.READY)
+        pending = sorted(up for up in e.consumes if not verified(reports[up]))
         if pending:
             click.echo(
                 f"note: upstream not yet verified ({', '.join(pending)}) — "

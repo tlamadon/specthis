@@ -19,7 +19,7 @@ from click.testing import CliRunner
 
 from specthis import hashing
 from specthis.cache import fetch
-from specthis.check import Status, check_project, frontier
+from specthis.check import Status, check_project, queues
 from specthis.cli import main
 from specthis.ledger import read_runs
 from specthis.parse import load_project
@@ -126,8 +126,8 @@ def test_adopt_records_the_claim_without_the_bytes(
     assert not (root / "results").exists(), "adoption must not move bytes"
     r = report(root, "fit-alpha")
     assert r.status is Status.READY and not r.materialized
-    local, _, _ = frontier(check_project(load_project(root)))
-    assert "fit-alpha" not in {x.entry for x in local}
+    mind, machine = queues(check_project(load_project(root)))
+    assert "fit-alpha" not in {x.entry for x in [*mind, *machine]}
 
 
 def test_adopted_entry_materializes_via_fetch(
