@@ -26,79 +26,40 @@ correspondence:
 | **compute** | pipeline step — declarative | bytes | compute manager | compute manager |
 
 **Realizing a spec means writing code *and* wiring it.** The prose
-describes a transformation; the implementer makes it concrete as a
-script *and* as a step that feeds that script the right inputs and puts
-its output in the right place. A judge asking *"does this implement the
-spec?"* reads both — a step passing `wages_OLD.parquet` leaves the code
-perfect and the realization wrong.
+describes a transformation; the implementer makes it concrete as a script
+*and* as a step feeding that script the right inputs. A judge reads both
+— a step passing `wages_OLD.parquet` leaves the code perfect and the
+realization wrong.
 
-So the vouch pins the **step's semantic content** alongside the code:
-its **command, deps and outs** (§5.6). It does **not** pin resources,
-executor, retries or anything else the pipeline carries — those change
-how the work is scheduled, never what is implemented. Every change to
-the semantic triple is a real change to the implementation, so pinning
-it produces no false expiry.
-
-**Lint is a pre-check, not the verifier.** It catches structural
-mismatch mechanically and cheaply — a missing step, an undeclared edge
-(§13) — before a mind is spent. What it cannot check is whether the
-command invokes the code correctly, or whether the config file named is
-the right one. That is judgment, and it is why the step is in the
-pinned table rather than lint's sole responsibility.
+So a vouch pins the **step's semantic content** — command, deps, outs
+(§5.6) — alongside the code. Scheduling concerns (resources, executor,
+retries) are pinned by nothing and judged by nobody (§5.7).
 
 The axis names what is at stake; the **capability** names who must be
-re-invoked to refresh a broken claim — a **mind** on the logic axis, a
-**machine** on the compute axis. Two vocabularies, deliberately: an
-attestation's `capability` field (§8) and the ledger files (§9) use the
-second.
+re-invoked when a claim breaks — a **mind** on the logic axis, a
+**machine** on the compute axis. Attestations (§8) and ledger files (§9)
+use the second vocabulary.
 
-**Note the last two columns.** On the compute axis, creator and attester
-are the *same actor* by construction — a manager runs the work and
-reports what it did. That is not a weakness of the model; it is what
-makes it affordable, since an independent party re-running the work
-would cost exactly as much as the work. The same reasoning is why
-self-certification on the logic axis is permitted and merely *recorded*
-rather than forbidden (`attestation-model.md` §10): independent
-re-judgment is expensive too. Both axes trade independence for
-tractability, and both keep the actor's identity in the record.
-
-The **map** sits between them, and translates. The spec speaks in
-logical names; the pipeline speaks in file paths and commands. The map
-answers the only two questions neither can: *which of this step's
-dependencies is judged code*, and *which file **is** `wages-panel`*
-(§4). It is small on purpose.
+The **map** (§4) sits between the axes and translates: the spec speaks
+in logical names, the pipeline in paths and commands.
 
 ### The chain
 
-The **certificate** (§6) welds the two axes into one provenance chain:
-
-```
-spec ──(mind attests)── code ──(certificate)── pipeline step ──(machine attests)── bytes
-```
-
 A step lists its code among its dependencies, so the manifest records
-those paths **with their digests** — and the vouch pins the same paths
-at the same digests. The two attestations join directly on `(path,
-sha)`. Compose them and *"was this figure produced by code that
-satisfies its specification?"* is mechanically answerable end to end,
-with no indirection. (Where `[package] globs` are used, a certificate
-carries the glob's composed digest into the chain — §6.)
+those paths with their digests — and the vouch pins the same paths at the
+same digests. The two attestations **join directly on `(path, sha)`**:
 
-### What stays outside every claim
+```
+spec ──(vouch)── code ──(shared rows)── step ──(manifest)── bytes
+```
 
-A step's **resources, executor, retries, hooks** and anything else the
-backend supports are pinned by nothing and judged by nobody. That is
-correct: they change how work is scheduled, never what is implemented or
-what bytes result. Resizing a job must not expire a judgment, and
-scripthut and DVC both exclude resources from their cache keys for the
-same reason.
+So *"was this figure produced by code that satisfies its
+specification?"* is answerable by composing the two ledgers. Where
+`[package] globs` are used, a certificate (§6) carries the glob's
+composed digest into the same chain.
 
-Everything that *does* determine the result — spec block, code, command,
-deps, outs — sits in a pinned table on one axis or both (§10).
-
-**Source entries have no step at all**: leaf bytes arrive from outside
-any pipeline, pinned by `record` and vouched for provenance (§2). Their
-vouch pins the spec block and the bytes, and nothing else.
+**Source entries have no step**: leaf bytes arrive from outside any
+pipeline, pinned by `record` and vouched for provenance (§2).
 
 ### Vocabulary
 
@@ -238,18 +199,12 @@ declared_at = "2026-08-11T09:14:02Z"                # [NEW]
 | `[package] globs` | *what code is covered bluntly?* | unvouched, bluntly |
 | `[preview]` | dashboard vocabulary | nothing |
 
-**Why these two survive and nothing else does.**
-
-- **`scripts`.** Every pipeline format lumps code and data into one
-  dependency list — DVC's `deps`, scripthut's `inputs`. Nothing anywhere
-  distinguishes *judged code* from *an input that merely affects bytes*,
-  and that distinction is the entire boundary between the two axes.
-  Everything in a step's inputs that is **not** in `scripts` stales the
-  entry without touching its vouch.
-- **`produces`.** The pipeline says a step writes `data/wages.parquet`.
-  Only the map says that file **is** `wages-panel` — the logical name
-  the spec's `consumes` edges refer to. Physical paths never appear in a
-  spec (§3), so something must translate.
+**Why only these two.** Every pipeline format lumps code and data into
+one dependency list (DVC's `deps`, scripthut's `inputs`), so nothing but
+the map can say which dependencies are *judged* — and that boundary is
+the boundary between the two axes. Likewise the pipeline says a step
+writes `data/wages.parquet`; only the map says that file **is**
+`wages-panel`, since physical paths never appear in a spec (§3).
 
 `produces` keys must exactly match the entry's spec `produces` list, and
 its values must exactly match the step's declared outputs (§13).
@@ -313,26 +268,19 @@ or stale a run — which is also why scripthut and DVC exclude resources
 from their cache keys.
 
 **Arguments should still be files.** A command carrying `--winsor 0.99`
-now moves `step_sha`, so nothing is missed — but the break reports as
-`step:clean-wages moved` rather than naming the config file that
-changed. Parameters in a hashed config file listed among `deps` give a
-precise table diff instead. Lint warns (§13); it is an attribution
-concern now, not a correctness one.
+moves `step_sha`, so nothing is missed — but the break reports as
+`step:clean-wages moved` instead of naming what changed. Lint warns
+(§13); an attribution concern, not a correctness one.
 
 ---
 
 ## 6. Certificates **[NEW, optional]**
 
-**Most projects need no certificate.** A pipeline step lists its code
-files among its dependencies as a matter of course, so their digests are
-already in the manager's key, and the manifest already records them
-path-by-path — which is what joins a run to a vouch (§1, *The chain*).
-
-A certificate earns its place in exactly one case: **`[package] globs`.**
-A glob has no stable file list, so it cannot be a step dependency; the
-only way its composed digest enters a manager's key is as a file. If you
-use `[package] globs` and want package-level edits to invalidate runs,
-generate certificates. Otherwise skip them.
+**Most projects need none.** A step lists its code among its
+dependencies anyway, so those digests are already in the manager's key
+and in the manifest. A certificate earns its place in exactly one case:
+**`[package] globs`**, which has no stable file list and so can enter a
+key only as a composed digest in a file.
 
 One file per entry, generated by specthis into `specs/certificates/`.
 
@@ -356,9 +304,8 @@ One file per entry, generated by specthis into `specs/certificates/`.
 - Where used, a **library** entry's certificate is the natural way for
   its consumers to depend on it without the library being a step (§7.5).
 
-**Location:** generated, gitignored. They are reproducible from the
-repository, and their determinism makes a regenerated certificate
-byte-identical to the one a manifest references.
+**Location:** generated, gitignored — reproducible from the repository,
+and byte-identical on regeneration.
 
 ---
 
@@ -368,11 +315,9 @@ byte-identical to the one a manifest references.
 `dvc.yaml`, a scripthut workflow document, whatever the chosen manager
 reads. specthis **reads and verifies** it; it never writes it.
 
-The reason is churn. A generator is worth building only if the thing it
-generates is stable, and pipelines are not: every capability a backend
-grows — a resource flag, a matrix, a hook, a multi-command step — would
-otherwise need map support before it could be used, putting specthis
-permanently between the implementer and their own tool.
+Generating it was rejected: pipelines churn, and a generator would put
+specthis permanently between the implementer and every new capability
+their backend grows.
 
 ### 7.1 What specthis reads from it
 
@@ -443,16 +388,14 @@ specthis partitions each step's declared dependencies:
 | an upstream entry's `map.produces` value | an **upstream artefact** | stale |
 | anything else (config, data, certificates) | an **execution input** | stale |
 
-This partition is the entire reason the map exists. Nothing in a
-pipeline format distinguishes code from data.
+The first row is why the map exists (§4).
 
 ### 7.5 Libraries
 
-A library entry has no step. Consumers depend on its code by listing
-that code among their own dependencies, or — if the library is covered
-by `[package] globs` — via its certificate (§6). Either way a module
-edit stales its consumers, since those paths are in their steps'
-dependency lists.
+A library entry has no step. Consumers list its code among their own
+dependencies — or, where `[package] globs` cover it, its certificate
+(§6). Either route puts those paths in a consumer's step, so §7.4
+applies unchanged.
 
 ### 7.6 Multi-output entries
 Every logical name in `spec.produces` needs a `map.produces` entry whose
@@ -611,12 +554,10 @@ this disk; they may be in the manager's store.
 cache hit and does nothing while the artefact no longer matches its
 provenance. (DVC checks outs against `dvc.lock` and would catch it; a
 purely input-keyed manager would not.) Repair is therefore
-**specthis-initiated**: `run --force <entry>` (§12), which compiles that
-step with caching disabled.
-
-This is the only condition under which specthis asks for *specific*
-work. Currency is the manager's to decide (§14, MUST 2); integrity is
-specthis's to detect and to force.
+**specthis-initiated**: `run --force <entry>` (§12), submitting that
+step with caching bypassed. It is the only condition under which specthis
+asks for *specific* work — currency is the manager's to decide (§14,
+MUST 2).
 
 ### 10.4 Propagation
 Both trees, independently. An entry whose own tables all match but whose
@@ -780,15 +721,10 @@ One spec entry, one map row, one code binding — and **N instances**, each
 with its own bytes and its own run claim. This is how a parameter grid
 stays flat in the artifacts you write by hand.
 
-**The expensive part is gone.** The earlier design
-(`design-notes-from-cakm.md` §8, `two-trees-and-delegation.md` §9) had
-specthis *elaborate* the instance set: backward chaining from concrete
-roots, unification against parameterized producers, recursive
-instantiation. That was necessary when specthis compiled the pipeline.
-It no longer does (§7), and **pipeline tools already expand instances** —
-DVC's `foreach`, scripthut's dynamic task generation. specthis reads the
-steps that result. The old invariant survives untouched: the instance set
-is a function of committed files, because the pipeline is one.
+**Pipeline tools expand the instances** — DVC's `foreach`, scripthut's
+dynamic task generation — and specthis reads the steps that result. It
+performs no elaboration of its own. The instance set stays a function of
+committed files, because the pipeline is one.
 
 ### 15.1 The spec
 
@@ -840,13 +776,8 @@ well without configuration.
   hence every instance) **or** `clean-wages[dataset=chile]` (covers one).
 
 No field declares which — **the judge chooses by where the vouch is
-filed.** This is what retires the deferral. The blocker was that a
-template vouch is a universally quantified claim ("this code is correct
-for *any* dataset"), stronger than data-dependent research usually
-supports. The old design forced it, because instantiation and vouching
-were the same mechanism. Here they are not: sign the template when the
-transformation really is data-agnostic, sign instances when it is not,
-and change your mind later without touching a spec.
+filed.** Sign the template when the transformation is genuinely
+data-agnostic; sign instances when it is not.
 
 ### 15.5 Derivation
 
@@ -877,10 +808,8 @@ For instance `I` of template `E`:
   the degenerate case and costs nothing, but the rule of three applies
   before promoting
 
-**Demotion is cheap and expected.** The moment one instance needs
-different code, drop `props`, give it its own entry, and bind its own
-`scripts`. The editorial end of a pipeline — figures, tables — usually
-stays hand-made.
+**Demotion:** when one instance needs different code, drop `props` and
+give it its own entry and `scripts`.
 
 ---
 
