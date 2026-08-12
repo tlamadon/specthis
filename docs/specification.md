@@ -22,9 +22,16 @@ two records already carry between them; collapsing them into one file
 would change no behaviour and buys only a third capability that does not
 exist.
 
-Not built: §16's deletions, which would remove parallel rebuilds, the
-byte cache and remote adoption with no shipped replacement — free once a
-backend with those capabilities exists, a regression before then.
+**§16's deletions are done** (2026-08-12): the built-in executor, the
+byte cache and the remote-manifest path are gone, and the map holds only
+the two fields §4 gives it. Parallel rebuilds, push/fetch and remote
+adoption went with them — a manager that has those capabilities supplies
+them, and the bundled runner does not pretend to.
+
+One residue: the `Status` enum still exists and is emitted in the JSON
+payloads. No surface renders it — the dashboard and the CLI speak only
+in axes — so §11 holds; removing the type itself is a test refactor with
+no behaviour change.
 
 ---
 

@@ -199,19 +199,14 @@ baked into the interface.
 
 ---
 
-## Phase 6 — the deletions — **blocked on a capable backend**
+## Phase 6 — the deletions ✅ **done**
 
-Not merely sequencing: that code is not only an executor. `run --stale
--p N` is parallel rebuilds, `--fetch`/`--push` is the byte cache,
-`--adopt` is remote manifest adoption. The bundled runner has none of
-them **by design** (§7.3), so deleting today makes the tool strictly
-less capable with no shipped replacement.
+~700 lines of source; `cli.py` from 1148 to 823. The cost was accepted
+knowingly: parallel rebuilds, push/fetch and remote adoption go with the
+executor, and the bundled runner replaces none of them. A project that
+needs them supplies a backend that has them.
 
-It becomes free once a backend with parallelism and remote bytes exists
-— which, since adapters are now project-side, means the scripthut
-adapter in cakm rather than anything in this repo.
-
-The list, when that day comes:
+Removed:
 
 - `_execute_entry`, `_run_stale_parallel`, dispatch (`cli.py`)
 - `cache.py` and the byte-cache half of `remote.py`
