@@ -203,7 +203,7 @@ def test_sibling_entry_edit_does_not_expire_this_entrys_vouch(root: Path) -> Non
     """The defect this replaced: editing entry B expired entry A."""
     two = COMPUTE_ALPHA + (
         "\n### fit-sibling\n\nA second entry sharing the file.\n\n"
-        "- consumes: data-raw\n\nOutput: `results/sibling/fit.json`\n"
+        "Output: `results/sibling/fit.json`\n"
     )
     write(root, "specs/compute-alpha.md", two)
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))

@@ -46,8 +46,12 @@ class Instance:
 
 
 def props_of(entry: Entry) -> list[str]:
-    """Free variables declared by this entry, in declaration order."""
-    return list(getattr(entry.spec, "props", ()) or ())
+    """Free variables declared by this entry, in declaration order.
+
+    Per-entry ``- props:`` when the entry uses the target format's field
+    list, else the file's frontmatter.
+    """
+    return list(entry.props or ())
 
 
 def is_template(entry: Entry) -> bool:

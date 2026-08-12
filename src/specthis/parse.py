@@ -104,16 +104,23 @@ class Entry:
     spec: "SpecFile"
     outputs: list[str]
     binding: Binding
-    #: sha256 of this entry's ``###`` block text. Diagnostic only: the
-    #: claim unit stays the whole file (an entry may lean on prose
-    #: anywhere in it), so expiry is still judged at ``spec_sha`` — the
-    #: block digest exists so an expired vouch can say WHERE the file
-    #: moved (inside or outside this entry's own block).
+    #: sha256 of this entry's ``###`` block text — **what a vouch pins**
+    #: (``check.spec_moved``). The claim unit is the entry, not the
+    #: file: editing a sibling entry is somebody else's business.
     block_sha: str = ""
+    #: Per-entry edges and props, from the target format's field list
+    #: (§3). ``None`` means this entry uses the legacy file-level
+    #: frontmatter, and the properties below fall back to it.
+    own_consumes: list[str] | None = None
+    own_props: list[str] | None = None
 
     @property
     def consumes(self) -> list[str]:
-        return self.spec.consumes
+        return self.spec.consumes if self.own_consumes is None else self.own_consumes
+
+    @property
+    def props(self) -> list[str]:
+        return self.spec.props if self.own_props is None else self.own_props
 
     @property
     def tier(self) -> str:
@@ -201,6 +208,47 @@ def _str_list(raw: object, where: str, what: str) -> list[str]:
     return raw
 
 
+#: A `- key: value` line in an entry block — the target format's field
+#: list (spec §3 rule 2). Values may be backticked; a bare `- code`
+#: takes no value.
+_ENTRY_FIELD = re.compile(r"^- +([a-z_]+)\s*(?::\s*(.*?))?\s*$", re.MULTILINE)
+ENTRY_FIELDS = {"consumes", "produces", "code", "props"}
+
+
+def entry_fields(block: str, where: str) -> dict[str, list[str]]:
+    """Parse an entry block's field list, or ``{}`` if it has none.
+
+    Absent means the entry uses the legacy ``Output:``/``Export
+    outputs:`` form; both are accepted so a project migrates at its own
+    pace. Unknown keys are errors either way — a typo must not silently
+    demote an entry to narrative.
+    """
+    fields: dict[str, list[str]] = {}
+    for m in _ENTRY_FIELD.finditer(block):
+        key, raw = m.group(1), (m.group(2) or "").strip()
+        if key not in ENTRY_FIELDS:
+            raise SpecError(
+                f"{where}: unknown entry field `{key}` — expected one of "
+                f"{', '.join(sorted(ENTRY_FIELDS))}"
+            )
+        values = [v.strip().strip("`") for v in raw.split(",") if v.strip()]
+        fields.setdefault(key, []).extend(values)
+    return fields
+
+
+def infer_kind(fields: dict[str, list[str]], outputs: list[str]) -> str:
+    """Type from fields (§2), for entries written in the target format.
+
+    A bare ``code`` marks a library; a physical path in ``produces``
+    marks a source; anything producing logical names is computable.
+    """
+    if "code" in fields and not fields.get("produces"):
+        return "library"
+    if any("/" in p or "." in p for p in fields.get("produces", ())):
+        return "source"
+    return "compute"
+
+
 def _spec_sha(text: str, m: "re.Match[str]") -> str:
     """``spec_sha`` with display-only frontmatter lines removed.
 
@@ -285,6 +333,7 @@ def parse_spec(path: Path) -> SpecFile:
             entry_name = block_match.group(1).strip()
             if not _ENTRY_NAME.match(entry_name):
                 raise SpecError(f"{path.name}: bad entry name `{entry_name}`")
+            fields = entry_fields(block_match.group(2), f"{path.name}: `{entry_name}`")
             if spec.skip:
                 # Commented out: keep the entry names (for views and for
                 # "consumes skipped entry" diagnostics) but grammar-check
@@ -300,11 +349,16 @@ def parse_spec(path: Path) -> SpecFile:
                         f"{path.name}: library entry `{entry_name}` must not declare an output"
                     )
                 outputs = []
+            elif fields.get("produces"):
+                # Target format (§3): the field list carries the products,
+                # so the legacy `Output:` line is neither needed nor read.
+                outputs = fields["produces"]
             else:
                 outputs = _field_paths(block_match.group(2), label)
                 if not outputs:
                     raise SpecError(
-                        f"{path.name}: entry `{entry_name}` declares no `{label}:` path"
+                        f"{path.name}: entry `{entry_name}` declares no `{label}:` path "
+                        "(or a `- produces:` field)"
                     )
                 if kind == "compute" and len(outputs) > 1:
                     raise SpecError(
@@ -317,6 +371,8 @@ def parse_spec(path: Path) -> SpecFile:
                     outputs=outputs,
                     binding=None,  # type: ignore[arg-type]
                     block_sha=sha256_text(block_match.group(0)),
+                    own_consumes=fields.get("consumes"),
+                    own_props=fields.get("props"),
                 )
             )
     return spec
@@ -482,6 +538,25 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                     Problem(spec.path.name, f"{spec.path.name}: consumes unknown entry `{up}`")
                 )
             spec.consumes.remove(up)
+        # Per-entry `- consumes:` edges get the same validation as the
+        # file-level ones: an unknown upstream is dropped and reported,
+        # never left to crash a lookup downstream.
+        for entry in spec.entries:
+            if entry.own_consumes is None:
+                continue
+            for up in list(entry.own_consumes):
+                if up in entries:
+                    continue
+                where = f"{spec.path.name}: `{entry.name}`"
+                problems.append(
+                    Problem(
+                        spec.path.name,
+                        f"{where} consumes skipped entry `{up}`"
+                        if up in skipped_entries
+                        else f"{where} consumes unknown entry `{up}`",
+                    )
+                )
+                entry.own_consumes.remove(up)
         for ref in spec.references:
             if Path(ref).stem not in spec_names:
                 problems.append(
