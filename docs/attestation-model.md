@@ -8,6 +8,10 @@ be two instances of one thing, and saying so collapses several
 distinctions that were being maintained by hand. §14 lists what it
 supersedes.
 
+If the argument below feels abstract, `analogy.md` says the same thing
+as a professional kitchen — two documents on the wall, a freezer, and
+one pot of stock that goes into three dishes.
+
 The reframe was reached by pulling on one thread — *what, exactly, can
 specthis verify?* — and finding the answer is **nothing**. Everything
 below is the closure of that.
