@@ -80,6 +80,11 @@ class Binding:
     run: str | None
     workflows: list[str] = field(default_factory=list)
     executor: str | None = None
+    #: ``produces = { wages-panel = "data/wages.parquet" }`` — which file
+    #: **is** a logical name (spec §4). The one translation between the
+    #: spec's vocabulary and the pipeline's; empty when an entry declares
+    #: physical paths directly.
+    produces: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -113,6 +118,9 @@ class Entry:
     #: frontmatter, and the properties below fall back to it.
     own_consumes: list[str] | None = None
     own_props: list[str] | None = None
+    #: The logical names this entry declares, when the map translated
+    #: them into ``outputs``. Empty when the spec named paths directly.
+    logical: list[str] = field(default_factory=list)
 
     @property
     def consumes(self) -> list[str]:
@@ -458,8 +466,21 @@ def _load_bindings(
             run=table.get("run"),
             workflows=_str_list(table.get("workflows"), "bindings.toml", "workflows"),
             executor=table.get("executor"),
+            produces=_produces_map(entry_name, table.get("produces")),
         )
     return bindings, globs, cache_url, _parse_previews(data), backend_class
+
+
+def _produces_map(entry_name: str, raw: object) -> dict[str, str]:
+    """``[entries.X] produces`` — logical name -> physical path."""
+    if raw is None:
+        return {}
+    where = f"bindings.toml: [entries.{entry_name}] produces"
+    if not isinstance(raw, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
+    ):
+        raise SpecError(f"{where}: must be a table of logical-name = \"path\"")
+    return dict(raw)
 
 
 def _default_binding(entry_name: str) -> Binding:
@@ -549,7 +570,40 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                     entry.binding = binding
             else:
                 entry.binding = bindings.get(entry.name, _default_binding(entry.name))
+            # Logical names become paths here, and only here: the spec
+            # speaks in names, the pipeline in files, and the map is the
+            # one translation between them (§4).
+            if entry.binding.produces:
+                missing = [p for p in entry.outputs if p not in entry.binding.produces]
+                if missing and not any(
+                    "/" in p or "." in p for p in entry.outputs
+                ):
+                    problems.append(
+                        Problem(
+                            spec.path.name,
+                            f"{spec.path.name}: `{entry.name}` produces "
+                            f"{', '.join(missing)}, which specs/bindings.toml gives no path for",
+                        )
+                    )
+                entry.logical = list(entry.outputs)
+                entry.outputs = [
+                    entry.binding.produces.get(p, p) for p in entry.outputs
+                ]
             entries[entry.name] = entry
+
+    # A `consumes` target may name a logical product rather than the
+    # entry producing it (§3): naming the product is more precise when
+    # one entry produces several. Resolve those to their producer before
+    # validating, so both forms reach the same graph.
+    producer_of = {
+        name: e.name for e in entries.values() for name in e.logical
+    }
+    if producer_of:
+        for e in entries.values():
+            if e.own_consumes is not None:
+                e.own_consumes[:] = [producer_of.get(u, u) for u in e.own_consumes]
+        for spec in specs:
+            spec.consumes[:] = [producer_of.get(u, u) for u in spec.consumes]
 
     spec_names = {s.name for s in specs}
     for spec in specs:

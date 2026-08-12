@@ -121,3 +121,71 @@ def test_a_wrong_explicit_name_is_still_an_error(root: Path) -> None:
     write(root, "specs/wages.md", MINIMAL.replace("---\ngroup: data", "---\nname: wrong\ngroup: data"))
     _, problems = load_project_lenient(root)
     assert any("must match the filename stem" in p.message for p in problems)
+
+
+LOGICAL = """\
+---
+group: data
+---
+
+# Wage data
+
+### clean-wages
+
+Drop negative wages, winsorize at the 99th percentile.
+
+- produces: wages-panel
+
+### wage-moments
+
+Variance decomposition moments on the clean panel.
+
+- consumes: wages-panel
+- produces: wage-moments
+"""
+
+
+def bind_logical(root: Path) -> None:
+    write(root, "specs/bindings.toml",
+          (root / "specs/bindings.toml").read_text()
+          + '\n[entries.clean-wages]\n'
+            'scripts = ["scripts/fit_alpha.py"]\n'
+            'produces = { wages-panel = "data/wages.parquet" }\n'
+            '\n[entries.wage-moments]\n'
+            'scripts = ["scripts/fit_beta.py"]\n'
+            'produces = { wage-moments = "results/moments.json" }\n')
+
+
+def test_the_map_translates_logical_names_to_paths(root: Path) -> None:
+    """§4: the spec speaks in names, the pipeline in files, and the map
+    is the one translation between them."""
+    write(root, "specs/wages.md", LOGICAL)
+    bind_logical(root)
+    project = load_project(root)
+    clean = project.entries["clean-wages"]
+    assert clean.logical == ["wages-panel"]
+    assert clean.outputs == ["data/wages.parquet"]
+
+
+def test_consumes_may_name_a_product_rather_than_its_entry(root: Path) -> None:
+    """Naming the product is more precise when one entry produces several."""
+    write(root, "specs/wages.md", LOGICAL)
+    bind_logical(root)
+    project = load_project(root)
+    assert project.entries["wage-moments"].consumes == ["clean-wages"]
+
+
+def test_a_logical_name_with_no_path_is_reported(root: Path) -> None:
+    write(root, "specs/wages.md", LOGICAL)
+    bind_logical(root)
+    write(root, "specs/bindings.toml",
+          (root / "specs/bindings.toml").read_text().replace(
+              'produces = { wages-panel = "data/wages.parquet" }', 'produces = { other = "x" }'))
+    _, problems = load_project_lenient(root)
+    assert any("gives no path for" in p.message for p in problems)
+
+
+def test_physical_paths_still_work_without_a_map_entry(root: Path) -> None:
+    project = load_project(root)
+    assert project.entries["fit-alpha"].outputs == ["results/alpha/fit.json"]
+    assert project.entries["fit-alpha"].logical == []
