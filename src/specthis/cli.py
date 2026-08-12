@@ -30,6 +30,7 @@ from .check import (
     machine_repairable,
     queues,
     step_digest,
+    ordered_keys,
     topo_order,
     verified,
 )
@@ -236,9 +237,9 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
     project = _load(project_path)
     reports = check_project(project)
     if entry is None:
-        for name in topo_order(project):
+        for name in ordered_keys(project, reports):
             r = reports[name]
-            e = project.entries[name]
+            e = project.entries[r.instance_of or name]
             kind = e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}"
             marker = "" if r.materialized else "   [bytes remote]"
             axes = r.certification.value + (
@@ -247,8 +248,13 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
             click.echo(f"  {r.status.value:<20} {axes:<24} {name:<28} {kind}{marker}")
         return
     _require_active(project, entry)
+    if entry not in reports:
+        raise click.ClickException(
+            f"no claim for `{entry}`"
+            + (" — it is a template; name one of its instances" if entry in project.entries else "")
+        )
     r = reports[entry]
-    e = project.entries[entry]
+    e = project.entries[r.instance_of or entry]
     click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.spec.kind}/{e.tier})")
     axes = r.certification.value + (f" · {r.realization.value}" if r.realization else "")
     click.echo(f"status:    {r.status.value}  ({axes})")

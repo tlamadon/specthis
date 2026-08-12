@@ -476,6 +476,27 @@ def _one(
     return report
 
 
+def keys_for(reports: dict[str, Report]) -> dict[str, list[str]]:
+    """Entry name -> the report keys standing for it.
+
+    An ordinary entry stands for itself; a template stands for its
+    instances and has no report of its own. Surfaces that walk entries
+    must go through this, or they will look up a template by name and
+    find nothing.
+    """
+    out: dict[str, list[str]] = {}
+    for key, r in reports.items():
+        out.setdefault(r.instance_of or r.entry, []).append(key)
+    return out
+
+
+def ordered_keys(project: Project, reports: dict[str, Report]) -> list[str]:
+    """Every report key, upstream first — instances in place of their
+    template."""
+    keys = keys_for(reports)
+    return [k for name in topo_order(project) for k in sorted(keys.get(name, []))]
+
+
 def machine_repairable(r: Report) -> bool:
     """Membership in the machine queue: the realization is broken and a
     rerun is mechanically possible — code present, definition not

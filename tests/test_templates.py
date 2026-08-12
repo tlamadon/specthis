@@ -311,3 +311,33 @@ def test_instances_are_realized_independently(root: Path) -> None:
     reports = check_project(load_project(root))
     assert reports["clean-wages[dataset=chile]"].realization is Realization.CURRENT
     assert reports["clean-wages[dataset=argentina]"].realization is Realization.CURRENT
+
+
+def test_the_dashboard_survives_instances(root: Path) -> None:
+    """Surfaces iterate reports, and instance keys are new — check the
+    dashboard and the DAG render rather than assuming."""
+    from click.testing import CliRunner
+
+    from specthis.cli import main
+
+    templated(root)
+    result = CliRunner().invoke(main, ["export", "--path", str(root)])
+    assert result.exit_code == 0, result.output
+    page = (root / "specs/specs.html").read_text()
+    assert "clean-wages[dataset=chile]" in page
+
+    result = CliRunner().invoke(main, ["dag", "--path", str(root), "--format", "json"])
+    assert result.exit_code == 0, result.output
+
+
+def test_check_and_status_render_instances(root: Path) -> None:
+    from click.testing import CliRunner
+
+    from specthis.cli import main
+
+    templated(root)
+    result = CliRunner().invoke(main, ["check", "--path", str(root)])
+    assert "clean-wages[dataset=chile]" in result.output
+    result = CliRunner().invoke(main, ["status", "--path", str(root)])
+    assert result.exit_code == 0, result.output
+    assert "clean-wages[dataset=argentina]" in result.output

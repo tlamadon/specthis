@@ -40,6 +40,7 @@ from urllib.parse import quote
 import markdown as _markdown
 
 from .check import (
+    keys_for,
     Certification,
     Realization,
     Report,
@@ -813,7 +814,8 @@ def _rewrite_spec_links(
 def _worst_dot(spec: SpecFile, reports: dict[str, Report]) -> str:
     if spec.skip:
         return '<span class="dot dot-skip"></span>'
-    rs = [reports[e.name] for e in spec.entries]
+    keys = keys_for(reports)
+    rs = [reports[k] for e in spec.entries for k in keys.get(e.name, [])]
     if not rs:
         return ""
     if any(r.certification is not Certification.CERTIFIED or machine_repairable(r) for r in rs):
@@ -1002,7 +1004,10 @@ def _why(r: Report, entry: Entry, project: Project, reports: dict[str, Report]) 
         return "; ".join(parts)
     if not (r.computable and r.realized):
         broken = [
-            u for u in entry.consumes if not (reports[u].computable and reports[u].realized)
+            u
+            for u in entry.consumes
+            for k in keys_for(reports).get(u, [])
+            if not (reports[k].computable and reports[k].realized)
         ]
         return "waiting on " + ", ".join(broken)
     return ""
@@ -1122,7 +1127,9 @@ def _vouch_section(
 
     consumed_by = _consumed_by(project)
     rows = []
-    for name, e in sorted(project.entries.items()):
+    for name, e in sorted(
+        (k, project.entries[r.instance_of or k]) for k, r in reports.items()
+    ):
         r = reports[name]
         v = r.vouch
         expired = (
@@ -1194,7 +1201,9 @@ def _run_section(project: Project, reports: dict[str, Report]) -> str:
 
     consumed_by = _consumed_by(project)
     rows = []
-    for name, e in sorted(project.entries.items()):
+    for name, e in sorted(
+        (k, project.entries[r.instance_of or k]) for k, r in reports.items()
+    ):
         r = reports[name]
         if r.realization is None:  # library: the chain stops at code
             continue
