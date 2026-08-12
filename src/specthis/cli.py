@@ -29,8 +29,10 @@ from .check import (
     instance_inputs,
     is_library,
     is_source,
+    keys_for,
     machine_repairable,
     queues,
+    sibling_keys,
     step_digest,
     ordered_keys,
     verified,
@@ -104,7 +106,7 @@ def _path_option(f):
 def _mind_hint(report: Report, project: Project) -> str:
     """Why this definition needs a mind (the vouch-axis diagnosis)."""
     if report.certification is Certification.UNIMPLEMENTED:
-        scripts = project.entries[report.entry].binding.scripts
+        scripts = project.entries[report.instance_of or report.entry].binding.scripts
         return "no code at " + ", ".join(scripts)
     if report.certification is Certification.UNVOUCHED:
         if report.expired:
@@ -128,7 +130,7 @@ def _machine_hint(report: Report) -> str:
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(__version__, prog_name="specthis")
 def main() -> None:
-    """A notary for a DAG it also knows how to build."""
+    """A notary for a research pipeline. It makes nothing."""
 
 
 # ---------------------------------------------------------------- check
@@ -241,7 +243,7 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
         for name in ordered_keys(project, reports):
             r = reports[name]
             e = project.entries[r.instance_of or name]
-            kind = e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}"
+            kind = e.kind if e.kind in ("library", "source") else f"{e.kind}/{e.tier}"
             marker = "" if r.materialized else "   [bytes remote]"
             click.echo(f"  {coordinates(r):<44} {name:<28} {kind}{marker}")
         return
@@ -253,7 +255,7 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
         )
     r = reports[entry]
     e = project.entries[r.instance_of or entry]
-    click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.spec.kind}/{e.tier})")
+    click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.kind}/{e.tier})")
     click.echo(f"state:     {coordinates(r)}")
     click.echo(f"spec_sha:  {r.spec_sha}")
     click.echo(f"code_sha:  {r.code_sha or '(code missing)'}")
@@ -375,7 +377,7 @@ def record_cmd(entry: str, executor: str, project_path: Path) -> None:
     runs = read_runs(project.specs_dir)
     prior = runs.get(entry)
     inputs = (
-        instance_inputs(project, e, inst, runs, {}) if inst
+        instance_inputs(project, e, inst, runs, sibling_keys(project, e, inst)) if inst
         else expected_inputs(project, e, runs)
     )
     record_run(
@@ -536,9 +538,16 @@ def vouch_cmd(
     Writes vouches.toml only; never touches runs.toml.
     """
     project = _load(project_path)
-    _require_active(project, entry)
-    e = project.entries[entry]
-    c = code_sha(project, e)
+    try:
+        e, inst = resolve_key(project, entry)
+    except KeyError:
+        raise click.ClickException(f"unknown entry `{entry}`") from None
+    _require_active(project, e.name)
+    c = (
+        hashing.output_sha(project.root, list(inst.outputs))
+        if inst and is_source(e)
+        else code_sha(project, e)
+    )
     if c is None:
         raise click.ClickException(
             f"`{entry}` has no code on disk ({', '.join(e.binding.scripts)}) — nothing to judge"
@@ -555,7 +564,7 @@ def vouch_cmd(
         spec_block_sha=e.block_sha,
         # The wiring is part of what was judged: realizing a spec means
         # writing code *and* feeding it the right inputs (spec §1).
-        step_sha=step_digest(project, e) or "",
+        step_sha=(step_digest(project, e) or "") if inst is None else "",
         code_manifest=code_manifest(project, e),
         duration_seconds=took_seconds,
     )
@@ -569,7 +578,15 @@ def vouch_cmd(
     # won't read `ready` yet.
     if vouch.verdict == "ok" and e.consumes:
         reports = check_project(project)
-        pending = sorted(up for up in e.consumes if not verified(reports[up]))
+        # An upstream may be a template, which has no report of its own —
+        # its instances carry the claims, and any one of them unverified
+        # leaves this entry waiting.
+        by_entry = keys_for(reports)
+        pending = sorted(
+            up
+            for up in e.consumes
+            if not all(verified(reports[k]) for k in by_entry.get(up, []))
+        )
         if pending:
             click.echo(
                 f"note: upstream not yet verified ({', '.join(pending)}) — "

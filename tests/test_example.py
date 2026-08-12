@@ -156,3 +156,102 @@ def test_lint_catches_an_edge_the_pipeline_stops_building(wages: Path) -> None:
     result = cli(wages, "lint")
     assert result.exit_code == 1
     assert "the contract declares an edge the pipeline does not build" in result.output
+
+
+# ============================================================== wage-grid
+
+GRID = Path(__file__).parent.parent / "examples" / "wage-grid"
+COUNTRIES = ("chile", "argentina")
+
+
+@pytest.fixture
+def grid(tmp_path: Path) -> Path:
+    root = tmp_path / "wage-grid"
+    shutil.copytree(GRID, root)
+    return root
+
+
+def build_grid(root: Path) -> None:
+    for c in COUNTRIES:
+        assert cli(root, "record", f"raw-wages[country={c}]").exit_code == 0
+    assert cli(root, "build").exit_code == 0
+
+
+def test_the_grid_lints_clean(grid: Path) -> None:
+    result = cli(grid, "lint")
+    assert result.exit_code == 0, result.output
+
+
+def test_instances_come_from_the_pipeline_whatever_the_steps_are_called(grid: Path) -> None:
+    """The steps are `clean-chile`, not `clean-wages@chile`: identity is
+    matched from the output path, so no naming convention is imposed."""
+    from specthis.instances import instances
+
+    project = load_project(grid)
+    found = {i.name: i.step for i in instances(project, project.entries["clean-wages"])}
+    assert found == {
+        "clean-wages[country=chile]": "clean-chile",
+        "clean-wages[country=argentina]": "clean-argentina",
+    }
+
+
+def test_four_entries_yield_seven_claims(grid: Path) -> None:
+    build_grid(grid)
+    reports = check_project(load_project(grid))
+    assert len(reports) == 7
+    assert "clean-wages" not in reports, "the template itself is not a claim"
+
+
+def test_the_grid_reaches_ready(grid: Path) -> None:
+    build_grid(grid)
+    for entry in (*[f"raw-wages[country={c}]" for c in COUNTRIES],
+                  "clean-wages", "wage-moments", "wage-comparison"):
+        assert cli(grid, "vouch", entry, "--as", "ana").exit_code == 0
+    result = cli(grid, "check")
+    assert result.exit_code == 0, result.output
+    assert "ready: 7/7" in result.output
+
+
+def test_the_comparison_aggregates_every_country(grid: Path) -> None:
+    build_grid(grid)
+    table = (grid / "reports/comparison.md").read_text()
+    assert "| argentina |" in table and "| chile |" in table
+
+
+def test_one_vouch_covers_every_instance(grid: Path) -> None:
+    build_grid(grid)
+    assert cli(grid, "vouch", "clean-wages", "--as", "ana").exit_code == 0
+    for c in COUNTRIES:
+        assert axes(grid, f"clean-wages[country={c}]")[0] is Certification.CERTIFIED
+
+
+def test_an_instance_vouch_wins_over_the_template(grid: Path) -> None:
+    """Sign the template when the code really is country-agnostic; sign
+    instances when it is not. You choose by where you file it."""
+    build_grid(grid)
+    assert cli(grid, "vouch", "clean-wages[country=chile]", "--as", "ana").exit_code == 0
+    assert axes(grid, "clean-wages[country=chile]")[0] is Certification.CERTIFIED
+    assert axes(grid, "clean-wages[country=argentina]")[0] is Certification.UNVOUCHED
+
+
+def test_breaking_one_country_leaves_the_other_alone(grid: Path) -> None:
+    build_grid(grid)
+    raw = grid / "data/raw/chile/wages.csv"
+    raw.write_text(raw.read_text() + "4,2020,55000\n")
+
+    assert axes(grid, "clean-wages[country=chile]")[1] is Realization.STALE
+    assert axes(grid, "clean-wages[country=argentina]")[1] is Realization.CURRENT
+
+
+def test_a_templated_source_is_pinned_per_instance(grid: Path) -> None:
+    """Its bytes arrive from outside, so it has no step — each country's
+    extract is recorded on its own."""
+    from specthis.check import is_source
+
+    project = load_project(grid)
+    assert is_source(project.entries["raw-wages"])
+    build_grid(grid)
+    from specthis.ledger import read_runs
+
+    runs = read_runs(grid / "specs")
+    assert {f"raw-wages[country={c}]" for c in COUNTRIES} <= set(runs)

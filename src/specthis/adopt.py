@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import hashing
-from .check import expected_inputs, instance_inputs
+from .check import expected_inputs, instance_inputs, sibling_keys
 from .ledger import Run, read_runs, record_run
 from .instances import resolve_key
 from .parse import Project
@@ -90,7 +90,8 @@ def adopt_manifest(project: Project, entry_name: str, manifest: dict) -> Adopted
     if inst is None:
         inputs = expected_inputs(project, entry, runs)
     else:
-        inputs = instance_inputs(project, entry, inst, runs, {})
+        inputs = instance_inputs(project, entry, inst, runs,
+                                 sibling_keys(project, entry, inst))
     outputs = hashing.files_manifest(project.root, paths)
     out_sha = hashing.output_sha(project.root, paths)
     _require(out_sha is not None, f"`{entry_name}`: declared output(s) absent after the run")

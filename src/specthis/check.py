@@ -162,6 +162,27 @@ def code_sha(project: Project, entry: Entry) -> str | None:
     return hashing.manifest_sha(code_manifest(project, entry).items())
 
 
+def sibling_keys(project: Project, entry: Entry, inst: Instance) -> dict[str, str]:
+    """For each consumed entry, the ledger key that feeds *this* instance.
+
+    A templated upstream contributes the sibling agreeing on every prop
+    they share — the binding is by name, so it is already written down.
+    Anything else contributes itself. Derived from the project alone, so
+    ``adopt`` and ``check`` cannot disagree about what a claim pins.
+    """
+    keys: dict[str, str] = {}
+    for up in entry.consumes:
+        up_entry = project.entries.get(up)
+        if up_entry is None or not is_template(up_entry):
+            continue
+        for cand in instances(project, up_entry):
+            if all(inst.binding.get(k) == v for k, v in cand.binding.items()
+                   if k in inst.binding):
+                keys[up] = cand.name
+                break
+    return keys
+
+
 def instance_inputs(
     project: Project,
     entry: Entry,
@@ -433,15 +454,6 @@ def check_project(
     return reports
 
 
-def _sibling(props: dict[str, str], candidates: list[Report]) -> Report | None:
-    """The upstream instance feeding this one: the sibling agreeing on
-    every prop they share. No `raw-wages[dataset]` syntax needed — the
-    binding is by name, so it is already written down."""
-    for cand in candidates:
-        if all(props.get(k) == v for k, v in cand.props.items() if k in props):
-            return cand
-    return None
-
 
 def _reports_for(
     project: Project,
@@ -467,17 +479,20 @@ def _reports_for(
 
     out: list[Report] = []
     for inst in instances(project, entry):
+        # A source has no code: its data is the subject, and for a
+        # templated source that data is *this instance's* bytes — the
+        # pattern hashes to nothing.
+        if is_source(entry):
+            c = hashing.output_sha(project.root, list(inst.outputs))
         # A vouch on the instance wins over one on the template (§15.4):
         # the narrower claim is the more honest one.
         v = vouches.get(inst.name) or vouches.get(name)
-        upstream_keys, upstream_reports = {}, []
-        for up in entry.consumes:
-            cands = [reports[k] for k in keys.get(up, []) if k in reports]
-            chosen = _sibling(inst.binding, cands) if cands else None
-            key = chosen.entry if chosen else up
-            upstream_keys[up] = key
-            if key in reports:
-                upstream_reports.append(key)
+        upstream_keys = sibling_keys(project, entry, inst)
+        upstream_reports = [
+            k for up in entry.consumes
+            for k in ([upstream_keys[up]] if up in upstream_keys else keys.get(up, []))
+            if k in reports
+        ]
         report = _one(
             project, entry, inst.name, v, runs.get(inst.name), s, c,
             instance_inputs(project, entry, inst, runs, upstream_keys),

@@ -1,5 +1,6 @@
 .specthis/
-data/wages.csv
+data/chile/
+data/argentina/
 results/
 reports/
 specs/runs.toml

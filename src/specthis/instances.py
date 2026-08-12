@@ -98,13 +98,23 @@ def instances(project: Project, entry: Entry) -> list[Instance]:
     if not (is_template(entry) and patterns and project.steps):
         return []
 
+    # A template that produces its own bytes is matched against step
+    # *outputs*. A templated **source** produces nothing — its bytes
+    # arrive from outside — so it is matched against the deps of the
+    # steps that consume it. Either way the instance set comes from the
+    # pipeline, never from a registry.
+    produced = any(bind(pat, out) for pat in patterns for s in project.steps.values()
+                   for out in s.outs)
+    side = "outs" if produced else "deps"
+
     found: list[Instance] = []
     for sid, step in sorted(project.steps.items()):
         bound: dict[str, str] = {}
         resolved: list[str] = []
         for pattern in patterns:
             hit = next(
-                (b for out in step.outs if (b := bind(pattern, out)) is not None), None
+                (b for out in getattr(step, side) if (b := bind(pattern, out)) is not None),
+                None,
             )
             if hit is None or any(bound.get(k, v) != v for k, v in hit.items()):
                 bound = {}
@@ -113,14 +123,14 @@ def instances(project: Project, entry: Entry) -> list[Instance]:
             resolved.append(resolve(pattern, hit))
         if not bound:
             continue
-        found.append(
-            Instance(
-                entry=entry.name,
-                props=tuple(sorted(bound.items())),
-                step=sid,
-                outputs=tuple(resolved),
-            )
+        inst = Instance(
+            entry=entry.name,
+            props=tuple(sorted(bound.items())),
+            step=sid if produced else "",
+            outputs=tuple(resolved),
         )
+        if all(i.props != inst.props for i in found):  # several consumers, one source
+            found.append(inst)
     return found
 
 

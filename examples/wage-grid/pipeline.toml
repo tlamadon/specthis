@@ -1,0 +1,32 @@
+# The pipeline declares the instances. specthis derives nothing — it
+# reads the steps you wrote and matches each output against the
+# template's pattern, so `data/chile/wages.csv` binds country=chile
+# whatever the step is called.
+#
+# `raw-wages` instances have no steps: their bytes arrive from outside.
+
+[steps.clean-chile]
+command = "python3 scripts/clean_wages.py chile"
+deps    = ["scripts/clean_wages.py", "data/raw/chile/wages.csv"]
+outs    = ["data/chile/wages.csv"]
+
+[steps.clean-argentina]
+command = "python3 scripts/clean_wages.py argentina"
+deps    = ["scripts/clean_wages.py", "data/raw/argentina/wages.csv"]
+outs    = ["data/argentina/wages.csv"]
+
+[steps.moments-chile]
+command = "python3 scripts/moments.py chile"
+deps    = ["scripts/moments.py", "data/chile/wages.csv"]
+outs    = ["results/chile/moments.json"]
+
+[steps.moments-argentina]
+command = "python3 scripts/moments.py argentina"
+deps    = ["scripts/moments.py", "data/argentina/wages.csv"]
+outs    = ["results/argentina/moments.json"]
+
+[steps.wage-comparison]
+command = "python3 scripts/compare.py"
+deps    = ["scripts/compare.py",
+           "results/chile/moments.json", "results/argentina/moments.json"]
+outs    = ["reports/comparison.md"]

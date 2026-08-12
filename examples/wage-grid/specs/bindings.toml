@@ -1,0 +1,15 @@
+# `{country}` is substituted per instance. `scripts` stays concrete:
+# every instance runs the same code, which is what lets one vouch cover
+# the whole template.
+
+[entries.clean-wages]
+scripts  = ["scripts/clean_wages.py"]
+produces = { wages-panel = "data/{country}/wages.csv" }
+
+[entries.wage-moments]
+scripts  = ["scripts/moments.py"]
+produces = { country-moments = "results/{country}/moments.json" }
+
+[entries.wage-comparison]
+scripts  = ["scripts/compare.py"]
+produces = { comparison-table = "reports/comparison.md" }
