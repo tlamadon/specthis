@@ -126,6 +126,15 @@ class Entry:
     #: The logical names this entry declares, when the map translated
     #: them into ``outputs``. Empty when the spec named paths directly.
     logical: list[str] = field(default_factory=list)
+    #: Type inferred from this entry's own field list (§2). ``None`` for
+    #: entries written in the legacy form, which fall back to the file's
+    #: ``kind:``. Per-entry because type *is* per entry — one file may
+    #: hold a source, two computes and a library.
+    own_kind: str | None = None
+
+    @property
+    def kind(self) -> str:
+        return self.own_kind or self.spec.kind
 
     @property
     def consumes(self) -> list[str]:
@@ -380,6 +389,7 @@ def parse_spec(path: Path) -> SpecFile:
             if not _ENTRY_NAME.match(entry_name):
                 raise SpecError(f"{path.name}: bad entry name `{entry_name}`")
             fields = entry_fields(block_match.group(2), f"{path.name}: `{entry_name}`")
+            own_kind = infer_kind(fields, []) if fields else None
             if spec.skip:
                 # Commented out: keep the entry names (for views and for
                 # "consumes skipped entry" diagnostics) but grammar-check
@@ -394,6 +404,8 @@ def parse_spec(path: Path) -> SpecFile:
                     raise SpecError(
                         f"{path.name}: library entry `{entry_name}` must not declare an output"
                     )
+                outputs = []
+            elif own_kind == "library":
                 outputs = []
             elif fields.get("produces"):
                 # Target format (§3): the field list carries the products,
@@ -419,6 +431,7 @@ def parse_spec(path: Path) -> SpecFile:
                     block_sha=sha256_text(block_match.group(0)),
                     own_consumes=fields.get("consumes"),
                     own_props=fields.get("props"),
+                    own_kind=own_kind,
                 )
             )
     return spec

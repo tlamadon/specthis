@@ -109,7 +109,7 @@ def code_present(project: Project, entry: Entry) -> bool:
 
 
 def is_library(entry: Entry) -> bool:
-    return entry.spec.kind == "library"
+    return entry.kind == "library"
 
 
 def is_source(entry: Entry) -> bool:
@@ -119,7 +119,7 @@ def is_source(entry: Entry) -> bool:
     attests provenance — "this is IPUMS extract #14" — and its run claim
     pins the bytes, placed by hand and recorded.
     """
-    return entry.spec.kind == "source"
+    return entry.kind == "source"
 
 
 def code_manifest(project: Project, entry: Entry) -> dict[str, str]:

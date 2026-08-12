@@ -1,0 +1,20 @@
+# The pipeline: you author this, specthis reads it. Edges are derived
+# from deps/outs — a step follows every step whose outs its deps name.
+#
+# `raw-wages` has no step: its bytes come from outside any pipeline, so
+# it is pinned with `specthis record` instead.
+
+[steps.clean-wages]
+command = "python3 scripts/clean_wages.py"
+deps    = ["scripts/clean_wages.py", "data/raw/wages.csv"]
+outs    = ["data/wages.csv"]
+
+[steps.wage-moments]
+command = "python3 scripts/moments.py"
+deps    = ["scripts/moments.py", "data/wages.csv"]
+outs    = ["results/moments.json"]
+
+[steps.wage-table]
+command = "python3 scripts/table.py"
+deps    = ["scripts/table.py", "results/moments.json"]
+outs    = ["reports/table.md"]
