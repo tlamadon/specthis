@@ -15,10 +15,16 @@ those disagree, this one wins.
 spec format is accepted **alongside** the legacy one, so nothing breaks
 and §16's migration is optional.
 
-Not built: §9's single-record ledger (still `vouches.toml` +
-`runs.toml`, two record types); §16's deletions, which would remove
-parallel rebuilds and the byte cache with no shipped replacement.
-Items marked **[NEW]** below are design not yet reached.
+**§9 stays two files.** `vouches.toml` and `runs.toml`, two record
+types — a settled decision (2026-08-12), not a deferral. The single
+`Attestation` envelope below describes the *shape of a claim*, which the
+two records already carry between them; collapsing them into one file
+would change no behaviour and buys only a third capability that does not
+exist.
+
+Not built: §16's deletions, which would remove parallel rebuilds, the
+byte cache and remote adoption with no shipped replacement — free once a
+backend with those capabilities exists, a regression before then.
 
 ---
 
@@ -514,9 +520,10 @@ A compute manager emits a manifest (§14). `adopt` translates it:
 
 ## 9. Ledgers
 
-`specs/ledger/*.toml`, **globbed, never enumerated in code** — a third
-capability lands a third file with its own lock and its own diff stream.
-Today: `mind.toml`, `machine.toml`.
+`specs/vouches.toml` and `specs/runs.toml` — one file per capability,
+one writer stream each. (A globbed `ledger/*.toml` directory was
+considered and declined: it buys a third capability landing free, and
+there is no third capability.)
 
 One table per entry, keyed by entry name. Latest claim wins; history is
 git's job.

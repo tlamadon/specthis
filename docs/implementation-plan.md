@@ -90,7 +90,7 @@ idioms on screen at once.
 
 ---
 
-## Phase 2 — the ledger reshape — **partly done, rest deferred**
+## Phase 2 — the ledger reshape — **done as far as it goes**
 
 One record type, capability-keyed files.
 
@@ -110,13 +110,13 @@ nothing until a third capability exists.
 - **`migrate`** rewrites both old ledgers in place.
 - **`remote.py`** adopt path follows.
 
-**The rest is deferred deliberately.** Merging `Vouch` and `Run` into one
-`Attestation` and globbing `ledger/*.toml` touches 110 call sites across
-7 modules to change no behaviour: the pinned tables already exist
-(`code_manifest`, `inputs`, `outputs`), and `step:`/`out:` pseudo-paths
-are already in use. The payoff is a third capability landing free, and
-there is no third capability. Worth doing as its own focused piece of
-work, not as churn at the end of a session.
+**The rest is closed, not deferred** (user decision, 2026-08-12): two
+ledger files stay. Merging `Vouch` and `Run` into one `Attestation` and
+globbing `ledger/*.toml` would touch 110 call sites across 7 modules to
+change no behaviour — the pinned tables already exist (`code_manifest`,
+`inputs`, `outputs`) and the `step:`/`out:` pseudo-paths are already in
+use. The payoff was a third capability landing free, and there is no
+third capability.
 
 ---
 
