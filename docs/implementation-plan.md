@@ -115,19 +115,22 @@ attribution. Land it alone so the diff is reviewable.*
 
 ---
 
-## Phase 3 — the format (v0.1.0 — breaking)
+## Phase 3 — the format — **partly done, and not breaking**
 
-- **`parse.py`**: infer type from fields (§2); drop `kind`/`tier`;
-  `produces` takes **logical names**, physical paths only in a source
-  entry; per-entry `consumes`.
-- **map**: gains `produces = { logical = "path" }`; loses `run`,
-  `workflows`, `executor` (they move to the pipeline in Phase 4).
-- **`migrate`**: mechanical except one thing — `Output: data/x.parquet`
-  needs a *logical name*, which only a human can supply. Prompt per
-  output, or accept a mapping file.
+**Done** (`5f9fa24`): per-entry `- consumes:` / `- produces:` /
+`- props:` field lists parse, **alongside** the legacy form. Unknown
+field keys are errors. Type inference (`infer_kind`) exists but is not
+yet load-bearing — `kind:` is still read from frontmatter.
 
-*The only phase requiring human input. Version-bump to 0.1.0 and say so
-loudly.*
+Additive support turned out to be the right move: no project breaks, the
+migration becomes optional, and it can be a prompt rather than a tool.
+
+**Left:** make `kind:`/`tier:` optional (infer from fields), logical
+`produces` names with `map.produces` translating to paths, and the
+map shedding `run`/`workflows`/`executor`.
+*Naming each output logically is the one thing only a human can supply,
+which is why the rest being additive matters: nothing forces the
+rename.*
 
 ---
 
@@ -205,11 +208,12 @@ is the fallback until the new one is proven.*
 
 ---
 
-## Phase 7 — templates (v0.5.0)
+## Phase 7 — templates ✅ **done**
 
-Cheap now (§15). `props` in the spec, `{prop}` in `map.produces`,
-instance identity matched **from the output path** — so no backend
-naming convention is imposed. Machine ledger keyed per instance; mind
+Done in `e9aa02a` (instances + lint) and `05bb795` (per-instance
+claims). `props` in the spec, `{prop}` in output paths, instance
+identity matched **from the output path** — so no backend naming
+convention is imposed. Machine ledger keyed per instance; mind
 ledger keyed on template *or* instance, the judge choosing by where the
 vouch is filed.
 
