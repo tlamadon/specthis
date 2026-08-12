@@ -1,161 +1,205 @@
-# specthis — the analogy
+# Your project is a bakery
 
 **Status: 2026-08-12.** Intuition, not specification. Read this first if
 the formal argument in `attestation-model.md` feels abstract; read
-`specification.md` when you need what is actually true.
+`specification.md` when you need what is actually true. §9 says where
+the analogy would mislead you.
 
-Everything here is a **bakery**, with two images borrowed from a
-building site where a bakery is vague. Baking is the right register
-because it is exact: you validate a formula, then the oven does what the
-oven does. There is no tasting and adjusting mid-bake, which is the same
-separation specthis draws between judging a definition and executing it.
+---
 
-§7 lists the places the analogy would mislead you.
+Think of your research project as a bakery.
+
+The **final goods** are cakes and pastries: your tables, your figures,
+the paper that interprets them. The **raw materials** are flour, butter,
+eggs — the data you did not produce, cannot certify, and can only
+source.
+
+Between the two is everything you actually build. Nobody goes from a
+sack of flour to a finished gâteau in one movement. You make a **batter**,
+a **choux paste**, a **crème pâtissière** — intermediate products, each
+with a name, each held to a standard, each feeding several things
+downstream.
+
+As the team leader you lay out how to get from the flour to the cakes.
+That is three separate documents, and keeping them separate is the whole
+idea.
 
 ---
 
 ## 1. The three things you write
 
-| specthis | bakery |
-|---|---|
-| **spec** | the **formula** — 100% flour, 68% water, 2% salt, 1.5% levain, and what the loaf must be |
-| **code** | the **method** — how you actually mix, fold, shape and bake |
-| **pipeline** | the **production sheet** — this method, that flour lot, into those tins |
+**The formula** — what each thing must be. *Choux: 100% water, 60%
+butter, 120% flour, eggs to a ribbon that falls in a V. Should puff
+hollow and hold its shape.* Notice it describes the paste without
+reference to any particular batch. That is your **spec**.
 
-A formula describes the bread without reference to any batch. That is
-what a spec is: what the thing must be, independent of any making of it.
+**The method** — how it is actually made. Boil the water and butter,
+shoot in the flour, dry it out over the heat, beat the eggs in one at a
+time. That is your **code**.
+
+**The production sheet** — which method, with which ingredients, into
+which tray. *Choux by the standard method, flour lot 4471, piped onto
+the lined tray.* That is your **pipeline**.
 
 You write all three. Nobody derives the production sheet from the
 formula, which is why specthis reads your pipeline and checks it against
-your specs rather than generating it.
+your formulas rather than writing it for you.
 
 ---
 
-## 2. The two claims are two documents on the wall
+## 2. The two things you sign, and they are not the same thing
 
-This is the whole design, and it is not a metaphor — bakeries really
-keep both, and would never merge them.
+**You approve the formula once.** Somebody makes the choux, you cut one
+open, you see it is hollow and holds. Signed off. That approval covers
+the next four hundred batches — and is void the instant the method
+changes or you rewrite the standard.
 
-**The formula is approved once.** Someone bakes it, cuts it, judges the
-crumb, and signs it off. That approval survives four hundred bakes. It
-is void the moment the method changes or the formula is rewritten.
+**You label every batch.** *Crème pât — 12 Aug — batch 3 — milk lot
+88, eggs lot 12.* One label per making. It survives nothing; tomorrow's
+batch gets its own.
 
-> *That is a vouch.* Judgment attaches to the **definition**, so it
-> survives every repetition and expires only when its subject moves.
+These answer different questions. The first says *this way of making it
+is right.* The second says *this tub came from that way, using those
+things.* Bakeries keep both and would never merge them, and neither does
+specthis: one ledger for approvals, one for batches.
 
-**Every batch gets a label.** *Country sourdough — 12 Aug — batch 3 —
-flour lot 4471.* One per bake. It survives nothing; tomorrow's batch
-gets its own.
-
-> *That is a run claim.* It attaches to **bytes**, so it survives
-> nothing.
-
-Different questions, different people, different moments. Two documents.
-
-**And you cannot taste-and-adjust mid-bake.** Once it is in the oven,
-the formula either was right or was not. Judgment happens at the
-definition; the batch simply runs. That separation is the model.
+**And you cannot taste and adjust once it is in the oven.** Judgment
+happens on the formula; the batch simply runs. That separation is the
+model — a mind judges definitions, a machine makes bytes, and neither
+waits for the other.
 
 ---
 
-## 3. One entry, end to end
+## 3. You are not the one baking
 
-`clean-wages` is your **levain**.
+Your team bakes. The ovens bake. You laid out the plan and you sign the
+paperwork.
 
-The **formula** says what a levain must be: 100% hydration, doubled in
-four hours, smells of yoghurt not acetone. The **method** is how you
-refresh it. The **production sheet** says: *this method, that flour, that
-crock, twelve hours at 24°C.*
+specthis is the same: it is **the production log**, not the baker and
+not the inspector. It never lights an oven. It hands the production
+sheet to whoever is doing the work — your own kitchen, or a contract
+bakery with more capacity — and records what comes back.
 
-The levain is not "the output of step 2" — it is **levain**, a thing
-with a name, and it goes into the country loaf, the baguettes *and*
-tomorrow's refresh. Several consumers, one intermediate, and it has an
-identity that outlives every batch that used it.
-
-That is the DAG, and it is the normal case rather than a clever one.
+You hand over the **whole sheet**, not one task at a time. The bakery
+decides what actually needs making today, because only they know what is
+already in the freezer.
 
 ---
 
-## 4. Everything else
+## 4. One intermediate, followed through
 
-| specthis | bakery |
-|---|---|
-| **cache** | the **freezer** — laminated dough you sheeted on Tuesday |
-| **probe** | opening the freezer to look, before anyone starts sheeting |
-| **`map.scripts`** | **what you make vs what you buy in** — you mill nothing, you laminate everything |
-| **`map.produces`** | which crock *is* "the levain", as opposed to where it sits |
-| **source entry** | the **flour**, with the miller's spec sheet — protein, ash, lot number |
-| **library entry** | a **preferment kept for its own sake** — judged on its own, sold to nobody |
-| **template** | one approved formula, forty branches of the chain |
-| **propagation** | the levain went acetic — nothing baked from it is trusted |
-| **integrity break** | someone cut into a loaf that was going out for judging |
-| **the two queues** | what needs approving, and what needs baking |
-| **specthis itself** | the production log — not the baker, not the inspector |
+Take the **crème pâtissière**.
 
-**The label is the cache key.** A tub marked only *dough* is useless:
-you cannot tell whether it is the *right* dough. To reuse it you must
-know which formula and which flour lot — which is why a run claim pins
-its whole input table rather than just naming what came out.
+It has a formula: smooth, no skin, sets to a firm ribbon. It has a
+method: temper the yolks, cook to the boil, sieve, chill fast. It is made
+from milk and eggs you bought and sugar you bought.
 
-**The freezer belongs to the bakery, not the inspector.** specthis never
-reads a manager's cache. It reads what the manager reports.
+And it is not "the output of step 4." It is *crème pât* — a thing with a
+name, which goes into the éclairs, the tarts **and** tomorrow's
+mille-feuille. Several consumers, one intermediate.
 
-**You hand over the production sheet, not a task.** The bakery decides
-what actually gets made, given what is already in the freezer. specthis
-hands over the whole pipeline for the same reason: whether a rerun
-produces the identical thing is only knowable *after* running it.
+That is why every entry in your project produces something with a name
+rather than a file at the end of an arrow. `wages-panel` is a crème
+pâtissière.
 
 ---
 
-## 5. The lesson only baking teaches
+## 5. The freezer
 
-**Ambient temperature is an undeclared input.**
+Before anyone sheets new laminated dough, you look in the freezer. You
+sheeted some on Tuesday. If it is the *same* dough — same formula, same
+flour lot — you use it and skip the work.
 
-The dough proofed faster because the kitchen was warm. Nothing in your
-log changed. The bread is different. Your log is now *lying* — not
-through malice, but because something that moved the output was never
-written down.
+That is the cache, and looking in the freezer is the cheap check you do
+first. Two things follow:
 
-That is under-declaration: the one risk specthis cannot cover, and the
-whole reason **arguments must be files**. A parameter that lives in
-somebody's head, or in the room, is a parameter no claim can pin.
+**The label has to say enough.** A tub marked only *dough* is useless —
+you cannot tell whether it is the right dough. That is why a batch record
+pins everything that went into it, not just what came out.
 
----
-
-## 6. Two images borrowed from a building site
-
-**What a vouch really is: building control signs off the rebar.** The
-certificate stands for the life of the building, and is void the moment
-anyone alters the work it covered. Nothing states the expiry rule that
-cleanly.
-
-**Why a broken upstream is not your fault: the footings are not to
-spec.** Nobody's workmanship above them is in question. Every
-certificate for the second floor is now standing on ground that moved.
-That is `upstream-unverified` — waiting, not broken.
+**The freezer is the bakery's, not yours.** specthis never rummages
+through a workshop's store; it reads what the workshop reports.
 
 ---
 
-## 7. Where it would mislead you
+## 6. The flour
 
-**A building site gates; specthis does not.** You cannot cover up work
-before inspection — that is the point of building control. specthis went
-the other way deliberately: an unvouched entry rebuilds while a mind
-audits it, because judgment and computation are independent. The bakery
-has this right — tonight's batch does not wait for a formula approved
-last spring to be re-approved.
+You did not mill it. You cannot certify how it was made. What you have
+is the miller's spec sheet — protein, ash, lot number — and your own
+judgment that the sack is what it says.
 
-**One fitted closet feeds nothing.** Construction is assembly; your
-pipeline is transformation, where an intermediate is a substance that
-gets worked on again. That is why the bakery leads here.
+So the claim you sign over raw data is **provenance**, not correctness:
+*this is IPUMS extract #14, downloaded on this date.* Different in kind
+from *this method makes good choux*, and specthis keeps them different.
 
-**A bakery is a smaller cast.** A restaurant brigade — chef, sous,
-commis, supplier — illustrates better that different people hold
-different capabilities. Read a production team into the bakery, and the
-miller is an external actor either way.
+---
 
-**And no analogy carries the one hard fact:** specthis can verify
-neither claim. It cannot cut the loaf and it cannot watch the oven. It
-records who claimed what, over which bytes, and reports when the content
-those claims rest on has moved. Everything else is somebody else's job —
+## 7. Three things that go wrong, and what each needs
+
+**The levain turned acetic.** Nothing anyone did downstream was careless.
+Every loaf that used it is now of unknown quality anyway. Fix the levain
+and they are fine again — nobody needs to re-approve a formula.
+
+*That is a broken upstream: downstream is waiting, not wrong.*
+
+**Somebody changed the choux method.** Now two things are true at once:
+the formula needs re-approving, and everything made the old way is
+suspect. Two different people have work to do, and neither blocks the
+other.
+
+*That is why there are two queues.*
+
+**Somebody cut into a cake that was going out.** The kitchen cannot tell
+— nothing about its ingredients changed. Only someone checking the tray
+against the label finds it, and only they can ask for it to be remade.
+
+*That is why specthis checks products against their records, and is the
+one case where it asks for specific work.*
+
+---
+
+## 8. The warm room
+
+Here is the failure no paperwork catches.
+
+The dough proofed faster because the kitchen was warm that afternoon.
+Nothing in the production sheet changed. The bread is different. Your
+log is now **lying** — not through anyone's fault, but because something
+that moved the result was never written down.
+
+This is why every input that matters has to be a *file* — a config, a
+parameter table, something with a name that can be recorded. A number
+that lives in somebody's head, or in the room, is a number no claim can
+pin.
+
+It is the one risk specthis cannot cover for you.
+
+---
+
+## 9. Where the analogy would mislead you
+
+**A building site would gate; a bakery does not.** On site you cannot
+cover up work before it is inspected. specthis went the other way
+deliberately: an unvouched entry still gets rebuilt while somebody
+reviews it, because judging and making are independent. The bakery has
+this right — tonight's batch does not wait for a formula approved in the
+spring to be approved again.
+
+**A bakery is a small cast.** A restaurant brigade — chef, sous, commis,
+supplier — shows better that different people hold different
+capabilities. Read a production team into it.
+
+**And no analogy carries the hard fact:** specthis can verify neither
+claim. It cannot cut the choux and it cannot watch the oven. It records
+who claimed what, over which ingredients, and tells you when the ground
+under a claim has moved. Everything else is somebody else's job —
 which is the argument `attestation-model.md` makes properly.
+
+---
+
+## The whole thing, on one line
+
+> **Formulas say what things must be. Methods say how. Production sheets
+> say which, with what, into where. You approve formulas; the bakery
+> labels batches; specthis keeps both pieces of paper and tells you which
+> ones no longer hold.**
