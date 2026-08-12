@@ -367,6 +367,19 @@ A DVC adapter is `dvc.yaml` parsing, `dvc repro`, and reading
 `dvc.lock`. A scripthut adapter is workflow-document parsing, a submit
 call, and `run manifest`.
 
+**Adapters are the project's, not specthis's.** An adapter knows a
+project's queue, its credentials, its conventions — so a project
+supplies its own and names it in the map:
+
+```toml
+[backend]
+class = "mypkg.adapters:ScripthutBackend"
+```
+
+specthis imports it and calls the four methods. Anything implementing
+them qualifies; specthis ships only the bundled runner (§7.3), and
+`[backend]` is config, not a claim — it enters no digest.
+
 ### 7.3 The bundled runner
 
 specthis ships a **reference runner**: the smallest thing that satisfies

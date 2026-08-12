@@ -16,14 +16,26 @@ actually executes. ``entries`` scopes a repair; ``force`` bypasses the
 manager's cache, which is the integrity path (§10.3) — the one case
 where specthis asks for specific work.
 
-Only the bundled runner is implemented here. A scripthut or DVC backend
-is the same four methods over their own plan format and manifest
-endpoint; nothing above this module knows which one it is talking to.
+Only the bundled runner is implemented here, and deliberately so. An
+adapter for scripthut, DVC or a lab's own scheduler is **project-specific
+glue**, not a specthis feature: it knows that project's queue, its
+credentials, its conventions. A project supplies its own by naming it in
+the map —
+
+    [backend]
+    class = "mypkg.adapters:ScripthutBackend"
+
+— and specthis imports it. Anything implementing the four methods
+qualifies; nothing above this module knows which one it is talking to.
+
+That import runs the project's own code, which is the point: the seam is
+two documents, and how a project crosses it is its own business.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 from typing import Protocol
 
@@ -103,3 +115,27 @@ class RunnerBackend:
             elif r.outcome == "skipped" and r.step in stored:
                 out[r.step] = stored[r.step]
         return out
+
+
+def resolve(project, pipeline_path: Path | None = None) -> Backend:
+    """The project's backend: its own if declared, else the bundled runner.
+
+    ``[backend] class`` is a dotted path with the class after a colon,
+    ``mypkg.adapters:ScripthutBackend``. It is constructed with the
+    project root and the pipeline path, which is all the four operations
+    need — a backend that wants more should read its own config.
+    """
+    spec = getattr(project, "backend_class", None)
+    if not spec:
+        return RunnerBackend(project.root, pipeline_path)
+    module_name, _, class_name = spec.partition(":")
+    if not module_name or not class_name:
+        raise BackendError(
+            f"[backend] class must be `module:ClassName`, got {spec!r}"
+        )
+    try:
+        module = import_module(module_name)
+        factory = getattr(module, class_name)
+    except (ImportError, AttributeError) as exc:
+        raise BackendError(f"cannot load backend {spec!r}: {exc}") from exc
+    return factory(project.root, pipeline_path)

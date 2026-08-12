@@ -218,3 +218,55 @@ def test_rewiring_also_stales_the_run(piped: Path) -> None:
     report = check_project(load_project(piped))["fit-alpha"]
     assert report.realization is Realization.STALE
     assert "~step:fit-alpha" in report.moved
+
+
+# ------------------------------------------------- a project's own backend
+
+
+def test_a_project_supplies_its_own_backend(piped: Path, monkeypatch) -> None:
+    """An adapter for a real manager is project-specific glue, not a
+    specthis feature: name it in the map and specthis imports it."""
+    import sys
+    import types
+
+    from specthis.backends import DONE as _DONE
+    from specthis.backends import resolve
+
+    module = types.ModuleType("fakeproj_adapters")
+
+    class Recording:
+        def __init__(self, root, pipeline_path=None):
+            self.root, self.name, self.calls = root, "fake", []
+
+        def parse(self):
+            return {}
+
+        def submit(self, entries=None, force=False):
+            self.calls.append(("submit", entries, force))
+            return "h"
+
+        def poll(self, handle):
+            return _DONE
+
+        def manifests(self, handle):
+            return {}
+
+    module.Recording = Recording
+    monkeypatch.setitem(sys.modules, "fakeproj_adapters", module)
+    write(piped, "specs/bindings.toml",
+          (piped / "specs/bindings.toml").read_text()
+          + '\n[backend]\nclass = "fakeproj_adapters:Recording"\n')
+
+    backend = resolve(load_project(piped))
+    assert isinstance(backend, Recording)
+    result = run_cli("build", "--path", str(piped))
+    assert result.exit_code == 0, result.output
+    assert "0 claim(s) recorded from fake" in result.output
+
+
+def test_a_bad_backend_path_is_a_clean_error(piped: Path) -> None:
+    write(piped, "specs/bindings.toml",
+          (piped / "specs/bindings.toml").read_text() + '\n[backend]\nclass = "nope"\n')
+    result = run_cli("build", "--path", str(piped))
+    assert result.exit_code != 0
+    assert "module:ClassName" in result.output

@@ -152,6 +152,10 @@ class Project:
     skipped_entries: dict[str, str] = field(default_factory=dict)
     #: output suffix (".tex") -> preview recipe, from [preview] in bindings.
     previews: dict[str, PreviewRecipe] = field(default_factory=dict)
+    #: ``[backend] class`` — a dotted path to the project's own adapter
+    #: (``mypkg.adapters:ScripthutBackend``). None means the bundled
+    #: runner. Config, not a claim: it enters no digest.
+    backend_class: str | None = None
     #: step id -> Step, from ``pipeline.toml`` when the project has one.
     #: Empty otherwise, and then no claim carries a ``step:`` row — a
     #: project without a pipeline behaves exactly as before it existed.
@@ -335,15 +339,16 @@ def _parse_previews(data: dict) -> dict[str, PreviewRecipe]:
 
 def _load_bindings(
     specs_dir: Path,
-) -> tuple[dict[str, Binding], list[str], str | None, dict[str, PreviewRecipe]]:
+) -> tuple[dict[str, Binding], list[str], str | None, dict[str, PreviewRecipe], str | None]:
     path = specs_dir / "bindings.toml"
     if not path.is_file():
-        return {}, [], None, {}
+        return {}, [], None, {}, None
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise SpecError(f"bindings.toml: {exc}") from exc
     globs = _str_list(data.get("package", {}).get("globs"), "bindings.toml", "package.globs")
+    backend_class = data.get("backend", {}).get("class")
     cache_url = data.get("cache", {}).get("url")
     bindings: dict[str, Binding] = {}
     for entry_name, table in data.get("entries", {}).items():
@@ -353,7 +358,7 @@ def _load_bindings(
             workflows=_str_list(table.get("workflows"), "bindings.toml", "workflows"),
             executor=table.get("executor"),
         )
-    return bindings, globs, cache_url, _parse_previews(data)
+    return bindings, globs, cache_url, _parse_previews(data), backend_class
 
 
 def _default_binding(entry_name: str) -> Binding:
@@ -385,10 +390,10 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             problems.append(Problem(path.name, str(exc)))
 
     try:
-        bindings, package_globs, cache_url, previews = _load_bindings(specs_dir)
+        bindings, package_globs, cache_url, previews, backend_class = _load_bindings(specs_dir)
     except SpecError as exc:
         problems.append(Problem("bindings.toml", str(exc)))
-        bindings, package_globs, cache_url, previews = {}, [], None, {}
+        bindings, package_globs, cache_url, previews, backend_class = {}, [], None, {}, None
 
     steps: dict[str, Step] = {}
     pipeline_file = root / "pipeline.toml"
@@ -492,6 +497,7 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         skipped_entries=skipped_entries,
         previews=previews,
         steps=steps,
+        backend_class=backend_class,
     )
     return project, problems
 

@@ -34,7 +34,7 @@ from .check import (
     verified,
 )
 from .adopt import AdoptError, adopt_manifest
-from .backends import FAILED, RunnerBackend
+from .backends import FAILED, BackendError, resolve as resolve_backend
 from .correspond import correspondence_problems, correspondence_warnings
 from .install import init_specs_dir, install_agents, install_commands
 from .pipeline import PipelineError
@@ -655,10 +655,10 @@ def build_cmd(
     recorded. That proves transcription, never derivation.
     """
     project = _load(project_path)
-    backend = RunnerBackend(project.root, pipeline_path)
     try:
+        backend = resolve_backend(project, pipeline_path)
         steps = backend.parse()
-    except PipelineError as exc:
+    except (BackendError, PipelineError) as exc:
         raise click.ClickException(str(exc)) from exc
 
     unknown = sorted(set(entries) - set(steps))
