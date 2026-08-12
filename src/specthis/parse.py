@@ -249,6 +249,34 @@ def infer_kind(fields: dict[str, list[str]], outputs: list[str]) -> str:
     return "compute"
 
 
+def _infer_file_kind(body: str) -> str:
+    """A file's kind from what its entries declare (§2).
+
+    Only needed while `kind:` is optional-but-supported: the target
+    format has no file-level kind at all, since type is a per-entry
+    consequence of fields. A file with no entry blocks is `definitions`
+    — prose nobody signs.
+    """
+    kinds = set()
+    for block in re.finditer(
+        r"^### +(.+?)\s*$\n(.*?)(?=^### |^## |\Z)", body, re.MULTILINE | re.DOTALL
+    ):
+        fields = entry_fields(block.group(2), "spec")
+        if not fields:
+            continue
+        kinds.add(infer_kind(fields, []))
+    if not kinds:
+        return "definitions"
+    if kinds == {"library"}:
+        return "library"
+    # `source` is a target-format type (§2) with no equivalent in the
+    # legacy vocabulary yet: an entry that produces bytes from outside
+    # any pipeline still reads as compute here, and its lack of code
+    # derives `unimplemented` exactly as a source entry should.
+    kinds.discard("library")
+    return "report" if len(kinds) > 1 else "compute"
+
+
 def _spec_sha(text: str, m: "re.Match[str]") -> str:
     """``spec_sha`` with display-only frontmatter lines removed.
 
@@ -280,11 +308,17 @@ def parse_spec(path: Path) -> SpecFile:
             "`consumes:` (upstream entry names) and `references:` (vocabulary specs)"
         )
     kind = meta.get("kind")
+    if kind is None:
+        # Target format (§2): type is inferred from the fields entries
+        # declare, so `kind:` is optional. Files whose entries carry no
+        # field list default to prose-only.
+        kind = _infer_file_kind(text[m.end() :])
     if kind not in KINDS:
         raise SpecError(f"{path.name}: `kind: {kind}` is not one of {sorted(KINDS)}")
     name = meta.get("name")
-    if name != path.stem:
+    if name is not None and name != path.stem:
         raise SpecError(f"{path.name}: `name: {name}` must match the filename stem")
+    name = path.stem
 
     props = meta.get("props") or []
     if isinstance(props, str):

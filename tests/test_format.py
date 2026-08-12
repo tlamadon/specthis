@@ -67,3 +67,57 @@ def test_the_legacy_format_still_parses(root: Path) -> None:
     project = load_project(root)
     assert project.entries["fit-alpha"].outputs == ["results/alpha/fit.json"]
     assert project.entries["fit-beta"].consumes == ["fit-alpha"]
+
+
+MINIMAL = """\
+---
+group: data
+---
+
+# Wage data
+
+### clean-wages
+
+Drop negative wages, winsorize at the 99th percentile.
+
+- consumes: fit-alpha
+- produces: data/wages.parquet
+"""
+
+
+def bind_entry(root: Path) -> None:
+    write(root, "specs/bindings.toml",
+          (root / "specs/bindings.toml").read_text()
+          + '\n[entries.clean-wages]\nscripts = ["scripts/fit_alpha.py"]\n')
+
+
+def test_kind_and_name_are_optional(root: Path) -> None:
+    """§2: type is a consequence of the fields entries declare."""
+    write(root, "specs/wages.md", MINIMAL)
+    bind_entry(root)
+    project = load_project(root)
+    assert project.entries["clean-wages"].spec.kind == "compute"
+    assert project.entries["clean-wages"].spec.name == "wages"
+
+
+def test_a_bare_code_field_infers_a_library(root: Path) -> None:
+    write(root, "specs/helpers.md",
+          "---\ngroup: code\n---\n\n# Helpers\n\n### wage-helpers\n\n"
+          "`winsor(x, p)` truncates symmetrically.\n\n- code\n")
+    write(root, "specs/bindings.toml",
+          (root / "specs/bindings.toml").read_text()
+          + '\n[entries.wage-helpers]\nscripts = ["scripts/fit_alpha.py"]\n')
+    project = load_project(root)
+    assert project.entries["wage-helpers"].spec.kind == "library"
+
+
+def test_a_prose_only_file_needs_no_kind(root: Path) -> None:
+    write(root, "specs/notes.md", "---\ngroup: notes\n---\n\n# Notes\n\nJust prose.\n")
+    project = load_project(root)
+    assert any(s.name == "notes" and s.kind == "definitions" for s in project.specs)
+
+
+def test_a_wrong_explicit_name_is_still_an_error(root: Path) -> None:
+    write(root, "specs/wages.md", MINIMAL.replace("---\ngroup: data", "---\nname: wrong\ngroup: data"))
+    _, problems = load_project_lenient(root)
+    assert any("must match the filename stem" in p.message for p in problems)
