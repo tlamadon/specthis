@@ -29,11 +29,13 @@ from .check import (
     is_library,
     machine_repairable,
     queues,
+    step_digest,
     topo_order,
     verified,
 )
 from .adopt import AdoptError, adopt_manifest
 from .backends import FAILED, RunnerBackend
+from .correspond import correspondence_problems, correspondence_warnings
 from .install import init_specs_dir, install_agents, install_commands
 from .pipeline import PipelineError
 from .ledger import (
@@ -192,18 +194,28 @@ def check_cmd(project_path: Path) -> None:
 @main.command("lint")
 @_path_option
 def lint_cmd(project_path: Path) -> None:
-    """Check the spec directory's grammar and list EVERY problem.
+    """Check that spec, map and pipeline describe the same graph.
 
-    Frontmatter, entry blocks, bindings, consumes/references edges —
-    all files, all problems at once (the other verbs stop at the
-    first). Exits non-zero if anything is wrong. Reads only.
+    All files, all problems at once (the other verbs stop at the
+    first): frontmatter, entry blocks, bindings, consumes edges — and,
+    when the project has a pipeline.toml, the correspondence between
+    the contract's graph and the one that will actually run.
+
+    That last group is load-bearing. The pipeline is authored rather
+    than generated, so lint is what replaces a compiler's guarantee
+    that the two agree. Exits non-zero if anything is wrong. Reads only.
     """
-    _, problems = _load_lenient(project_path)
-    if not problems:
-        click.echo("specs are clean")
-        return
+    project, problems = _load_lenient(project_path)
+    problems = problems + correspondence_problems(project)
+    warnings = correspondence_warnings(project)
     for p in problems:
         click.echo(f"  {p.message}")
+    for w in warnings:
+        click.echo(f"  warning: {w.message}", err=True)
+    if not problems:
+        clean = "specs are clean"
+        click.echo(clean if not warnings else f"{clean} ({len(warnings)} warning(s))")
+        return
     click.echo(f"{len(problems)} problem(s)", err=True)
     sys.exit(1)
 
@@ -775,6 +787,9 @@ def vouch_cmd(
         # Decomposed digests: when this vouch later expires, check/status
         # can say WHAT moved instead of only that something did.
         spec_block_sha=e.block_sha,
+        # The wiring is part of what was judged: realizing a spec means
+        # writing code *and* feeding it the right inputs (spec §1).
+        step_sha=step_digest(project, e) or "",
         code_manifest=code_manifest(project, e),
         duration_seconds=took_seconds,
     )

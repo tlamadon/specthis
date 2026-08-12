@@ -42,6 +42,7 @@ else:  # pragma: no cover
     import tomli as tomllib
 
 from .hashing import sha256_text
+from .pipeline import PipelineError, Step, load_pipeline
 from .preview import CONTENT_TYPES
 
 KINDS = {"meta", "definitions", "templates", "library", "compute", "report"}
@@ -151,6 +152,10 @@ class Project:
     skipped_entries: dict[str, str] = field(default_factory=dict)
     #: output suffix (".tex") -> preview recipe, from [preview] in bindings.
     previews: dict[str, PreviewRecipe] = field(default_factory=dict)
+    #: step id -> Step, from ``pipeline.toml`` when the project has one.
+    #: Empty otherwise, and then no claim carries a ``step:`` row — a
+    #: project without a pipeline behaves exactly as before it existed.
+    steps: dict[str, "Step"] = field(default_factory=dict)
 
 
 def _field_paths(block: str, label: str) -> list[str]:
@@ -385,6 +390,14 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         problems.append(Problem("bindings.toml", str(exc)))
         bindings, package_globs, cache_url, previews = {}, [], None, {}
 
+    steps: dict[str, Step] = {}
+    pipeline_file = root / "pipeline.toml"
+    if pipeline_file.is_file():
+        try:
+            steps = load_pipeline(pipeline_file)
+        except PipelineError as exc:
+            problems.append(Problem("pipeline.toml", str(exc)))
+
     entries: dict[str, Entry] = {}
     skipped_entries: dict[str, str] = {}
     for spec in specs:
@@ -478,6 +491,7 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         ),
         skipped_entries=skipped_entries,
         previews=previews,
+        steps=steps,
     )
     return project, problems
 

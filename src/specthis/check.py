@@ -150,6 +150,8 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
         inputs["package"] = hashing.package_sha(
             project.root, project.package_globs, project.library_scripts
         )
+    if (sd := step_digest(project, entry)) is not None:
+        inputs[f"step:{entry.name}"] = sd
     for up in entry.consumes:
         up_entry = project.entries[up]
         if is_library(up_entry):
@@ -158,6 +160,32 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
             r = runs.get(up)
             inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
     return inputs
+
+
+def step_digest(project: Project, entry: Entry) -> str | None:
+    """The entry's pipeline step digest, or ``None`` when it has no step.
+
+    Source and library entries never have one; nor does any entry in a
+    project without a ``pipeline.toml``, which is why adding the file
+    is the only thing that brings ``step:`` rows into existence.
+    """
+    step = project.steps.get(entry.name)
+    if step is None:
+        return None
+    return hashing.step_sha(step.command, step.deps, step.outs)
+
+
+def step_moved(project: Project, entry: Entry, v: Vouch) -> bool:
+    """Has the wiring moved since this vouch?
+
+    Only decidable when both sides have a digest: a project that gained
+    a pipeline after the vouch was filed has nothing to compare against,
+    and inventing a break there would expire every judgment at once.
+    """
+    now = step_digest(project, entry)
+    if now is None or not v.step_sha:
+        return False
+    return v.step_sha != now
 
 
 def spec_moved(entry: Entry, v: Vouch) -> bool:
@@ -212,6 +240,8 @@ def expired_since_vouch(
             out.append(f"spec: this entry's block in {fname} moved")
         else:
             out.append(f"spec: {fname} moved")
+    if step_moved(project, entry, v):
+        out.append(f"step: {entry.name} rewired")
     if code_moved(project, entry, v, code_sha_now):
         if v.code_manifest:
             out.extend(
@@ -246,7 +276,7 @@ def _certify(
         return Certification.UNIMPLEMENTED, []
     if v is None:
         return Certification.UNVOUCHED, []
-    if spec_moved(entry, v) or code_moved(project, entry, v, c):
+    if spec_moved(entry, v) or code_moved(project, entry, v, c) or step_moved(project, entry, v):
         return Certification.UNVOUCHED, expired_since_vouch(project, entry, v, s, c)
     if v.verdict == "rejected":
         return Certification.REJECTED, []

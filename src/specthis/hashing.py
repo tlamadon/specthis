@@ -48,6 +48,19 @@ def signature(inputs: Mapping[str, str]) -> str:
     return manifest_sha(inputs.items())
 
 
+def step_sha(command: str, deps: Sequence[str], outs: Sequence[str]) -> str:
+    """Digest of a pipeline step's *semantic content* (spec §5.6).
+
+    Command, dependency paths and output paths — never their contents
+    (those are separate table rows), and never resources, executor or
+    retries. Those change how work is scheduled, not what is
+    implemented, so resizing a job must not expire a judgment.
+    """
+    return sha256_text(
+        command + "\x00" + "\n".join(sorted(deps)) + "\x00" + "\n".join(sorted(outs))
+    )
+
+
 def package_sha(root: Path, globs: Sequence[str], exclude: frozenset[str] = frozenset()) -> str:
     """Blob digest of the shared package: manifest over glob matches.
 

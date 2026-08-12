@@ -170,3 +170,51 @@ def test_manifests_are_written_to_the_runner_store(piped: Path) -> None:
     RunnerBackend(piped).submit()
     stored = piped / ".specthis/runner/manifests/fit-alpha.json"
     assert json.loads(stored.read_text())["step"] == "fit-alpha"
+
+
+# ------------------------------------------------- the step in the claim
+
+
+def test_vouch_pins_the_step_and_rewiring_expires_it(piped: Path) -> None:
+    """Realizing a spec means writing code *and* wiring it, so a judge
+    claims about the step. Repointing a dep expires the judgment even
+    though every file is untouched."""
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(piped))
+    from specthis.check import Certification
+
+    assert check_project(load_project(piped))["fit-alpha"].certification is Certification.CERTIFIED
+
+    write(piped, "pipeline.toml", PIPELINE.replace(
+        'deps    = ["scripts/fit_alpha.py", "hut.fit-alpha.json"]',
+        'deps    = ["scripts/fit_alpha.py"]',
+    ))
+    report = check_project(load_project(piped))["fit-alpha"]
+    assert report.certification is Certification.UNVOUCHED
+    assert "step: fit-alpha rewired" in report.expired
+
+
+def test_a_project_without_a_pipeline_carries_no_step_rows(root: Path) -> None:
+    """Adding pipeline.toml is the only thing that brings step: rows into
+    existence — otherwise every vouch would expire at once."""
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    from specthis.check import Certification, expected_inputs
+
+    project = load_project(root)
+    assert project.steps == {}
+    assert not any(k.startswith("step:") for k in expected_inputs(project, project.entries["fit-alpha"], {}))
+    assert check_project(project)["fit-alpha"].certification is Certification.CERTIFIED
+
+
+def test_rewiring_also_stales_the_run(piped: Path) -> None:
+    """The step sits on both axes: managers key on the command, so if
+    specthis did not, a rewire would rerun while `check` said current."""
+    run_cli("build", "--path", str(piped))
+    assert realization(piped, "fit-alpha") is Realization.CURRENT
+    rewired = PIPELINE.replace(
+        f"{PY} scripts/fit_alpha.py", f"{PY} -X utf8 scripts/fit_alpha.py"
+    )
+    assert rewired != PIPELINE
+    write(piped, "pipeline.toml", rewired)
+    report = check_project(load_project(piped))["fit-alpha"]
+    assert report.realization is Realization.STALE
+    assert "~step:fit-alpha" in report.moved

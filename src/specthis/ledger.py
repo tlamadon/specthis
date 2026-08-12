@@ -44,6 +44,11 @@ class Vouch:
     #: Empty on rows written before these fields existed.
     spec_block_sha: str = ""
     code_manifest: dict[str, str] = field(default_factory=dict)
+    #: The pipeline step's semantic digest at judgment time (spec §5.6):
+    #: command, deps and outs. Realizing a spec means writing code *and*
+    #: wiring it, so a judge claims about the step too. Empty when the
+    #: entry has no step, or on rows written before this field existed.
+    step_sha: str = ""
     #: Wall-clock seconds the judgment took (``vouch --took``). Claim
     #: metadata like a run's duration: enters no digest, omitted from
     #: the TOML row when unknown.
