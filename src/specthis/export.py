@@ -93,7 +93,9 @@ def build_index(
             entries.append(
                 {
                     "name": entry.name,
-                    "status": r.status.value,
+                    "status": r.status.value,  # legacy: the rails view keys CSS on it
+                    "certification": r.certification.value,
+                    "realization": r.realization.value if r.realization else None,
                     "certification": r.certification.value,
                     "realization": r.realization.value if r.realization else None,
                     "computable": r.computable,

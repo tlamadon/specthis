@@ -487,7 +487,9 @@ def _entry_json(name: str, reports: dict[str, Report]) -> dict:
     vouch = r.vouch if r else None
     return {
         "name": name,
-        "status": r.status.value if r else "skipped",
+        "status": r.status.value if r else "skipped",  # legacy: CSS keys on it
+        "certification": r.certification.value if r else None,
+        "realization": (r.realization.value if r.realization else None) if r else None,
         "certification": r.certification.value if r else None,
         "realization": r.realization.value if r and r.realization else None,
         "ran": run.ran if run else None,

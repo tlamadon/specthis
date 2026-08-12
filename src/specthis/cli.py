@@ -25,6 +25,7 @@ from .check import (
     Report,
     check_project,
     code_manifest,
+    coordinates,
     code_sha,
     expected_inputs,
     is_library,
@@ -243,10 +244,7 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
             e = project.entries[r.instance_of or name]
             kind = e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}"
             marker = "" if r.materialized else "   [bytes remote]"
-            axes = r.certification.value + (
-                f" · {r.realization.value}" if r.realization else ""
-            )
-            click.echo(f"  {r.status.value:<20} {axes:<24} {name:<28} {kind}{marker}")
+            click.echo(f"  {coordinates(r):<44} {name:<28} {kind}{marker}")
         return
     _require_active(project, entry)
     if entry not in reports:
@@ -257,12 +255,12 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
     r = reports[entry]
     e = project.entries[r.instance_of or entry]
     click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.spec.kind}/{e.tier})")
-    axes = r.certification.value + (f" · {r.realization.value}" if r.realization else "")
-    click.echo(f"status:    {r.status.value}  ({axes})")
+    click.echo(f"state:     {coordinates(r)}")
     click.echo(f"spec_sha:  {r.spec_sha}")
     click.echo(f"code_sha:  {r.code_sha or '(code missing)'}")
     click.echo(f"scripts:   {', '.join(e.binding.scripts)}")
-    click.echo(f"outputs:   {', '.join(e.outputs) or '(none — library: chain stops at code)'}")
+    outs = list(r.run.outputs) if r.run and r.run.outputs else list(e.outputs)
+    click.echo(f"outputs:   {', '.join(outs) or '(none — library: chain stops at code)'}")
     if e.consumes:
         click.echo(f"consumes:  {', '.join(e.consumes)}")
     if r.vouch:

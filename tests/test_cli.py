@@ -438,3 +438,26 @@ def test_migrate_dry_run_then_write(root: Path) -> None:
     # refuses to clobber without --force
     result = run_cli("migrate", "--write", "--path", str(root))
     assert "runs.toml row exists" in result.output
+
+
+def test_status_leads_with_two_coordinates_not_one_word(root: Path) -> None:
+    """§11: a 2D state projected to 1D cannot say an entry is unvouched
+    *and* stale, which is the common case while both queues drain."""
+    make_ready(root)
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    out = run_cli("status", "fit-alpha", "--path", str(root)).output
+    assert "state:" in out and "unvouched · stale" in out
+    assert "audit needed" not in out, "the fused word is retired from surfaces"
+
+
+def test_status_list_shows_both_axes(root: Path) -> None:
+    make_ready(root)
+    out = run_cli("status", "--path", str(root)).output
+    assert "certified · current" in out
+
+
+def test_downstream_says_which_tree_it_waits_on(root: Path) -> None:
+    make_ready(root)
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    out = run_cli("status", "fit-beta", "--path", str(root)).output
+    assert "waiting on minds and machines" in out

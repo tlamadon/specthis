@@ -476,6 +476,33 @@ def _one(
     return report
 
 
+def coordinates(r: Report) -> str:
+    """The two coordinates as one readable string — `certified · stale`.
+
+    The rendering surfaces use in place of the flattened word (§11): a
+    2D state projected to 1D cannot say that an entry is unvouched *and*
+    stale, which is the common case while a mind and a machine work in
+    parallel.
+    """
+    axes = r.certification.value
+    if r.realization is not None:
+        axes += f" · {r.realization.value}"
+    if not r.materialized:
+        axes += " · bytes remote"
+    if r.computable and r.realized:
+        return axes
+    waiting = [
+        tree
+        for tree, ok in (("minds", r.computable), ("machines", r.realized))
+        if not ok
+    ]
+    local = r.certification is not Certification.CERTIFIED or r.realization in (
+        Realization.NEVER_RUN,
+        Realization.STALE,
+    )
+    return axes if local else f"{axes} · waiting on {' and '.join(waiting)}"
+
+
 def keys_for(reports: dict[str, Report]) -> dict[str, list[str]]:
     """Entry name -> the report keys standing for it.
 
