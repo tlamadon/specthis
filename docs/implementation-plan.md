@@ -90,9 +90,15 @@ idioms on screen at once.
 
 ---
 
-## Phase 2 — the ledger reshape (v0.0.34)
+## Phase 2 — the ledger reshape (v0.0.34) — **partly done**
 
 One record type, capability-keyed files.
+
+**Done ahead of the rest** (`edfea11`): `Run.outputs` records per-output
+digests, and `_realize` attributes integrity breaks as `out:<path>`.
+That was the only part blocking lossless adoption, so it was pulled
+forward; the rest of the reshape is renaming and file layout, which buys
+nothing until a third capability exists.
 
 - **`ledger.py`**: replace `Vouch`/`Run` with one `Attestation`
   (`capability`, `pinned`, `verdict`, `actor`, `when`, `evidence`).
@@ -178,8 +184,10 @@ baked into the interface.
 1. **Reference runner** — **done**. `runner.py`, 17 tests, no network.
 2. **scripthut** — its side is done: `cache_scope: "inputs"`,
    `task probe`, local backend, `manifest_version: 1`.
-3. Wire both behind the four operations; `run --stale` becomes
-   `submit()` → `poll` → `adopt`.
+3. Wire both behind the four operations — **done for the runner**
+   (`edfea11`): `backends.py` (parse/submit/poll/manifests), `adopt.py`
+   (verify, then countersign), and the `specthis build` verb. A claim
+   now travels pipeline → runner → manifest → ledger → `check`.
 
 ---
 
