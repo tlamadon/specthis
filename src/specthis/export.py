@@ -96,8 +96,6 @@ def build_index(
                     "status": r.status.value,  # legacy: the rails view keys CSS on it
                     "certification": r.certification.value,
                     "realization": r.realization.value if r.realization else None,
-                    "certification": r.certification.value,
-                    "realization": r.realization.value if r.realization else None,
                     "computable": r.computable,
                     "realized": r.realized,
                     "outputs": entry.outputs,
