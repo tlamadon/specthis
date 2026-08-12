@@ -174,8 +174,19 @@ def vouch_ok(root: Path, entry: str, attester: str = "critic", note: str = "") -
     )
 
 
+#: How the fixture scripts are invoked. specthis no longer runs
+#: anything (the notary never forks a process), so the test harness
+#: plays the part a compute manager would.
+RUN_COMMANDS = {
+    "fit-alpha": f"{PY} scripts/fit_alpha.py",
+    "fit-beta": f"{PY} scripts/fit_beta.py",
+    "fig-beta": f"{PY} scripts/fig_beta.py",
+    "estimator-core": "",
+}
+
+
 def fake_run(root: Path, entry: str, execute: bool = True) -> None:
-    """Record a run row as `specthis run` would.
+    """Execute a fixture entry and record the claim, as a manager would.
 
     ``execute=False`` records whatever output is already on disk —
     used to simulate a re-run that produced different bytes (the
@@ -188,9 +199,8 @@ def fake_run(root: Path, entry: str, execute: bool = True) -> None:
     e = project.entries[entry]
     runs = read_runs(project.specs_dir)
     inputs = expected_inputs(project, e, runs)
-    if execute:
-        assert e.binding.run is not None
-        subprocess.run(e.binding.run, shell=True, cwd=root, check=True)
+    if execute and RUN_COMMANDS.get(entry):
+        subprocess.run(RUN_COMMANDS[entry], shell=True, cwd=root, check=True)
     out_sha = hashing.output_sha(root, e.outputs)
     assert out_sha is not None
     record_run(
@@ -203,6 +213,7 @@ def fake_run(root: Path, entry: str, execute: bool = True) -> None:
             ran="2026-01-01T00:00:00+00:00",
             executor="local",
             inputs=inputs,
+            outputs=hashing.files_manifest(root, e.outputs),
         ),
     )
 

@@ -293,3 +293,32 @@ def test_adopt_verb_refuses_a_manifest_that_disagrees(piped: Path) -> None:
     assert result.exit_code != 0
     assert "does not hash" in result.output
     assert "fit-alpha" not in read_runs(piped / "specs")
+
+
+def test_the_pipeline_declares_what_a_step_reads(piped: Path) -> None:
+    """With a pipeline present its deps *are* the input set, so a config
+    file listed there is tracked without any map entry."""
+    from specthis.check import expected_inputs
+
+    write(piped, "config/tuning.toml", "winsor = 0.99\n")
+    write(piped, "pipeline.toml", PIPELINE.replace(
+        'deps    = ["scripts/fit_alpha.py", "hut.fit-alpha.json"]',
+        'deps    = ["scripts/fit_alpha.py", "config/tuning.toml"]',
+    ))
+    project = load_project(piped)
+    inputs = expected_inputs(project, project.entries["fit-alpha"], {})
+    assert "config/tuning.toml" in inputs
+    assert "hut.fit-alpha.json" not in inputs, "the map no longer supplies inputs"
+
+
+def test_upstream_artefacts_are_pinned_by_claim_not_by_bytes(piped: Path) -> None:
+    """A step lists its upstream's file among deps, but the ledger pins
+    the upstream's *recorded* digest — the claim, not the bytes."""
+    from specthis.check import expected_inputs
+
+    run_cli("build", "--path", str(piped))
+    project = load_project(piped)
+    runs = read_runs(piped / "specs")
+    inputs = expected_inputs(project, project.entries["fit-beta"], runs)
+    assert "upstream:fit-alpha" in inputs
+    assert "results/alpha/fit.json" not in inputs

@@ -100,8 +100,6 @@ def build_index(
                     "realized": r.realized,
                     "outputs": entry.outputs,
                     "scripts": entry.binding.scripts,
-                    "workflows": entry.binding.workflows,
-                    "executor": entry.binding.executor,
                     "spec_sha": r.spec_sha,
                     "code_sha": r.code_sha,
                     "vouch": asdict(r.vouch) if r.vouch else None,

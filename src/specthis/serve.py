@@ -43,7 +43,7 @@ def _watched_paths(root: Path, project: Project | None) -> list[Path]:
         rel: set[str] = set()
         for entry in project.entries.values():
             rel.update(entry.binding.scripts)
-            rel.update(entry.binding.workflows)
+            rel.update(project.steps[entry.name].deps if entry.name in project.steps else ())
             rel.update(entry.outputs)
         paths += [root / r for r in sorted(rel)]
         for pattern in project.package_globs:

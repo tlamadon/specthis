@@ -71,9 +71,9 @@ def test_check_excludes_skipped_from_all_counts(root: Path) -> None:
     assert "ready: 2/2 (+1 skipped)" in result.output
 
 
-def test_run_vouch_status_refuse_skipped(root: Path) -> None:
+def test_record_vouch_status_refuse_skipped(root: Path) -> None:
     skip_alpha(root)
-    for verb in (("run", "fit-alpha"), ("vouch", "fit-alpha", "--as", "ana"),
+    for verb in (("record", "fit-alpha"), ("vouch", "fit-alpha", "--as", "ana"),
                  ("status", "fit-alpha")):
         result = run_cli(*verb, "--path", str(root))
         assert result.exit_code != 0

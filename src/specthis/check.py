@@ -178,14 +178,18 @@ def instance_inputs(
     entry name to the ledger key that actually feeds this instance,
     which for a templated upstream is a sibling instance.
     """
+    step = project.steps.get(inst.step)
+    read = list(step.deps) if step is not None else list(entry.binding.scripts)
+    upstream_paths = {
+        p for up in entry.consumes for p in project.entries[up].outputs
+    }
     inputs = hashing.files_manifest(
-        project.root, [*entry.binding.scripts, *entry.binding.workflows]
+        project.root, [p for p in read if p not in upstream_paths]
     )
     if project.package_globs:
         inputs["package"] = hashing.package_sha(
             project.root, project.package_globs, project.library_scripts
         )
-    step = project.steps.get(inst.step)
     if step is not None:
         inputs[f"step:{inst.name}"] = hashing.step_sha(step.command, step.deps, step.outs)
     for up in entry.consumes:
@@ -208,15 +212,25 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
     A library upstream has no output: its code manifest stands in, so
     a module edit makes its consumers stale (rerun with the new code).
     """
+    if is_source(entry):
+        return hashing.files_manifest(project.root, entry.outputs)
+
+    # The pipeline declares what a step reads, so its deps *are* the
+    # input set: code (whatever `map.scripts` names among them) and
+    # execution inputs alike. Without a pipeline, the bound scripts and
+    # workflows stand in.
+    step = project.steps.get(entry.name)
+    read = list(step.deps) if step is not None else list(entry.binding.scripts)
+    upstream_paths = {
+        p for up in entry.consumes for p in project.entries[up].outputs
+    }
     inputs = hashing.files_manifest(
-        project.root, [*entry.binding.scripts, *entry.binding.workflows]
+        project.root, [p for p in read if p not in upstream_paths]
     )
     if project.package_globs:
         inputs["package"] = hashing.package_sha(
             project.root, project.package_globs, project.library_scripts
         )
-    if is_source(entry):
-        return hashing.files_manifest(project.root, entry.outputs)
     if (sd := step_digest(project, entry)) is not None:
         inputs[f"step:{entry.name}"] = sd
     for up in entry.consumes:

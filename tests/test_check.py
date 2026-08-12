@@ -96,13 +96,23 @@ def test_package_edit_returns_every_entry_to_audit_needed(root: Path) -> None:
 # --------------------------------------------------- what makes it stale
 
 
-def test_workflow_file_edit_is_stale_not_audit(root: Path) -> None:
-    # hut.*.json is an execution input, not judged code: signature moves,
-    # vouch stands.
+def test_a_config_edit_is_stale_not_unvouched(root: Path) -> None:
+    """An execution input is not judged code: the run claim moves, the
+    vouch stands. Config lives in the pipeline's deps now, which is what
+    makes the distinction the map's `scripts` field draws."""
+    from .conftest import PY
+
+    write(root, "pipeline.toml", f'''
+[steps.fit-alpha]
+command = '{PY} scripts/fit_alpha.py'
+deps    = ["scripts/fit_alpha.py", "hut.fit-alpha.json"]
+outs    = ["results/alpha/fit.json"]
+''')
     make_ready(root)
     write(root, "hut.fit-alpha.json", '{"backend": "pbs"}\n')
     r = report(root, "fit-alpha")
-    assert r.status is Status.STALE
+    assert r.certification is Certification.CERTIFIED, "config is not judged code"
+    assert r.realization is Realization.STALE
     assert r.moved == ["~hut.fit-alpha.json"]
 
 
@@ -111,7 +121,7 @@ def test_output_edited_on_disk_is_stale(root: Path) -> None:
     write(root, "results/alpha/fit.json", '{"loss": 999}')
     r = report(root, "fit-alpha")
     assert r.status is Status.STALE
-    assert "output" in r.moved[0]
+    assert r.moved == ["out:results/alpha/fit.json"]
 
 
 def test_output_deleted_reads_ready_bytes_remote(root: Path) -> None:

@@ -76,10 +76,15 @@ class Problem:
 
 @dataclass
 class Binding:
+    """What the map says about an entry (spec §4).
+
+    Two facts no pipeline format expresses: which of a step's
+    dependencies is *judged code*, and which file **is** a logical
+    product. Everything about how a step runs — command, config,
+    resources, executor — lives in the pipeline.
+    """
+
     scripts: list[str]
-    run: str | None
-    workflows: list[str] = field(default_factory=list)
-    executor: str | None = None
     #: ``produces = { wages-panel = "data/wages.parquet" }`` — which file
     #: **is** a logical name (spec §4). The one translation between the
     #: spec's vocabulary and the pipeline's; empty when an entry declares
@@ -163,7 +168,6 @@ class Project:
     specs: list[SpecFile]
     entries: dict[str, Entry]
     package_globs: list[str]
-    cache_url: str | None = None
     #: scripts bound to library entries — excluded from the package blob,
     #: so a module edit flags only its own entry and its consumers.
     library_scripts: frozenset[str] = frozenset()
@@ -448,27 +452,23 @@ def _parse_previews(data: dict) -> dict[str, PreviewRecipe]:
 
 def _load_bindings(
     specs_dir: Path,
-) -> tuple[dict[str, Binding], list[str], str | None, dict[str, PreviewRecipe], str | None]:
+) -> tuple[dict[str, Binding], list[str], dict[str, PreviewRecipe], str | None]:
     path = specs_dir / "bindings.toml"
     if not path.is_file():
-        return {}, [], None, {}, None
+        return {}, [], {}, None
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise SpecError(f"bindings.toml: {exc}") from exc
     globs = _str_list(data.get("package", {}).get("globs"), "bindings.toml", "package.globs")
     backend_class = data.get("backend", {}).get("class")
-    cache_url = data.get("cache", {}).get("url")
     bindings: dict[str, Binding] = {}
     for entry_name, table in data.get("entries", {}).items():
         bindings[entry_name] = Binding(
             scripts=_str_list(table.get("scripts"), "bindings.toml", "scripts"),
-            run=table.get("run"),
-            workflows=_str_list(table.get("workflows"), "bindings.toml", "workflows"),
-            executor=table.get("executor"),
             produces=_produces_map(entry_name, table.get("produces")),
         )
-    return bindings, globs, cache_url, _parse_previews(data), backend_class
+    return bindings, globs, _parse_previews(data), backend_class
 
 
 def _produces_map(entry_name: str, raw: object) -> dict[str, str]:
@@ -486,8 +486,7 @@ def _produces_map(entry_name: str, raw: object) -> dict[str, str]:
 def _default_binding(entry_name: str) -> Binding:
     # The documented naming convention: an unbound entry is implemented
     # by scripts/<entry>.py and run with the project's python.
-    script = f"scripts/{entry_name}.py"
-    return Binding(scripts=[script], run=f"python {script}")
+    return Binding(scripts=[f"scripts/{entry_name}.py"])
 
 
 def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
@@ -512,10 +511,10 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             problems.append(Problem(path.name, str(exc)))
 
     try:
-        bindings, package_globs, cache_url, previews, backend_class = _load_bindings(specs_dir)
+        bindings, package_globs, previews, backend_class = _load_bindings(specs_dir)
     except SpecError as exc:
         problems.append(Problem("bindings.toml", str(exc)))
-        bindings, package_globs, cache_url, previews, backend_class = {}, [], None, {}, None
+        bindings, package_globs, previews, backend_class = {}, [], {}, None
 
     steps: dict[str, Step] = {}
     pipeline_file = root / "pipeline.toml"
@@ -536,7 +535,7 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                 entry.binding = bindings.get(entry.name) or (
                     # no convention fallback for library modules: an
                     # invented path must not be carved out of the blob
-                    Binding(scripts=[], run=None)
+                    Binding(scripts=[])
                     if spec.kind == "library"
                     else _default_binding(entry.name)
                 )
@@ -565,7 +564,7 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                             "`scripts` in specs/bindings.toml (no convention default)",
                         )
                     )
-                    entry.binding = Binding(scripts=[], run=None)
+                    entry.binding = Binding(scripts=[])
                 else:
                     entry.binding = binding
             else:
@@ -657,7 +656,6 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         specs=specs,
         entries=entries,
         package_globs=package_globs,
-        cache_url=cache_url,
         # Skipped library modules stay carved out of the blob: their
         # claims are dormant, not deleted, and re-enabling the spec
         # must not shift every other entry's code manifest.
