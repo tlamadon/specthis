@@ -11,7 +11,7 @@ step. §16 of the spec gives the sequence; this gives the work.
 | | |
 |---|---|
 | source | 5,535 lines, 16 modules |
-| tests | 3,354 lines, **214 passing** |
+| tests | 3,354 lines, **214 passing** (now 237) |
 | largest | `export.py` 1484, `cli.py` 1054, `dag.py` 706, `parse.py` 496 |
 | engine | `check.py` 326, `ledger.py` 172, `hashing.py` 95 |
 
@@ -131,12 +131,12 @@ loudly.*
 complete lint is strictly worse than today: nothing would check that the
 graph specthis reports is the graph that runs.
 
-### 4.1 Pipeline reader
+### 4.1 Pipeline reader — **done** (`7bc50d9`)
 
-New `pipeline.py`. Per backend, parse to
-`[{id, command, deps, outs, after}]` (§7.1). Start with **one** backend
-so the interface is proven against something real before it is
-generalized.
+`pipeline.py` reads `pipeline.toml` into `Step(id, command, deps, outs,
+after)`. Edges are **derived** from `deps`/`outs` DVC-style rather than
+declared, so the same fact is never written twice. Unknown keys and
+duplicate producers are errors.
 
 ### 4.2 Step digest
 
@@ -167,16 +167,19 @@ any test file in this plan.
 
 `parse` / `submit` / `poll` / `manifests`, plus optional `probe` (§7.2).
 
-1. **scripthut** — its side is done: `cache_scope: "inputs"`,
-   `task probe`, local backend, `manifest_version: 1`. Note the seam
-   constraint: no HTTP endpoint runs an inline multi-task document, so
-   the plan must be a committed JSON file in a registered source.
-2. **Reference runner** (~300 lines) — two backends with no shared
-   lineage is what proves the contract is real, and far cheaper than a
-   DVC integration.
+**Order flipped** from the original plan, and the runner is already
+built (`7bc50d9`). Designing the interface against something fully
+controlled and testable offline means the scripthut adapter must
+*conform* to it rather than define it — which matters, because
+scripthut's seam constraint (no inline multi-task documents; the plan
+must be a committed file in a registered source) would otherwise get
+baked into the interface.
 
-`run --stale` becomes `submit()` → `poll` → `adopt`. `run --force`
-becomes `submit(entries, force=True)`.
+1. **Reference runner** — **done**. `runner.py`, 17 tests, no network.
+2. **scripthut** — its side is done: `cache_scope: "inputs"`,
+   `task probe`, local backend, `manifest_version: 1`.
+3. Wire both behind the four operations; `run --stale` becomes
+   `submit()` → `poll` → `adopt`.
 
 ---
 
