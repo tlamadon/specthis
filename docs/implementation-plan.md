@@ -90,7 +90,7 @@ idioms on screen at once.
 
 ---
 
-## Phase 2 — the ledger reshape (v0.0.34) — **partly done**
+## Phase 2 — the ledger reshape — **partly done, rest deferred**
 
 One record type, capability-keyed files.
 
@@ -110,8 +110,13 @@ nothing until a third capability exists.
 - **`migrate`** rewrites both old ledgers in place.
 - **`remote.py`** adopt path follows.
 
-*No behaviour change a user sees, beyond better multi-output
-attribution. Land it alone so the diff is reviewable.*
+**The rest is deferred deliberately.** Merging `Vouch` and `Run` into one
+`Attestation` and globbing `ledger/*.toml` touches 110 call sites across
+7 modules to change no behaviour: the pinned tables already exist
+(`code_manifest`, `inputs`, `outputs`), and `step:`/`out:` pseudo-paths
+are already in use. The payoff is a third capability landing free, and
+there is no third capability. Worth doing as its own focused piece of
+work, not as churn at the end of a session.
 
 ---
 
@@ -194,9 +199,19 @@ baked into the interface.
 
 ---
 
-## Phase 6 — the deletions (v0.4.0)
+## Phase 6 — the deletions — **blocked on a capable backend**
 
-Only after Phase 5 works end to end:
+Not merely sequencing: that code is not only an executor. `run --stale
+-p N` is parallel rebuilds, `--fetch`/`--push` is the byte cache,
+`--adopt` is remote manifest adoption. The bundled runner has none of
+them **by design** (§7.3), so deleting today makes the tool strictly
+less capable with no shipped replacement.
+
+It becomes free once a backend with parallelism and remote bytes exists
+— which, since adapters are now project-side, means the scripthut
+adapter in cakm rather than anything in this repo.
+
+The list, when that day comes:
 
 - `_execute_entry`, `_run_stale_parallel`, dispatch (`cli.py`)
 - `cache.py` and the byte-cache half of `remote.py`

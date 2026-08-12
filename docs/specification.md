@@ -9,7 +9,16 @@ those disagree, this one wins.
 
 §16 is the migration path from v0.0.32.
 
-Items marked **[NEW]** are settled in design but not yet implemented.
+**Implementation status (2026-08-12, v0.0.33+).** Built: §2–§5, §6, §7,
+§8's acceptance and manifest intake, §10, §11, §12's `check` / `status` /
+`lint` / `vouch` / `certify` / `build` / `adopt`, §13, §14, §15. The
+spec format is accepted **alongside** the legacy one, so nothing breaks
+and §16's migration is optional.
+
+Not built: §9's single-record ledger (still `vouches.toml` +
+`runs.toml`, two record types); §16's deletions, which would remove
+parallel rebuilds and the byte cache with no shipped replacement.
+Items marked **[NEW]** below are design not yet reached.
 
 ---
 
@@ -274,7 +283,7 @@ moves `step_sha`, so nothing is missed — but the break reports as
 
 ---
 
-## 6. Certificates **[NEW, optional]**
+## 6. Certificates *(optional)*
 
 **Most projects need none.** A step lists its code among its
 dependencies anyway, so those digests are already in the manager's key
@@ -765,7 +774,7 @@ backend, `manifest_version: 1` — all shipped); DVC; a reference runner.
 
 ---
 
-## 15. Templates **[NEW]**
+## 15. Templates
 
 One spec entry, one map row, one code binding — and **N instances**, each
 with its own bytes and its own run claim. This is how a parameter grid
