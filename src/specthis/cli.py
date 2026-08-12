@@ -18,6 +18,7 @@ from pathlib import Path
 import click
 
 from . import __version__, hashing
+from .certificates import write_all as write_certificates
 from .check import (
     Certification,
     Realization,
@@ -631,6 +632,28 @@ def run_cmd(
         raise click.ClickException(
             f"{n} entr{'y' if n == 1 else 'ies'} failed; nothing recorded for failed runs"
         )
+
+
+# -------------------------------------------------------------- certify
+
+
+@main.command("certify")
+@_path_option
+def certify_cmd(project_path: Path) -> None:
+    """Write a code-identity certificate per entry (spec §6).
+
+    Most projects need none: a step lists its code among its deps, so
+    those digests already reach the manager and the manifest. Certificates
+    earn their place when `[package] globs` are used — a glob has no
+    stable file list, so its composed digest can only enter a key as a
+    file.
+
+    Deterministic: unchanged code regenerates byte-identical bytes, so
+    running this never stales anything.
+    """
+    project = _load(project_path)
+    written = write_certificates(project)
+    click.echo(f"{len(written)} certificate(s) in {project.specs_dir / 'certificates'}")
 
 
 # ---------------------------------------------------------------- build
