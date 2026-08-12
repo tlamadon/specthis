@@ -187,3 +187,24 @@ def test_runner_never_imports_the_notary() -> None:
         node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
     } | {a.name for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names}
     assert not imported & {"check", "ledger", "parse", "hashing", "cache", "remote"}
+
+
+def test_a_command_change_reruns_the_step(proj: Path) -> None:
+    """Without this, specthis stales the entry while the runner reports a
+    hit — the entry is stale forever and no build ever fixes it."""
+    run_pipeline(proj)
+    write(proj, "pipeline.toml", PIPELINE.replace(
+        f"{PY} scripts/clean.py", f"{PY} -X utf8 scripts/clean.py"
+    ))
+    assert outcomes(run_pipeline(proj))["clean"] == "ran"
+
+
+def test_a_legacy_lock_without_a_command_rebuilds_once(proj: Path) -> None:
+    run_pipeline(proj)
+    lock = proj / ".specthis/runner/lock.json"
+    data = json.loads(lock.read_text())
+    for entry in data.values():
+        entry.pop("command", None)
+    lock.write_text(json.dumps(data))
+    assert outcomes(run_pipeline(proj))["clean"] == "ran"
+    assert outcomes(run_pipeline(proj))["clean"] == "skipped"

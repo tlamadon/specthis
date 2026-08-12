@@ -92,9 +92,17 @@ def _write_lock(state: Path, lock: dict) -> None:
 def _up_to_date(root: Path, step: Step, lock: dict, inputs: dict[str, str]) -> bool:
     """Skip only when the recorded work matches *and* its products are
     still on disk unchanged. Absent or edited outputs mean re-run: this
-    runner has no store to restore them from."""
+    runner has no store to restore them from.
+
+    The **command** is part of the key. Without it, editing a command
+    would leave the recorded work looking identical here while specthis
+    stales the claim — the entry would be stale forever and no rebuild
+    would ever fix it. Locks written before this field rebuild once.
+    """
     prior = lock.get(step.id)
-    if not prior or prior.get("deps") != inputs:
+    if not prior or prior.get("command") != step.command:
+        return False
+    if prior.get("deps") != inputs:
         return False
     recorded = prior.get("outs", {})
     if set(recorded) != set(step.outs):
@@ -199,7 +207,7 @@ def run_pipeline(
                 f"`{sid}` exited 0 but declared output(s) are absent: {', '.join(absent)}"
             )
 
-        lock[sid] = {"deps": inputs, "outs": outputs}
+        lock[sid] = {"command": step.command, "deps": inputs, "outs": outputs}
         _write_lock(state, lock)  # after each step: an interrupt loses no work
         results.append(
             StepResult(sid, "ran", _manifest(step, inputs, outputs, 0, t0, t1), inputs, outputs, 0)
