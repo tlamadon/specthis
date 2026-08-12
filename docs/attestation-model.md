@@ -9,8 +9,8 @@ distinctions that were being maintained by hand. §14 lists what it
 supersedes.
 
 If the argument below feels abstract, `analogy.md` says the same thing
-as a professional kitchen — two documents on the wall, a freezer, and
-one pot of stock that goes into three dishes.
+as a bakery — an approved formula on the wall, a label on every batch,
+and a levain that outlives every loaf made from it.
 
 The reframe was reached by pulling on one thread — *what, exactly, can
 specthis verify?* — and finding the answer is **nothing**. Everything
