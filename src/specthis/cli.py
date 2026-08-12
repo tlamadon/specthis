@@ -26,6 +26,7 @@ from .check import (
     coordinates,
     code_sha,
     expected_inputs,
+    instance_inputs,
     is_library,
     is_source,
     machine_repairable,
@@ -37,7 +38,7 @@ from .check import (
 from .adopt import AdoptError, adopt_manifest
 from .backends import FAILED, BackendError, resolve as resolve_backend
 from .correspond import correspondence_problems, correspondence_warnings
-from .instances import by_step as instances_by_step, template_problems
+from .instances import by_step as instances_by_step, resolve_key, template_problems
 from .install import init_specs_dir, install_agents, install_commands
 from .pipeline import PipelineError
 from .ledger import (
@@ -355,31 +356,39 @@ def record_cmd(entry: str, executor: str, project_path: Path) -> None:
     needs a mind: `specthis vouch`.
     """
     project = _load(project_path)
-    _require_active(project, entry)
-    e = project.entries[entry]
-    if not e.outputs:
+    try:
+        e, inst = resolve_key(project, entry)
+    except KeyError:
+        raise click.ClickException(f"no entry or instance named `{entry}`") from None
+    _require_active(project, e.name)
+    outs = list(inst.outputs if inst else e.outputs)
+    if not outs:
         raise click.ClickException(f"`{entry}` declares no output — nothing to pin")
 
-    missing = [p for p in e.outputs if not (project.root / p).is_file()]
+    missing = [p for p in outs if not (project.root / p).is_file()]
     if missing:
         raise click.ClickException(
             f"`{entry}`: no bytes at {', '.join(missing)} — place the file first"
         )
-    out_sha = hashing.output_sha(project.root, e.outputs)
+    out_sha = hashing.output_sha(project.root, outs)
     assert out_sha is not None
     runs = read_runs(project.specs_dir)
     prior = runs.get(entry)
+    inputs = (
+        instance_inputs(project, e, inst, runs, {}) if inst
+        else expected_inputs(project, e, runs)
+    )
     record_run(
         project.specs_dir,
         entry,
         Run(
-            signature=hashing.signature(expected_inputs(project, e, runs)),
-            output=", ".join(e.outputs),
+            signature=hashing.signature(inputs),
+            output=", ".join(outs),
             output_sha=out_sha,
             ran=_now(),
             executor=executor,
-            inputs=expected_inputs(project, e, runs),
-            outputs=hashing.files_manifest(project.root, e.outputs),
+            inputs=inputs,
+            outputs=hashing.files_manifest(project.root, outs),
         ),
     )
     moved = "" if prior is None else (

@@ -102,7 +102,13 @@ def correspondence_problems(project: Project) -> list[Problem]:
             up_entry = entries.get(up)
             if up_entry is None or is_library(up_entry):
                 continue  # library edges carry code, not artefacts (§7.6)
-            wanted = set(_output_paths(project, up_entry))
+            # A template has no product of its own: its instances do, so
+            # compare against their *resolved* paths, not the pattern.
+            wanted = (
+                {o for i in instances(project, up_entry) for o in i.outputs}
+                if is_template(up_entry)
+                else set(_output_paths(project, up_entry))
+            )
             if wanted and not (wanted & set(step.deps)):
                 bad(
                     f"{PIPELINE}: `{name}` consumes `{up}` but step `{name}` depends on none "

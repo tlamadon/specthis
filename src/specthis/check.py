@@ -193,12 +193,12 @@ def instance_inputs(
     if step is not None:
         inputs[f"step:{inst.name}"] = hashing.step_sha(step.command, step.deps, step.outs)
     for up in entry.consumes:
-        up_entry = project.entries[up]
-        if is_library(up_entry):
-            inputs[f"upstream:{up}"] = code_sha(project, up_entry) or hashing.MISSING
-        else:
-            r = runs.get(upstream_keys.get(up, up))
+        key = upstream_keys.get(up)
+        if key and key != up:  # a sibling instance feeds this one
+            r = runs.get(key)
             inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
+        else:
+            inputs[f"upstream:{up}"] = upstream_digest(project, up, runs)
     return inputs
 
 
@@ -234,13 +234,28 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
     if (sd := step_digest(project, entry)) is not None:
         inputs[f"step:{entry.name}"] = sd
     for up in entry.consumes:
-        up_entry = project.entries[up]
-        if is_library(up_entry):
-            inputs[f"upstream:{up}"] = code_sha(project, up_entry) or hashing.MISSING
-        else:
-            r = runs.get(up)
-            inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
+        inputs[f"upstream:{up}"] = upstream_digest(project, up, runs)
     return inputs
+
+
+def upstream_digest(project: Project, up: str, runs: dict[str, Run]) -> str:
+    """The digest a consumer pins for one upstream entry.
+
+    A library has no product, so its code manifest stands in. A
+    **template** has no claim of its own — its instances do — so a
+    consumer aggregating the whole family pins a composition over their
+    recorded outputs, which moves when any one of them moves.
+    """
+    up_entry = project.entries[up]
+    if is_library(up_entry):
+        return code_sha(project, up_entry) or hashing.MISSING
+    if is_template(up_entry):
+        return hashing.manifest_sha(
+            (i.name, (runs[i.name].output_sha if i.name in runs else hashing.MISSING))
+            for i in instances(project, up_entry)
+        )
+    r = runs.get(up)
+    return r.output_sha if r else hashing.MISSING
 
 
 def step_digest(project: Project, entry: Entry) -> str | None:
