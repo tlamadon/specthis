@@ -2,8 +2,7 @@
 
 **Status: 2026-08-12.** Intuition, not specification. Read this first if
 the formal argument in `attestation-model.md` feels abstract; read
-`specification.md` when you need what is actually true. §9 says where
-the analogy would mislead you.
+`specification.md` when you need what is actually true.
 
 ---
 
@@ -173,27 +172,6 @@ that lives in somebody's head, or in the room, is a number no claim can
 pin.
 
 It is the one risk specthis cannot cover for you.
-
----
-
-## 9. Where the analogy would mislead you
-
-**A building site would gate; a bakery does not.** On site you cannot
-cover up work before it is inspected. specthis went the other way
-deliberately: an unvouched entry still gets rebuilt while somebody
-reviews it, because judging and making are independent. The bakery has
-this right — tonight's batch does not wait for a formula approved in the
-spring to be approved again.
-
-**A bakery is a small cast.** A restaurant brigade — chef, sous, commis,
-supplier — shows better that different people hold different
-capabilities. Read a production team into it.
-
-**And no analogy carries the hard fact:** specthis can verify neither
-claim. It cannot cut the choux and it cannot watch the oven. It records
-who claimed what, over which ingredients, and tells you when the ground
-under a claim has moved. Everything else is somebody else's job —
-which is the argument `attestation-model.md` makes properly.
 
 ---
 
