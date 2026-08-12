@@ -18,6 +18,7 @@ from enum import Enum
 from graphlib import CycleError, TopologicalSorter
 
 from . import hashing
+from .instances import Instance, instances, is_template
 from .ledger import Run, Vouch, read_runs, read_vouches
 from .parse import Entry, Project
 
@@ -95,6 +96,10 @@ class Report:
     #: on this disk (they live in the cache / on the machine that ran) —
     #: ready-but-fetchable, never a local break.
     materialized: bool = True
+    #: For a template instance: the template it realizes, and the props
+    #: that distinguish it. ``None``/empty for an ordinary entry.
+    instance_of: str | None = None
+    props: dict[str, str] = field(default_factory=dict)
 
 
 def code_present(project: Project, entry: Entry) -> bool:
@@ -131,6 +136,42 @@ def code_sha(project: Project, entry: Entry) -> str | None:
     if not code_present(project, entry):
         return None
     return hashing.manifest_sha(code_manifest(project, entry).items())
+
+
+def instance_inputs(
+    project: Project,
+    entry: Entry,
+    inst: Instance,
+    runs: dict[str, Run],
+    upstream_keys: dict[str, str],
+) -> dict[str, str]:
+    """The input table one *instance* of a template would record.
+
+    Same shape as :func:`expected_inputs`: shared code (every instance
+    runs the same code — that is what lets one vouch cover the
+    template), the package blob, this instance's own step, and each
+    upstream's recorded output digest. ``upstream_keys`` maps a consumed
+    entry name to the ledger key that actually feeds this instance,
+    which for a templated upstream is a sibling instance.
+    """
+    inputs = hashing.files_manifest(
+        project.root, [*entry.binding.scripts, *entry.binding.workflows]
+    )
+    if project.package_globs:
+        inputs["package"] = hashing.package_sha(
+            project.root, project.package_globs, project.library_scripts
+        )
+    step = project.steps.get(inst.step)
+    if step is not None:
+        inputs[f"step:{inst.name}"] = hashing.step_sha(step.command, step.deps, step.outs)
+    for up in entry.consumes:
+        up_entry = project.entries[up]
+        if is_library(up_entry):
+            inputs[f"upstream:{up}"] = code_sha(project, up_entry) or hashing.MISSING
+        else:
+            r = runs.get(upstream_keys.get(up, up))
+            inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
+    return inputs
 
 
 def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dict[str, str]:
@@ -283,32 +324,25 @@ def _certify(
     return Certification.CERTIFIED, []
 
 
-def _realize(
-    project: Project, entry: Entry, r: Run | None, runs: dict[str, Run]
+def _realize_table(
+    project: Project, r: Run | None, expected: dict[str, str], outputs: list[str]
 ) -> tuple[Realization, list[str], bool]:
-    """The run axis: (realization, moved attribution, materialized).
-
-    Absent bytes are not edited bytes: the row is a claim, not an
-    observation. The claim stands with the bytes elsewhere (fetch
-    verifies on materialization); only present-but-different bytes
-    are stale."""
-    expected = expected_inputs(project, entry, runs)
+    """The compute axis over an explicit table — shared by entries and
+    template instances, which differ only in which table they pin."""
     if r is None:
         return Realization.NEVER_RUN, [], True
     if r.inputs:  # decided on the recorded table
         if r.inputs != expected:
             return Realization.STALE, table_diff(r.inputs, expected), True
-    elif r.signature != hashing.signature(expected):  # legacy row: no table to diff
+    elif r.signature != hashing.signature(expected):  # legacy row: nothing to diff
         return Realization.STALE, ["inputs moved"], True
-    disk_sha = hashing.output_sha(project.root, entry.outputs)
+    disk_sha = hashing.output_sha(project.root, outputs)
     if disk_sha is None:
         return Realization.CURRENT, [], False
     if disk_sha != r.output_sha:
-        # Per-output attribution when the row carries the table: a
-        # multi-output entry must say *which* artefact was edited.
         edited = [
             f"out:{p}"
-            for p in sorted(entry.outputs)
+            for p in sorted(outputs)
             if r.outputs and hashing.file_sha(project.root / p) != r.outputs.get(p)
         ]
         return Realization.STALE, edited or ["output (edited on disk)"], True
@@ -332,48 +366,114 @@ def check_project(
     runs = read_runs(project.specs_dir) if runs is None else runs
 
     reports: dict[str, Report] = {}
+    #: entry name -> the ledger keys standing in for it. A template
+    #: contributes its instances; everything else contributes itself.
+    keys: dict[str, list[str]] = {}
+
     for name in topo_order(project):  # upstream first, so recursion is a lookup
         entry = project.entries[name]
-        s = entry.spec.spec_sha
-        c = code_sha(project, entry)
-        v = vouches.get(name)
-        r = runs.get(name)
-        report = Report(entry=name, status=Status.READY, spec_sha=s, code_sha=c, vouch=v, run=r)
-        reports[name] = report
-
-        report.certification, expired = _certify(project, entry, v, s, c)
-        certified = report.certification is Certification.CERTIFIED
-        if is_library(entry):
-            # The chain stops at code: no run, no output. A vouch at the
-            # current digests is the whole claim.
-            realization, moved, materialized = None, [], True
-        else:
-            realization, moved, materialized = _realize(project, entry, r, runs)
-        report.realization = realization
-
-        # Attribution and byte locality are run-axis facts: never gated
-        # by the vouch axis. An unvouched entry still knows what moved
-        # and where its bytes are.
-        report.expired = expired
-        report.moved = moved
-        report.materialized = materialized
-
-        report.computable = certified and all(reports[up].computable for up in entry.consumes)
-        report.realized = (
-            realization is None or realization is Realization.CURRENT
-        ) and all(reports[up].realized for up in entry.consumes)
-
-        if report.certification is Certification.UNIMPLEMENTED:
-            report.status = Status.UNIMPLEMENTED
-        elif report.certification is Certification.UNVOUCHED:
-            report.status = Status.AUDIT_NEEDED
-        elif report.certification is Certification.REJECTED:
-            report.status = Status.REJECTED
-        elif realization in (Realization.NEVER_RUN, Realization.STALE):
-            report.status = Status.STALE
-        elif any(reports[up].status is not Status.READY for up in entry.consumes):
-            report.status = Status.UPSTREAM_UNVERIFIED
+        for report in _reports_for(project, entry, vouches, runs, reports, keys):
+            reports[report.entry] = report
+            keys.setdefault(name, []).append(report.entry)
     return reports
+
+
+def _sibling(props: dict[str, str], candidates: list[Report]) -> Report | None:
+    """The upstream instance feeding this one: the sibling agreeing on
+    every prop they share. No `raw-wages[dataset]` syntax needed — the
+    binding is by name, so it is already written down."""
+    for cand in candidates:
+        if all(props.get(k) == v for k, v in cand.props.items() if k in props):
+            return cand
+    return None
+
+
+def _reports_for(
+    project: Project,
+    entry: Entry,
+    vouches: dict[str, Vouch],
+    runs: dict[str, Run],
+    reports: dict[str, Report],
+    keys: dict[str, list[str]],
+) -> list[Report]:
+    """One report per entry — or one per instance, for a template."""
+    name = entry.name
+    s = entry.spec.spec_sha
+    c = code_sha(project, entry)
+
+    if not is_template(entry):
+        return [
+            _one(
+                project, entry, name, vouches.get(name), runs.get(name), s, c,
+                expected_inputs(project, entry, runs), list(entry.outputs),
+                [k for up in entry.consumes for k in keys.get(up, [up])], reports,
+            )
+        ]
+
+    out: list[Report] = []
+    for inst in instances(project, entry):
+        # A vouch on the instance wins over one on the template (§15.4):
+        # the narrower claim is the more honest one.
+        v = vouches.get(inst.name) or vouches.get(name)
+        upstream_keys, upstream_reports = {}, []
+        for up in entry.consumes:
+            cands = [reports[k] for k in keys.get(up, []) if k in reports]
+            chosen = _sibling(inst.binding, cands) if cands else None
+            key = chosen.entry if chosen else up
+            upstream_keys[up] = key
+            if key in reports:
+                upstream_reports.append(key)
+        report = _one(
+            project, entry, inst.name, v, runs.get(inst.name), s, c,
+            instance_inputs(project, entry, inst, runs, upstream_keys),
+            list(inst.outputs), upstream_reports, reports,
+        )
+        report.instance_of, report.props = name, inst.binding
+        out.append(report)
+    return out
+
+
+def _one(
+    project: Project,
+    entry: Entry,
+    key: str,
+    v: Vouch | None,
+    r: Run | None,
+    s: str,
+    c: str | None,
+    inputs: dict[str, str],
+    outputs: list[str],
+    upstream: list[str],
+    reports: dict[str, Report],
+) -> Report:
+    """Derive one report: both axes, then propagation over `upstream`."""
+    report = Report(entry=key, status=Status.READY, spec_sha=s, code_sha=c, vouch=v, run=r)
+    report.certification, report.expired = _certify(project, entry, v, s, c)
+    certified = report.certification is Certification.CERTIFIED
+
+    if is_library(entry):
+        realization, moved, materialized = None, [], True
+    else:
+        realization, moved, materialized = _realize_table(project, r, inputs, outputs)
+    report.realization = realization
+    report.moved, report.materialized = moved, materialized
+
+    report.computable = certified and all(reports[u].computable for u in upstream)
+    report.realized = (
+        realization is None or realization is Realization.CURRENT
+    ) and all(reports[u].realized for u in upstream)
+
+    if report.certification is Certification.UNIMPLEMENTED:
+        report.status = Status.UNIMPLEMENTED
+    elif report.certification is Certification.UNVOUCHED:
+        report.status = Status.AUDIT_NEEDED
+    elif report.certification is Certification.REJECTED:
+        report.status = Status.REJECTED
+    elif realization in (Realization.NEVER_RUN, Realization.STALE):
+        report.status = Status.STALE
+    elif any(reports[u].status is not Status.READY for u in upstream):
+        report.status = Status.UPSTREAM_UNVERIFIED
+    return report
 
 
 def machine_repairable(r: Report) -> bool:

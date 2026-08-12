@@ -21,8 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import hashing
-from .check import expected_inputs
+from .check import expected_inputs, instance_inputs
 from .ledger import Run, read_runs, record_run
+from .instances import resolve_key
 from .parse import Project
 
 
@@ -49,13 +50,14 @@ def verify(project: Project, entry_name: str, manifest: dict) -> None:
         f"`{entry_name}`: unknown manifest_version {manifest.get('manifest_version')!r}",
     )
     _require(manifest.get("exit_code") == 0, f"`{entry_name}`: manifest reports a failed step")
-    entry = project.entries.get(entry_name)
-    _require(entry is not None, f"no entry named `{entry_name}`")
-    assert entry is not None
+    try:
+        entry, inst = resolve_key(project, entry_name)
+    except KeyError:
+        raise AdoptError(f"no entry or instance named `{entry_name}`") from None
 
     outputs = manifest.get("outputs") or {}
     _require(bool(outputs), f"`{entry_name}`: manifest declares no outputs")
-    declared = set(entry.outputs)
+    declared = set(inst.outputs if inst else entry.outputs)
     _require(
         declared <= set(outputs),
         f"`{entry_name}`: manifest is missing declared output(s) "
@@ -80,19 +82,23 @@ def adopt_manifest(project: Project, entry_name: str, manifest: dict) -> Adopted
     the two together — every path they share must agree.
     """
     verify(project, entry_name, manifest)
-    entry = project.entries[entry_name]
+    entry, inst = resolve_key(project, entry_name)
     runs = read_runs(project.specs_dir)
     prior = runs.get(entry_name)
 
-    inputs = expected_inputs(project, entry, runs)
-    outputs = hashing.files_manifest(project.root, entry.outputs)
-    out_sha = hashing.output_sha(project.root, entry.outputs)
+    paths = list(inst.outputs if inst else entry.outputs)
+    if inst is None:
+        inputs = expected_inputs(project, entry, runs)
+    else:
+        inputs = instance_inputs(project, entry, inst, runs, {})
+    outputs = hashing.files_manifest(project.root, paths)
+    out_sha = hashing.output_sha(project.root, paths)
     _require(out_sha is not None, f"`{entry_name}`: declared output(s) absent after the run")
     assert out_sha is not None
 
     run = Run(
         signature=hashing.signature(inputs),
-        output=", ".join(entry.outputs),
+        output=", ".join(paths),
         output_sha=out_sha,
         ran=manifest.get("finished_at") or manifest.get("started_at") or "",
         executor=str(manifest.get("executor") or "unknown"),

@@ -36,7 +36,7 @@ from .check import (
 from .adopt import AdoptError, adopt_manifest
 from .backends import FAILED, BackendError, resolve as resolve_backend
 from .correspond import correspondence_problems, correspondence_warnings
-from .instances import template_problems
+from .instances import by_step as instances_by_step, template_problems
 from .install import init_specs_dir, install_agents, install_commands
 from .pipeline import PipelineError
 from .ledger import (
@@ -676,12 +676,18 @@ def build_cmd(
     state = backend.poll(handle)
     produced = backend.manifests(handle)
 
+    # Steps carry pipeline ids; claims are keyed by entry — or by
+    # instance, for a template. The mapping comes from output patterns,
+    # never from how a backend chose to name its steps.
+    instance_of_step = {sid: inst.name for sid, (_e, inst) in instances_by_step(project).items()}
+
     adopted, refused = [], []
-    for name, manifest in sorted(produced.items()):
-        if name not in project.entries:
+    for sid, manifest in sorted(produced.items()):
+        key = instance_of_step.get(sid, sid)
+        if key not in project.entries and key not in instance_of_step.values():
             continue  # a step with no entry: lint's business, not adoption's
         try:
-            adopted.append(adopt_manifest(project, name, manifest))
+            adopted.append(adopt_manifest(project, key, manifest))
         except AdoptError as exc:
             refused.append(str(exc))
 

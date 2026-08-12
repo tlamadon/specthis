@@ -153,3 +153,35 @@ def template_problems(project: Project) -> list[str]:
                     "runs the same code, which is what lets one vouch cover the template"
                 )
     return out
+
+
+def by_step(project: Project) -> dict[str, tuple[Entry, "Instance"]]:
+    """Pipeline step id -> the template entry and instance it realizes.
+
+    The seam runs on step ids, but claims are keyed by instance name, so
+    adoption needs this one lookup — and it is derived from the output
+    patterns, never from how a backend chose to name its steps.
+    """
+    out: dict[str, tuple[Entry, Instance]] = {}
+    for entry in project.entries.values():
+        if is_template(entry):
+            for inst in instances(project, entry):
+                out[inst.step] = (entry, inst)
+    return out
+
+
+def resolve_key(project: Project, key: str) -> tuple[Entry, "Instance | None"]:
+    """A ledger key -> the entry it claims about, and its instance if any.
+
+    ``clean-wages`` is an entry; ``clean-wages[dataset=chile]`` is one
+    instance of it. Raises ``KeyError`` for anything else.
+    """
+    if key in project.entries:
+        return project.entries[key], None
+    head, sep, _ = key.partition("[")
+    if sep and head in project.entries:
+        entry = project.entries[head]
+        for inst in instances(project, entry):
+            if inst.name == key:
+                return entry, inst
+    raise KeyError(key)
