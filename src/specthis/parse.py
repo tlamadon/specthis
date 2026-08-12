@@ -45,8 +45,8 @@ from .hashing import sha256_text
 from .pipeline import PipelineError, Step, load_pipeline
 from .preview import CONTENT_TYPES
 
-KINDS = {"meta", "definitions", "templates", "library", "compute", "report"}
-ENTRY_KINDS = {"library", "compute", "report"}
+KINDS = {"meta", "definitions", "templates", "library", "source", "compute", "report"}
+ENTRY_KINDS = {"library", "source", "compute", "report"}
 TIERS = {"intensive", "quick"}
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -282,7 +282,7 @@ def _infer_file_kind(body: str) -> str:
     # any pipeline still reads as compute here, and its lack of code
     # derives `unimplemented` exactly as a source entry should.
     kinds.discard("library")
-    return "report" if len(kinds) > 1 else "compute"
+    return "report" if len(kinds) > 1 else kinds.pop()
 
 
 def _spec_sha(text: str, m: "re.Match[str]") -> str:
@@ -368,7 +368,7 @@ def parse_spec(path: Path) -> SpecFile:
     )
 
     if kind in ENTRY_KINDS:
-        label = "Output" if kind == "compute" else "Export outputs"
+        label = "Output" if kind in ("compute", "source") else "Export outputs"
         for block_match in re.finditer(
             r"^### +(.+?)\s*$\n(.*?)(?=^### |^## |\Z)", body, re.MULTILINE | re.DOTALL
         ):
@@ -402,7 +402,7 @@ def parse_spec(path: Path) -> SpecFile:
                         f"{path.name}: entry `{entry_name}` declares no `{label}:` path "
                         "(or a `- produces:` field)"
                     )
-                if kind == "compute" and len(outputs) > 1:
+                if kind in ("compute", "source") and len(outputs) > 1:
                     raise SpecError(
                         f"{path.name}: compute entry `{entry_name}` must declare exactly one output"
                     )

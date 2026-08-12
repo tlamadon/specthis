@@ -96,7 +96,9 @@ def test_kind_and_name_are_optional(root: Path) -> None:
     write(root, "specs/wages.md", MINIMAL)
     bind_entry(root)
     project = load_project(root)
-    assert project.entries["clean-wages"].spec.kind == "compute"
+    # a physical path in `produces` is a source: bytes from outside any
+    # pipeline (§2), which is what this minimal file declares
+    assert project.entries["clean-wages"].spec.kind == "source"
     assert project.entries["clean-wages"].spec.name == "wages"
 
 

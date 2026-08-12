@@ -29,6 +29,7 @@ from .check import (
     code_sha,
     expected_inputs,
     is_library,
+    is_source,
     machine_repairable,
     queues,
     step_digest,
@@ -630,6 +631,100 @@ def run_cmd(
         raise click.ClickException(
             f"{n} entr{'y' if n == 1 else 'ies'} failed; nothing recorded for failed runs"
         )
+
+
+# ---------------------------------------------------------------- adopt
+
+
+@main.command("adopt")
+@click.argument("entry")
+@click.argument("manifest_file", type=click.Path(exists=True, path_type=Path))
+@_path_option
+def adopt_cmd(entry: str, manifest_file: Path, project_path: Path) -> None:
+    """Countersign a manager's MANIFEST_FILE as ENTRY's derived claim.
+
+    A manifest is an unsigned factual report from a machine; adopting it
+    is the notary act. Every digest it asserts is checked against the
+    bytes on disk and the whole thing is refused if any disagrees.
+
+    That proves *transcription*, not derivation: it catches a garbled or
+    mismatched manifest, and it does not make the manager trustworthy —
+    establishing that the outputs came from that code on those inputs
+    would mean re-running, which needs the capability specthis lacks.
+
+    `build` does this for you; use this verb for a manager specthis did
+    not launch.
+    """
+    project = _load(project_path)
+    try:
+        doc = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"{manifest_file}: {exc}") from exc
+    try:
+        result = adopt_manifest(project, entry, doc)
+    except AdoptError as exc:
+        raise click.ClickException(str(exc)) from exc
+    note = " (output unchanged — downstream claims unaffected)" if result.reproduced else ""
+    click.echo(f"adopted `{entry}` -> {result.run.output_sha[:12]}…{note}")
+
+
+# --------------------------------------------------------------- record
+
+
+@main.command("record")
+@click.argument("entry")
+@click.option(
+    "--as", "executor", default="hand", show_default=True,
+    help="Who or what put these bytes here — a person, a one-off script, a vendor.",
+)
+@_path_option
+def record_cmd(entry: str, executor: str, project_path: Path) -> None:
+    """Pin the bytes already on disk for ENTRY, without running anything.
+
+    The way content that no pipeline produced enters the ledger: a
+    downloaded dataset, an extract a collaborator sent, the output of a
+    one-off nobody wants to automate. Place the file, record it, and it
+    becomes an ordinary upstream — a source entry is a compute entry
+    that computes nothing.
+
+    Records a derived claim only; it never writes a vouch. Whether the
+    data is what it claims to be is a *provenance* judgment, and that
+    needs a mind: `specthis vouch`.
+    """
+    project = _load(project_path)
+    _require_active(project, entry)
+    e = project.entries[entry]
+    if not e.outputs:
+        raise click.ClickException(f"`{entry}` declares no output — nothing to pin")
+
+    missing = [p for p in e.outputs if not (project.root / p).is_file()]
+    if missing:
+        raise click.ClickException(
+            f"`{entry}`: no bytes at {', '.join(missing)} — place the file first"
+        )
+    out_sha = hashing.output_sha(project.root, e.outputs)
+    assert out_sha is not None
+    runs = read_runs(project.specs_dir)
+    prior = runs.get(entry)
+    record_run(
+        project.specs_dir,
+        entry,
+        Run(
+            signature=hashing.signature(expected_inputs(project, e, runs)),
+            output=", ".join(e.outputs),
+            output_sha=out_sha,
+            ran=_now(),
+            executor=executor,
+            inputs=expected_inputs(project, e, runs),
+            outputs=hashing.files_manifest(project.root, e.outputs),
+        ),
+    )
+    moved = "" if prior is None else (
+        " (bytes unchanged)" if prior.output_sha == out_sha else " (bytes moved)"
+    )
+    click.echo(f"recorded `{entry}` -> {out_sha[:12]}…{moved}")
+    if is_source(e):
+        click.echo("note: provenance is a judgment — `specthis vouch` says it is what it claims")
 
 
 # -------------------------------------------------------------- certify

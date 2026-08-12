@@ -270,3 +270,26 @@ def test_a_bad_backend_path_is_a_clean_error(piped: Path) -> None:
     result = run_cli("build", "--path", str(piped))
     assert result.exit_code != 0
     assert "module:ClassName" in result.output
+
+
+def test_adopt_verb_countersigns_a_manifest_from_any_manager(piped: Path) -> None:
+    """For a manager specthis did not launch: hand it the manifest."""
+    RunnerBackend(piped).submit()
+    m = piped / ".specthis/runner/manifests/fit-alpha.json"
+    result = run_cli("adopt", "fit-alpha", str(m), "--path", str(piped))
+    assert result.exit_code == 0, result.output
+    assert "adopted `fit-alpha`" in result.output
+    assert "fit-alpha" in read_runs(piped / "specs")
+
+
+def test_adopt_verb_refuses_a_manifest_that_disagrees(piped: Path) -> None:
+    RunnerBackend(piped).submit()
+    m = piped / ".specthis/runner/manifests/fit-alpha.json"
+    doc = json.loads(m.read_text())
+    doc["outputs"] = {k: "0" * 64 for k in doc["outputs"]}
+    forged = piped / "forged.json"
+    forged.write_text(json.dumps(doc))
+    result = run_cli("adopt", "fit-alpha", str(forged), "--path", str(piped))
+    assert result.exit_code != 0
+    assert "does not hash" in result.output
+    assert "fit-alpha" not in read_runs(piped / "specs")

@@ -112,6 +112,16 @@ def is_library(entry: Entry) -> bool:
     return entry.spec.kind == "library"
 
 
+def is_source(entry: Entry) -> bool:
+    """A dataset: bytes arriving from outside any pipeline (§2).
+
+    It computes nothing, so it has no code and no step. Its *vouch*
+    attests provenance — "this is IPUMS extract #14" — and its run claim
+    pins the bytes, placed by hand and recorded.
+    """
+    return entry.spec.kind == "source"
+
+
 def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
     """The per-file form of ``code_sha``: script -> digest, plus the
     package blob under the ``"package"`` key.
@@ -119,7 +129,13 @@ def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
     Recorded on vouches so that when the composed digest moves, the
     movement can be attributed (which script? the blob?) instead of
     only detected.
+
+    A **source** entry has no code: its data is the subject, so the
+    bytes stand in and a provenance vouch expires exactly when the
+    dataset is replaced.
     """
+    if is_source(entry):
+        return hashing.files_manifest(project.root, entry.outputs)
     manifest = {
         s: hashing.file_sha(project.root / s) or hashing.MISSING
         for s in entry.binding.scripts
@@ -132,7 +148,15 @@ def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
 
 
 def code_sha(project: Project, entry: Entry) -> str | None:
-    """Manifest over the entry's scripts plus the package blob digest."""
+    """Manifest over the entry's scripts plus the package blob digest.
+
+    For a **source** entry there is no code: the subject of the claim is
+    the data itself, so the bytes stand in. A provenance vouch then
+    expires exactly when the dataset is replaced, which is the only
+    thing that should expire it.
+    """
+    if is_source(entry):
+        return hashing.output_sha(project.root, entry.outputs)
     if not code_present(project, entry):
         return None
     return hashing.manifest_sha(code_manifest(project, entry).items())
@@ -191,6 +215,8 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
         inputs["package"] = hashing.package_sha(
             project.root, project.package_globs, project.library_scripts
         )
+    if is_source(entry):
+        return hashing.files_manifest(project.root, entry.outputs)
     if (sd := step_digest(project, entry)) is not None:
         inputs[f"step:{entry.name}"] = sd
     for up in entry.consumes:
