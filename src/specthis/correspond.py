@@ -15,6 +15,7 @@ has not adopted a pipeline yet.
 from __future__ import annotations
 
 from .check import is_library
+from .instances import instances, is_template
 from .parse import Entry, Problem, Project
 
 PIPELINE = "pipeline.toml"
@@ -48,17 +49,27 @@ def correspondence_problems(project: Project) -> list[Problem]:
             if name in steps:
                 bad(f"{PIPELINE}: `{name}` is a library entry and must have no step (§7.4)")
             continue
+        if is_template(entry):
+            if not instances(project, entry):
+                bad(
+                    f"{PIPELINE}: `{name}` is a template but the pipeline declares no step "
+                    "matching its output pattern(s) — no instances exist"
+                )
+            continue
         if name not in steps:
             bad(f"{PIPELINE}: no step for entry `{name}` — declared but never built")
 
+    instance_steps = {
+        i.step for e in entries.values() if is_template(e) for i in instances(project, e)
+    }
     for sid in sorted(steps):
-        if sid not in entries:
+        if sid not in entries and sid not in instance_steps:
             bad(f"{PIPELINE}: step `{sid}` matches no entry — nothing claims its bytes")
 
     # --- map <-> pipeline --------------------------------------------------
     for name, entry in sorted(entries.items()):
         step = steps.get(name)
-        if step is None:
+        if step is None or is_template(entry):
             continue
         declared = set(step.outs)
         for out in _output_paths(project, entry):
@@ -80,7 +91,7 @@ def correspondence_problems(project: Project) -> list[Problem]:
         out: name
         for name, entry in entries.items()
         for out in _output_paths(project, entry)
-        if not is_library(entry)
+        if not is_library(entry) and not is_template(entry)
     }
     for name, entry in sorted(entries.items()):
         step = steps.get(name)
@@ -114,8 +125,12 @@ def correspondence_warnings(project: Project) -> list[Problem]:
     if not project.steps:
         return []
     out: list[Problem] = []
-    claimed = {
-        p for name, e in project.entries.items() for p in _output_paths(project, e)
+    claimed = {p for e in project.entries.values() for p in _output_paths(project, e)} | {
+        o
+        for e in project.entries.values()
+        if is_template(e)
+        for i in instances(project, e)
+        for o in i.outputs
     }
     for sid, step in sorted(project.steps.items()):
         # A command that merely names hashed files has almost no room to

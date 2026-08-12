@@ -134,6 +134,10 @@ class SpecFile:
     skip: bool = False  # commented out: entries dormant, body not grammar-checked
     group: str | None = None  # sidebar group label; display-only, outside spec_sha
     priority: int = 0  # sidebar rank, higher first; display-only, outside spec_sha
+    #: `props:` — free variables making this file's entries templates
+    #: (spec §15). Semantic, so inside spec_sha: adding a prop changes
+    #: what the contract promises.
+    props: list[str] = field(default_factory=list)
     entries: list[Entry] = field(default_factory=list)
 
 
@@ -234,6 +238,12 @@ def parse_spec(path: Path) -> SpecFile:
     if name != path.stem:
         raise SpecError(f"{path.name}: `name: {name}` must match the filename stem")
 
+    props = meta.get("props") or []
+    if isinstance(props, str):
+        props = [props]
+    if not isinstance(props, list) or not all(isinstance(x, str) for x in props):
+        raise SpecError(f"{path.name}: `props:` must be a name or a list of names")
+
     tier = meta.get("tier", "intensive" if kind == "compute" else "quick")
     if tier not in TIERS:
         raise SpecError(f"{path.name}: `tier: {tier}` is not one of {sorted(TIERS)}")
@@ -259,6 +269,7 @@ def parse_spec(path: Path) -> SpecFile:
         consumes=_str_list(meta.get("consumes"), path.name, "consumes"),
         references=_str_list(meta.get("references"), path.name, "references"),
         spec_sha=_spec_sha(text, m),
+        props=props,
         body=body,
         title=str(meta.get("title") or (heading.group(1) if heading else name)),
         skip=skip,

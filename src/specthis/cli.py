@@ -36,6 +36,7 @@ from .check import (
 from .adopt import AdoptError, adopt_manifest
 from .backends import FAILED, BackendError, resolve as resolve_backend
 from .correspond import correspondence_problems, correspondence_warnings
+from .instances import template_problems
 from .install import init_specs_dir, install_agents, install_commands
 from .pipeline import PipelineError
 from .ledger import (
@@ -206,7 +207,11 @@ def lint_cmd(project_path: Path) -> None:
     that the two agree. Exits non-zero if anything is wrong. Reads only.
     """
     project, problems = _load_lenient(project_path)
-    problems = problems + correspondence_problems(project)
+    problems = (
+        problems
+        + [Problem('specs', m) for m in template_problems(project)]
+        + correspondence_problems(project)
+    )
     warnings = correspondence_warnings(project)
     for p in problems:
         click.echo(f"  {p.message}")
