@@ -389,6 +389,11 @@ else.
 - **State** is a private lock — `step → {deps, outs}` tables — so
   decisions are content-keyed, never mtimes. specthis never reads it;
   it reads manifests.
+- **It verifies its own products.** A skip requires the recorded outputs
+  to still be on disk unchanged, so an edited artefact is rebuilt by a
+  plain walk. That exceeds §14 (which only requires input-keyed
+  decisions) and matches DVC; a purely input-keyed manager reports a
+  cache hit instead, which is what `run --force` (§10.3) is for.
 - **Deliberately absent:** parallelism, resources, remote execution,
   retries, scheduling. Wanting any of them is the signal to point a real
   manager at the same `deps`/`outs` declarations.

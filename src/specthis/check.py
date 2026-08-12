@@ -274,7 +274,14 @@ def _realize(
     if disk_sha is None:
         return Realization.CURRENT, [], False
     if disk_sha != r.output_sha:
-        return Realization.STALE, ["output (edited on disk)"], True
+        # Per-output attribution when the row carries the table: a
+        # multi-output entry must say *which* artefact was edited.
+        edited = [
+            f"out:{p}"
+            for p in sorted(entry.outputs)
+            if r.outputs and hashing.file_sha(project.root / p) != r.outputs.get(p)
+        ]
+        return Realization.STALE, edited or ["output (edited on disk)"], True
     return Realization.CURRENT, [], True
 
 

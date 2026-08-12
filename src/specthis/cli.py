@@ -32,7 +32,10 @@ from .check import (
     topo_order,
     verified,
 )
+from .adopt import AdoptError, adopt_manifest
+from .backends import FAILED, RunnerBackend
 from .install import init_specs_dir, install_agents, install_commands
+from .pipeline import PipelineError
 from .ledger import (
     RUNS_FILE,
     LedgerError,
@@ -336,6 +339,7 @@ def _execute_entry(
             ran=_now(),
             executor=executor,
             inputs=inputs,
+            outputs=hashing.files_manifest(project.root, entry.outputs),
             duration_seconds=round(elapsed, 3),
         ),
     )
@@ -603,6 +607,76 @@ def run_cmd(
         n = len(failures)
         raise click.ClickException(
             f"{n} entr{'y' if n == 1 else 'ies'} failed; nothing recorded for failed runs"
+        )
+
+
+# ---------------------------------------------------------------- build
+
+
+@main.command("build")
+@click.argument("entries", nargs=-1)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Bypass the manager's cache for the named entries — the integrity "
+    "repair path, for an artefact edited on disk.",
+)
+@click.option(
+    "--pipeline",
+    "pipeline_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Pipeline file (default: pipeline.toml at the project root).",
+)
+@_path_option
+def build_cmd(
+    entries: tuple[str, ...], force: bool, pipeline_path: Path | None, project_path: Path
+) -> None:
+    """Hand the pipeline to a compute manager and adopt what comes back.
+
+    specthis never selects steps: the whole pipeline goes over, and the
+    manager decides what actually executes (it alone can know whether a
+    rerun reproduces identical bytes). Naming ENTRIES scopes a repair;
+    --force bypasses the manager's cache for them.
+
+    Every manifest is verified against the bytes on disk before it is
+    recorded. That proves transcription, never derivation.
+    """
+    project = _load(project_path)
+    backend = RunnerBackend(project.root, pipeline_path)
+    try:
+        steps = backend.parse()
+    except PipelineError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    unknown = sorted(set(entries) - set(steps))
+    if unknown:
+        raise click.ClickException(f"no pipeline step for: {', '.join(unknown)}")
+    if force and not entries:
+        raise click.ClickException("--force needs the entries to force; it is a repair, not a mode")
+
+    handle = backend.submit(list(entries) or None, force=force)
+    state = backend.poll(handle)
+    produced = backend.manifests(handle)
+
+    adopted, refused = [], []
+    for name, manifest in sorted(produced.items()):
+        if name not in project.entries:
+            continue  # a step with no entry: lint's business, not adoption's
+        try:
+            adopted.append(adopt_manifest(project, name, manifest))
+        except AdoptError as exc:
+            refused.append(str(exc))
+
+    for a in adopted:
+        note = " (output unchanged — downstream claims unaffected)" if a.reproduced else ""
+        click.echo(f"  adopted {a.entry} -> {a.run.output_sha[:12]}…{note}")
+    click.echo(f"{len(adopted)} claim(s) recorded from {backend.name}")
+    for why in refused:
+        click.echo(f"  refused: {why}", err=True)
+    if refused or state == FAILED:
+        raise click.ClickException(
+            "some steps failed or their manifests were refused; nothing recorded for those"
         )
 
 

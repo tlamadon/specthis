@@ -1,0 +1,172 @@
+"""End to end across the seam: pipeline -> runner -> manifest -> ledger.
+
+The path the whole architecture rests on. specthis hands over a plan,
+a manager makes bytes and reports what it did, and the notary
+countersigns — verifying transcription, never derivation.
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
+from specthis.adopt import AdoptError, adopt_manifest
+from specthis.backends import DONE, FAILED, RunnerBackend
+from specthis.check import Realization, check_project
+from specthis.cli import main
+from specthis.ledger import read_runs
+from specthis.parse import load_project
+
+from .conftest import PY, write
+
+PIPELINE = f"""\
+[steps.fit-alpha]
+command = '{PY} scripts/fit_alpha.py'
+deps    = ["scripts/fit_alpha.py", "hut.fit-alpha.json"]
+outs    = ["results/alpha/fit.json"]
+
+[steps.fit-beta]
+command = '{PY} scripts/fit_beta.py'
+deps    = ["scripts/fit_beta.py", "results/alpha/fit.json"]
+outs    = ["results/beta/fit.json"]
+"""
+
+
+def run_cli(*args: str):
+    return CliRunner().invoke(main, list(args))
+
+
+@pytest.fixture
+def piped(root: Path) -> Path:
+    write(root, "pipeline.toml", PIPELINE)
+    return root
+
+
+def realization(root: Path, name: str) -> Realization:
+    return check_project(load_project(root))[name].realization
+
+
+# ------------------------------------------------------------ the seam
+
+
+def test_build_records_claims_the_runner_supports(piped: Path) -> None:
+    result = run_cli("build", "--path", str(piped))
+    assert result.exit_code == 0, result.output
+    assert "adopted fit-alpha" in result.output
+    runs = read_runs(piped / "specs")
+    assert set(runs) == {"fit-alpha", "fit-beta"}
+    assert realization(piped, "fit-alpha") is Realization.CURRENT
+    assert realization(piped, "fit-beta") is Realization.CURRENT
+
+
+def test_adopted_row_carries_per_output_digests(piped: Path) -> None:
+    run_cli("build", "--path", str(piped))
+    row = read_runs(piped / "specs")["fit-alpha"]
+    assert row.outputs == {"results/alpha/fit.json": row.output_sha}
+    assert row.executor == "specthis-runner"
+
+
+def test_build_is_idempotent_and_hits_are_invisible(piped: Path) -> None:
+    run_cli("build", "--path", str(piped))
+    first = read_runs(piped / "specs")["fit-alpha"]
+    result = run_cli("build", "--path", str(piped))
+    assert result.exit_code == 0, result.output
+    second = read_runs(piped / "specs")["fit-alpha"]
+    assert first.output_sha == second.output_sha and first.inputs == second.inputs
+
+
+def test_build_never_writes_vouches(piped: Path) -> None:
+    run_cli("build", "--path", str(piped))
+    assert not (piped / "specs/vouches.toml").exists()
+
+
+def test_a_failing_step_records_nothing_and_exits_non_zero(piped: Path) -> None:
+    write(piped, "scripts/fit_alpha.py", "raise SystemExit(3)\n")
+    result = run_cli("build", "--path", str(piped))
+    assert result.exit_code != 0
+    assert not (piped / "specs/runs.toml").exists()
+
+
+def test_force_needs_entries(piped: Path) -> None:
+    result = run_cli("build", "--force", "--path", str(piped))
+    assert result.exit_code != 0
+    assert "repair, not a mode" in result.output
+
+
+def test_an_edited_artefact_is_detected_and_rebuilt(piped: Path) -> None:
+    """specthis always detects a tampered output (§10.3). Whether the
+    manager *rebuilds* it depends on the manager: the bundled runner
+    checks its recorded outputs against disk, so a plain build suffices.
+    A purely input-keyed manager would report a cache hit, which is why
+    --force exists."""
+    run_cli("build", "--path", str(piped))
+    write(piped, "results/alpha/fit.json", '{"loss": 999}')
+    assert realization(piped, "fit-alpha") is Realization.STALE
+
+    assert run_cli("build", "--path", str(piped)).exit_code == 0
+    assert realization(piped, "fit-alpha") is Realization.CURRENT
+
+
+def test_force_bypasses_the_managers_cache(piped: Path) -> None:
+    run_cli("build", "--path", str(piped))
+    before = read_runs(piped / "specs")["fit-alpha"].ran
+    result = run_cli("build", "fit-alpha", "--force", "--path", str(piped))
+    assert result.exit_code == 0, result.output
+    assert read_runs(piped / "specs")["fit-alpha"].ran >= before
+    assert realization(piped, "fit-alpha") is Realization.CURRENT
+
+
+# ------------------------------------------------------- fail closed
+
+
+def test_a_manifest_that_disagrees_with_the_bytes_is_refused(piped: Path) -> None:
+    project = load_project(piped)
+    backend = RunnerBackend(piped)
+    handle = backend.submit()
+    manifest = backend.manifests(handle)["fit-alpha"]
+    forged = {**manifest, "outputs": {k: "0" * 64 for k in manifest["outputs"]}}
+    with pytest.raises(AdoptError, match="does not hash"):
+        adopt_manifest(project, "fit-alpha", forged)
+    assert "fit-alpha" not in read_runs(piped / "specs")
+
+
+def test_a_failed_manifest_is_never_adopted(piped: Path) -> None:
+    project = load_project(piped)
+    with pytest.raises(AdoptError, match="failed step"):
+        adopt_manifest(project, "fit-alpha", {"manifest_version": 1, "exit_code": 3})
+
+
+def test_an_unknown_manifest_version_is_refused(piped: Path) -> None:
+    project = load_project(piped)
+    with pytest.raises(AdoptError, match="manifest_version"):
+        adopt_manifest(project, "fit-alpha", {"manifest_version": 99, "exit_code": 0})
+
+
+# --------------------------------------------------------- the backend
+
+
+def test_backend_reports_done_and_serves_manifests_for_skipped_steps(piped: Path) -> None:
+    backend = RunnerBackend(piped)
+    assert backend.poll(backend.submit()) == DONE
+    handle = backend.submit()  # everything cached now
+    assert backend.poll(handle) == DONE
+    assert set(backend.manifests(handle)) == {"fit-alpha", "fit-beta"}
+
+
+def test_backend_reports_failed(piped: Path) -> None:
+    write(piped, "scripts/fit_alpha.py", "raise SystemExit(1)\n")
+    backend = RunnerBackend(piped)
+    assert backend.poll(backend.submit()) == FAILED
+
+
+def test_scoping_a_submission_still_runs_upstream(piped: Path) -> None:
+    backend = RunnerBackend(piped)
+    handle = backend.submit(["fit-beta"])
+    assert set(backend.manifests(handle)) == {"fit-alpha", "fit-beta"}
+
+
+def test_manifests_are_written_to_the_runner_store(piped: Path) -> None:
+    RunnerBackend(piped).submit()
+    stored = piped / ".specthis/runner/manifests/fit-alpha.json"
+    assert json.loads(stored.read_text())["step"] == "fit-alpha"

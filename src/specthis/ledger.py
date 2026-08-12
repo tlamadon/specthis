@@ -58,6 +58,12 @@ class Run:
     ran: str  # ISO8601 UTC
     executor: str
     inputs: dict[str, str] = field(default_factory=dict)
+    #: Per-output digests: path -> sha. ``output_sha`` composes these,
+    #: and ``output`` is their comma-joined key list — both kept for
+    #: legacy rows and for a readable single-output ledger. Only this
+    #: table can say *which* output of a multi-output entry moved.
+    #: Empty on rows written before it existed.
+    outputs: dict[str, str] = field(default_factory=dict)
     #: Wall-clock seconds the run command took. Claim metadata only:
     #: it enters no signature and moves no digest. ``None`` (omitted
     #: from the TOML row) for rows that predate the field or were
