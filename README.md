@@ -1,21 +1,66 @@
 # specthis
 
-**A notary for a research pipeline.** You describe *what the pipeline
-should be* in a clean set of specs; specthis keeps two git-versioned
-ledgers of claims about the project — one **tree of judgments** (a mind
-said the code satisfies the contract) and one **tree of runs** (this
-artifact came from that code on these inputs) — and answers, cheaply
-and at any moment: which claims are still true, and what kind of repair
-does each broken one need — a mind (re-judge), a machine (re-run), or
-patience (upstream will heal it). The two trees break and heal
-independently: one entry can wait on a mind and a machine at once, and
-neither blocks the other.
+**A notary for a research pipeline.** It records who claimed what about
+your project, and tells you which of those claims the content still
+supports.
+
+---
+
+## Your project is a bakery
+
+The **final goods** are cakes and pastries: your tables, your figures,
+the paper that interprets them. The **raw materials** are flour and eggs
+— data you did not produce, cannot certify, and can only source.
+
+Between them is everything you actually build: a batter, a choux paste,
+a crème pâtissière. Intermediates, each with a name, each held to a
+standard, each feeding several things downstream.
+
+You write three things, and keeping them separate is the whole idea:
+
+| | |
+|---|---|
+| the **formula** — what each thing must be | a **spec**, in prose |
+| the **method** — how it is actually made | your **code** |
+| the **production sheet** — which method, which ingredients, which tray | a **pipeline** |
+
+And two things get signed, by different people, at different moments:
+
+- **The formula is approved once.** Someone makes it, cuts it open,
+  judges it. That approval covers the next four hundred batches — and is
+  void the instant the method changes or you rewrite the standard.
+- **Every batch gets a label.** *Crème pât — 12 Aug — milk lot 88.* One
+  per making. It survives nothing.
+
+specthis keeps both pieces of paper, in git, and answers at any moment:
+**which claims still hold, and what does each broken one need** — a mind
+(re-judge), a machine (re-run), or patience (upstream will heal it).
+The two never block each other: a batch can be remade while someone is
+still deciding whether the formula was right.
 
 **specthis makes nothing.** It never forks a process. Execution belongs
-to a compute manager — the bundled runner, or one your project supplies
-— and specthis compiles the plan, reads what came back, and
-countersigns it. New here? [`docs/analogy.md`](docs/analogy.md) explains
-the whole model as a bakery.
+to a compute manager — the bundled runner, or one your project supplies.
+specthis hands over the production sheet, reads what came back, and
+countersigns it.
+
+[`docs/analogy.md`](docs/analogy.md) tells this properly, in ten
+minutes, including the failures and what each one needs.
+
+## Start here
+
+`pip install specthis` (or see [Install](#install) for uv), then read one
+of the two worked examples — small enough to read in one sitting, and
+executed by the test suite so they cannot drift from the tool:
+
+- **[`examples/wages`](examples/wages)** — four workers, two years. The
+  whole loop: record, build, vouch. Then it breaks the project twice to
+  show the point — a prose edit moves one queue, a code edit moves both.
+- **[`examples/wage-grid`](examples/wage-grid)** — the same project after
+  the second country arrives. One formula, many batches: templates, and
+  what a single vouch over a family actually claims.
+
+Then [`docs/specification.md`](docs/specification.md) for what is
+precisely true.
 
 > Status: **implemented and tested**. See [Roadmap](#roadmap) for what is
 > deliberately not built.
