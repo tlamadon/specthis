@@ -37,3 +37,26 @@ def test_package_sha_tracks_glob_contents(tmp_path: Path) -> None:
     assert hashing.package_sha(tmp_path, ["pkg/**/*.py"]) != before
     (tmp_path / "pkg/a.py").write_text("X = 1")
     assert hashing.package_sha(tmp_path, ["pkg/**/*.py"]) == before
+
+
+def test_the_reported_version_matches_pyproject() -> None:
+    """`specthis --version` reported 0.0.32 for three releases because the
+    number lived in two places. It now lives in one; this keeps it there."""
+    import re
+    import sys
+    from pathlib import Path
+
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:  # pragma: no cover
+        import tomli as tomllib
+
+    from specthis import __version__
+
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    declared = tomllib.loads(pyproject.read_text())["project"]["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", declared), declared
+    assert __version__ == declared, (
+        f"installed metadata says {__version__}, pyproject says {declared} — "
+        "reinstall the package (`uv pip install -e .`)"
+    )
