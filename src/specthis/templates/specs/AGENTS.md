@@ -50,7 +50,8 @@ entry's own block — instead of only detecting it, plus wall-clock
 it is claim metadata that enters no digest) and `specs/runs.toml` (the artefact came from this
 code on these exact inputs, as a composed signature over scripts +
 package + upstream artefact digests + workflow config — written only
-by `specthis run`; the row also records wall-clock `duration_seconds`,
+by `specthis build` / `adopt` / `record`; the row also records
+wall-clock `duration_seconds`,
 which is claim metadata: it enters no signature and moves no digest). `specs/bindings.toml` maps entries to their
 scripts and run commands; its `[preview]` table is dashboard-only
 vocabulary (how to render an output type at view time) — a preview
@@ -73,10 +74,10 @@ An entry with a current claim may additionally be marked **bytes
 remote** (in `check` output, `status`, and the dashboard): its claim
 stands but the output
 bytes are not on this disk — they live in the byte cache, certified
-there by `specthis manifest` on the machine that ran the entry. This
+there by adopting the manifest the compute manager reported. This
 is a byte-locality fact, NOT a break: never re-run an entry to "fix"
 it, never treat it as stale, and never flag it in an audit.
-`specthis cache fetch <entry>` materializes the bytes (verified
+asking the compute manager for them materializes the bytes (verified
 against the claim) if a local step actually needs them.
 
 ## Spec anatomy: contract + promised output
@@ -131,7 +132,7 @@ Start mechanical, end judgmental:
    Never re-derive status yourself; never infer it from mtimes.
 2. The check output is already split by repair kind:
    - the **machine queue** (stale / never-run) — compute. Report it;
-     `specthis run --stale` (or the user) clears it, including
+     `specthis build` (or the user) clears it, including
      unvouched entries (certification does not gate compute). Nothing
      to judge. (An entry that is *current (bytes remote)* is NOT
      queued and needs no repair — absent bytes are not staleness.)
@@ -166,7 +167,7 @@ After (or as part of) an audit:
   machine queue clears in parallel — reruns are mechanical and do not
   wait on judgment (only a *rejected* definition blocks its rerun).
 - The **machine queue** (stale / never-run), in dependency order, is
-  one `specthis run --stale` away (`-p 4` rebuilds independent
+  one `specthis build` away (the compute manager rebuilds independent
   branches concurrently; dependency order still holds).
 - Then **unimplemented** entries whose contract is a small variant of
   a ready one — the natural next authoring step.
