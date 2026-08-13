@@ -16,7 +16,6 @@ def test_project_parses(root: Path) -> None:
     assert alpha.outputs == ["results/alpha/fit.json"]
     assert alpha.tier == "quick"
     assert alpha.binding.scripts == ["scripts/fit_alpha.py"]
-    assert alpha.binding.workflows == ["hut.fit-alpha.json"]
     assert alpha.spec.references == ["models.md"]
 
     fig = project.entries["fig-beta"]
@@ -67,7 +66,7 @@ def test_default_binding_convention(root: Path) -> None:
     project = load_project(root)
     b = project.entries["fit-alpha"].binding
     assert b.scripts == ["scripts/fit-alpha.py"]
-    assert b.run == "python scripts/fit-alpha.py"
+
     assert project.package_globs == []
 
 

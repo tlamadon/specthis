@@ -67,7 +67,7 @@ Absent bytes are none of these. An entry whose claim stands but whose
 declared outputs are not on this disk reads **current** marked *bytes
 remote* — a byte-locality fact, not a break. Nothing recomputes it,
 downstream signatures still compose (they read the recorded digest),
-and `specthis cache fetch <entry>` materializes the bytes — verified
+and asking the compute manager for them materializes the bytes — verified
 against the claim — if and when they are actually needed.
 
 Re-judge, re-run, or look upstream — and the tool never confuses the
@@ -103,23 +103,19 @@ or just patience while upstream heals.
 | File | Holds | Written by |
 |---|---|---|
 | `specs/vouches.toml` | attested claims: `(spec_sha, code_sha, verdict, attester, when, note)` per entry, plus the decomposed digests (`spec_block_sha`, `code_manifest`) so an expired vouch can say *what* moved, and wall-clock `duration_seconds` when vouched with `--took` | `specthis vouch` — only |
-| `specs/runs.toml` | derived claims: composed input signature, output digest, executor, wall-clock `duration_seconds`, and the full `[inputs]` table per entry | `specthis run` — only |
-| `specs/bindings.toml` | entry → scripts, run command, scripthut workflow files, executor; plus `[package]` globs for the shared library and `[preview]` recipes for the dashboard | you, by hand |
+| `specs/runs.toml` | derived claims: input table, per-output digests, executor, wall-clock `duration_seconds` per entry | `specthis build` / `adopt` / `record` — only |
+| `specs/bindings.toml` | the map: `scripts` (which deps are judged code) and `produces` (which file is which logical product); plus `[package]` globs and `[preview]` recipes | you, by hand |
+| `pipeline.toml` | the production sheet: one step per entry — command, deps, outs | you, by hand |
 
-`bindings.toml` is vocabulary, not a claim: it says *where* an entry's
-code lives and *how* to run it. Pointing an entry at different code
-moves its code manifest, which expires its vouch automatically. If an
-entry has no binding, the convention `scripts/<entry>.py` (run with
-`python`) is assumed:
+`bindings.toml` is vocabulary, not a claim, and it is deliberately
+small: everything about *how* a step runs lives in `pipeline.toml`.
+Pointing an entry at different code moves its code manifest, which
+expires its vouch automatically. If an entry has no binding, the
+convention `scripts/<entry>.py` is assumed:
 
 ```toml
 [package]
 globs = ["src/mypkg/**/*.py"]     # the shared library every code manifest covers
-
-[cache]
-url = "s3://my-bucket/myproject"  # optional remote byte cache (or file:///path);
-                                  #   `specthis run --stale --fetch` pulls verified
-                                  #   bytes instead of recomputing
 
 [entries.fit-alpha]
 scripts   = ["scripts/fit_alpha.py"]
@@ -262,6 +258,61 @@ consumer goes stale — put the shared part in a `library` module and
 let the exporters import it. The `references:` edge is deliberately
 ledger-invisible either way.
 
+## Parameter sets: saying it once, in words
+
+When the same entry runs over several values — countries, samples,
+periods — the *set* is a claim about the research, not an implementation
+detail. A referee asks "why these two countries?", so it belongs in the
+contract, stated in the entry that **uses** it.
+
+Say it in prose, in the apex entry — the concrete deliverable that
+combines the results:
+
+```markdown
+### wage-comparison
+
+Wage moments for each country in the comparison set, laid out with
+countries in columns and moments in rows.
+
+**Comparison set:** chile, argentina. Both have matched
+employer-employee panels over the same window; Peru is excluded because
+its panel starts in 2016.
+
+- consumes: country-moments
+- produces: comparison-table
+```
+
+Three things make this work, and none of them require specthis to read
+a sentence:
+
+- **It is in the contract.** The set sits inside the entry's block, so
+  it is hashed. Adding a country expires *this* entry's vouch — which is
+  right, because comparing three countries instead of two is a change a
+  mind should re-judge.
+- **The template stays general.** `clean-wages` declares `- props:
+  country` and no values: it genuinely works for any conforming extract.
+  The choice of values is signed where it is *used*, not where the
+  capability is defined.
+- **The exclusion is stated.** "Peru is excluded because its panel starts
+  in 2016" is the sentence a reader needs and no structured field can
+  hold. This is why the set lives in prose.
+
+**Be exhaustive and unambiguous.** An implementer expands this into one
+pipeline step per member, so it must be actionable without guessing.
+List the values; do not write "the usual suspects" or "all available
+countries".
+
+For a real grid — samples × periods, with exclusions — name a committed
+file instead and let the prose explain it:
+
+```markdown
+**Design grid:** `design/gaps-matrix.toml` (samples × periods, minus
+stayers-late — see the identification note below).
+```
+
+The file is committed and hashed like any input, so editing it moves
+digests; the prose says what it means.
+
 ## What a specification looks like
 
 A spec is **an authoring contract on code**. Every compute / report
@@ -304,11 +355,11 @@ specthis check                 # the two queues (mind: definitions, machine: rea
                                #   while either queue is non-empty
 specthis status [entry]        # every entry's status + both axes / one entry in detail,
                                #   including WHICH input moved
-specthis run <entry>           # resolve + record upstream digests, dispatch
-                               #   (local or scripthut per bindings), write runs.toml
-specthis run --stale           # rebuild every machine-repairable entry in dependency order
-                               #   (-p 4: up to 4 independent entries at once; an entry
-                               #   still waits for all its upstreams' recorded claims)
+specthis build [entries…]      # hand the pipeline to a compute manager and adopt
+                               #   what comes back; --force rebuilds an artefact
+                               #   edited on disk
+specthis record <entry>        # pin bytes no pipeline produced (a download, a one-off)
+specthis lint                  # every problem at once: spec ↔ map ↔ pipeline
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
                                # attest — someone other than the author, always named
 specthis serve                 # live dashboard (a regenerated view; writes nothing,
@@ -318,29 +369,20 @@ specthis dag [--out FILE]      # the spec-level DAG: a layered SVG figure
                                #   --format json (nodes + layouts + edges) — same species of view
 ```
 
-Two more verbs cover **remote compute whose bytes should stay put**
-(HPC results too big to bring home). Requires a configured `[cache]`:
+**specthis executes nothing.** `build` hands the whole pipeline to a
+compute manager — the bundled runner by default, or one the project
+supplies via `[backend] class = "mypkg.adapters:MyBackend"` — and
+countersigns the manifests that come back. A manager that ran elsewhere
+can hand you a manifest directly:
 
 ```bash
-specthis manifest <entry>      # ON THE MACHINE THAT RAN IT: certify the bytes —
-                               #   upload tarball + manifest under the composed signature
-specthis run <entry> --adopt   # ON THE LEDGER MACHINE: record the runs.toml row
-                               #   from that manifest; no bytes move
+specthis adopt <entry> path/to/manifest.json
 ```
 
-Adoption is self-verifying: the ledger machine composes the expected
-signature from its own tree and looks the manifest up at exactly that
-key, so a drifted tree (unpushed edits, wrong branch) finds nothing.
-The adopted entry reads *ready (bytes remote)*; consumers fetch on
-demand. For chains run remotely in one workflow, `manifest` each
-entry in dependency order there, then `--adopt` in the same order
-here.
-
-`check` and `status` never write. `run` never touches `vouches.toml`.
-`vouch` never touches `runs.toml`. A rejection binds at its exact
-(spec, code) digest pair: `vouch` refuses an `ok` over a standing
-rejection until something changes. No command consults mtime, ever —
-a fresh clone on another machine gives identical answers.
+Adoption verifies every digest the manifest asserts against the bytes on
+disk and refuses the whole thing if any disagrees. That proves
+transcription, not derivation: it catches a garbled manifest, and it does
+not make the manager trustworthy.
 
 ## How to add a new spec file
 
@@ -351,6 +393,6 @@ a fresh clone on another machine gives identical answers.
 3. Bind the entry in `specs/bindings.toml` (or follow the
    `scripts/<entry>.py` convention).
 4. Author the code, have someone who didn't author it run
-   `specthis vouch <entry> --as <name>`, then `specthis run <entry>`.
+   `specthis vouch <entry> --as <name>`, then `specthis build <entry>`.
    From then on `specthis check` tells everyone whether the claim
    still holds.

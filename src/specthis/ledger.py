@@ -44,6 +44,11 @@ class Vouch:
     #: Empty on rows written before these fields existed.
     spec_block_sha: str = ""
     code_manifest: dict[str, str] = field(default_factory=dict)
+    #: The pipeline step's semantic digest at judgment time (spec §5.6):
+    #: command, deps and outs. Realizing a spec means writing code *and*
+    #: wiring it, so a judge claims about the step too. Empty when the
+    #: entry has no step, or on rows written before this field existed.
+    step_sha: str = ""
     #: Wall-clock seconds the judgment took (``vouch --took``). Claim
     #: metadata like a run's duration: enters no digest, omitted from
     #: the TOML row when unknown.
@@ -58,6 +63,12 @@ class Run:
     ran: str  # ISO8601 UTC
     executor: str
     inputs: dict[str, str] = field(default_factory=dict)
+    #: Per-output digests: path -> sha. ``output_sha`` composes these,
+    #: and ``output`` is their comma-joined key list — both kept for
+    #: legacy rows and for a readable single-output ledger. Only this
+    #: table can say *which* output of a multi-output entry moved.
+    #: Empty on rows written before it existed.
+    outputs: dict[str, str] = field(default_factory=dict)
     #: Wall-clock seconds the run command took. Claim metadata only:
     #: it enters no signature and moves no digest. ``None`` (omitted
     #: from the TOML row) for rows that predate the field or were
@@ -122,11 +133,26 @@ def read_runs(specs_dir: Path, _shared_lock: bool = True) -> dict[str, Run]:
     return {name: Run(**row) for name, row in raw.items()}
 
 
+def same_subject(a: Vouch, b: Vouch) -> bool:
+    """Do two vouches pin the same judged subject?
+
+    The subject is the entry's own block plus its code — never the whole
+    spec file, so a sibling entry's edit neither expires a vouch
+    (``check.spec_moved``) nor lifts a standing rejection. Rows written
+    before ``spec_block_sha`` existed fall back to the file digest.
+    """
+    if a.code_sha != b.code_sha:
+        return False
+    if a.spec_block_sha and b.spec_block_sha:
+        return a.spec_block_sha == b.spec_block_sha
+    return a.spec_sha == b.spec_sha
+
+
 def record_vouch(specs_dir: Path, entry: str, vouch: Vouch) -> None:
     """Write one attested claim, enforcing the rejection rule.
 
-    A rejection binds at its exact ``(spec_sha, code_sha)`` pair: an
-    ``ok`` verdict at a pair carrying a standing rejection is refused —
+    A rejection binds at its exact subject: an
+    ``ok`` verdict at a subject carrying a standing rejection is refused —
     something (spec, code, or the rejector's mind, expressed as a new
     rejection-lifting vouch by someone else at a *moved* pair) must
     change first. Digest movement expires rejections exactly as it
@@ -143,7 +169,7 @@ def record_vouch(specs_dir: Path, entry: str, vouch: Vouch) -> None:
             vouch.verdict == "ok"
             and prior is not None
             and prior.verdict == "rejected"
-            and (prior.spec_sha, prior.code_sha) == (vouch.spec_sha, vouch.code_sha)
+            and same_subject(prior, vouch)
         ):
             raise LedgerError(
                 f"`{entry}` carries a standing rejection by {prior.attester} at this exact "

@@ -9,8 +9,8 @@ You are the spec-implementer. Your job is operation 3 ("Implement a
 spec") from `specs/AGENTS.md`.
 
 Your deliverable is: code on disk that satisfies the contract, a
-binding in `specs/bindings.toml`, a passed smoke-test — and a
-**proposed** vouch. You author the change, therefore the one rule in
+binding in `specs/bindings.toml`, **a step in `pipeline.toml`**, a
+passed smoke-test — and a **proposed** vouch. You author the change, therefore the one rule in
 `specs/AGENTS.md` applies to you with full force: **you never run
 `specthis vouch`**. The pen belongs to a non-author.
 
@@ -53,6 +53,64 @@ binding in `specs/bindings.toml`, a passed smoke-test — and a
 8. Stage nothing; commit nothing. Leave the changes on disk and
    report.
 
+## Writing the pipeline step
+
+specthis executes nothing. Code alone does not make an entry buildable —
+you must also declare **how it runs**, as a step in `pipeline.toml`:
+
+```toml
+[steps.<entry-name>]                 # the id MUST equal the entry name
+command = "python3 scripts/<entry>.py"
+deps    = ["scripts/<entry>.py",     # everything the command reads:
+           "config/<entry>.toml",    #   code, config,
+           "data/upstream.parquet"]  #   and each upstream's output path
+outs    = ["results/<entry>.json"]   # every path the entry declares
+```
+
+- **Edges are derived** from `deps`/`outs` — never add `after`.
+- `deps` must include **every** file the command reads. A file that
+  affects the output and is not listed is invisible to every claim.
+- `deps` must include the entry's own `scripts` from the binding, or an
+  edit would expire the vouch without staling the run. `specthis lint`
+  catches this; do not wait for it to.
+- `outs` must list exactly the paths the entry produces.
+- **Never** put parameters in the command. A flag is a number nobody can
+  attribute — put it in a config file and list that file in `deps`.
+- LIBRARY and SOURCE entries get **no step**. A source's bytes are pinned
+  with `specthis record`.
+
+## Expanding a parameter set
+
+When an entry declares `- props: <name>`, it is a **template**: one
+contract, one code binding, many instances. The values are not on the
+template — they are stated in the prose of the entry that *uses* it
+(see `specs/README.md`, "Parameter sets").
+
+Your job is the expansion, and it is mechanical:
+
+1. Read the apex entry's prose and find the stated set. If it is not
+   exhaustive and unambiguous — "the usual samples", "all available
+   countries" — **stop and ask the parent**. Never guess a set; a
+   guessed member becomes a claim nobody made.
+2. Work **backward** from the apex: each member it needs demands one
+   instance of each template upstream, recursively, until you reach
+   sources.
+3. Write one step per instance. Substitute the value into the paths so
+   each instance's output matches the template's pattern in
+   `specs/bindings.toml` — `data/{country}/wages.csv` needs a step
+   producing `data/chile/wages.csv`.
+4. Step **ids do not matter**: name them however reads best.
+   specthis identifies an instance from its output path, not its id.
+5. The code stays **concrete** — one script for all instances, taking
+   the value as an argument. Parameterized `scripts` in the binding is
+   an error: every instance runs the same code, which is what lets a
+   single vouch cover the template.
+6. Run `specthis lint`, then `specthis check`, and confirm the instance
+   list matches the stated set exactly.
+
+If the set changes later, regenerate the steps. It is a build product,
+not something to patch by hand.
+
 ## Report back to the parent
 
 - **Entry:** `<name>`
@@ -64,7 +122,7 @@ binding in `specs/bindings.toml`, a passed smoke-test — and a
   lines)
 - **Proposed next step:** on PASS — "a non-author should judge this:
   `specthis vouch <entry> --as <their-name>`, then run it with
-  `specthis run <entry>`". On FAIL — what broke.
+  `specthis build <entry>`". On FAIL — what broke.
 
 ## Hard rules
 
@@ -79,6 +137,10 @@ binding in `specs/bindings.toml`, a passed smoke-test — and a
 - Do NOT commit. Do NOT push.
 - Do NOT write a `Script:` or `Status:` field into a spec — the
   binding lives in `specs/bindings.toml`, the status is derived.
+- Do NOT invent a parameter set. If the apex prose is not exhaustive,
+  ask — a guessed member is a claim nobody made.
+- Do NOT put parameters in a step's command. Config goes in a file
+  listed among `deps`.
 - Do NOT invent new conventions. If something is ambiguous, return to
   the parent with a question rather than guessing.
 - Respect the project's hardware limits (documented in the project's

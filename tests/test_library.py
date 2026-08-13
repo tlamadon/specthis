@@ -149,7 +149,7 @@ def test_module_edit_flags_entry_and_stales_consumers_only(root: Path) -> None:
     s = statuses(root)
     assert s["estimator-core"] is Status.READY
     assert s["fit-beta"] is Status.STALE
-    assert "upstream:estimator-core" in check_project(load_project(root))["fit-beta"].moved
+    assert "~upstream:estimator-core" in check_project(load_project(root))["fit-beta"].moved
 
     fake_run(root, "fit-beta")
     fake_run(root, "fig-beta")
@@ -167,26 +167,6 @@ def test_shared_glue_still_detonates_everything(root: Path) -> None:
 
 
 # ------------------------------------------------------------------ cli
-
-
-def test_run_refuses_library_entries(root: Path) -> None:
-    add_library(root)
-    result = run_cli("run", "estimator-core", "--path", str(root))
-    assert result.exit_code != 0
-    assert "nothing to run" in result.output
-
-
-def test_run_stale_rebuilds_consumers_of_a_revouched_module(root: Path) -> None:
-    add_library(root)
-    ready_all(root)
-    write(root, "src/pkg/estimator.py", "def resample(x):\n    return list(x)\n")
-    vouch_ok(root, "estimator-core")
-    result = run_cli("run", "--stale", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    # fit-beta re-runs; its output is byte-identical (deterministic script),
-    # so fig-beta's signature still holds and it is NOT rebuilt.
-    assert "rebuilt 1" in result.output
-    assert set(statuses(root).values()) == {Status.READY}
 
 
 def test_migrate_skips_library_entries(root: Path) -> None:

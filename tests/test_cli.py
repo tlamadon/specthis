@@ -5,10 +5,12 @@ from click.testing import CliRunner
 
 from specthis.check import Status, check_project
 from specthis.cli import main
-from specthis.ledger import read_runs, read_vouches
+from specthis.ledger import read_vouches
 from specthis.parse import load_project
 
-from .conftest import PY, COMPUTE_ALPHA, FIT_ALPHA_PY, fake_run, make_ready, vouch_ok, write
+from .conftest import (
+    PY, BINDINGS, COMPUTE_ALPHA, make_ready, vouch_ok, write,
+)
 
 
 def run_cli(*args: str):
@@ -44,6 +46,12 @@ def test_check_summarizes_downstream(root: Path) -> None:
 
 
 def test_status_detail_names_the_moved_input(root: Path) -> None:
+    write(root, "pipeline.toml", f'''
+[steps.fit-alpha]
+command = '{PY} scripts/fit_alpha.py'
+deps    = ["scripts/fit_alpha.py", "hut.fit-alpha.json"]
+outs    = ["results/alpha/fit.json"]
+''')
     make_ready(root)
     write(root, "hut.fit-alpha.json", '{"backend": "pbs"}\n')
     result = run_cli("status", "fit-alpha", "--path", str(root))
@@ -99,29 +107,6 @@ def test_vouch_no_upstream_note_when_chain_ready(root: Path) -> None:
     assert "upstream" not in result.output
 
 
-def test_run_records_derived_claim_only(root: Path) -> None:
-    vouch_before = None  # no vouches file yet
-    result = run_cli("run", "fit-alpha", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    assert (root / "results/alpha/fit.json").exists()
-    assert (root / "specs/runs.toml").exists()
-    assert not (root / "specs/vouches.toml").exists(), "run must never write vouches"
-    assert vouch_before is None
-
-
-def test_run_refuses_when_upstream_never_ran(root: Path) -> None:
-    result = run_cli("run", "fit-beta", "--path", str(root))
-    assert result.exit_code != 0
-    assert "fit-alpha" in result.output
-
-
-def test_run_failure_records_nothing(root: Path) -> None:
-    (root / "scripts/fit_alpha.py").write_text("raise SystemExit(3)\n")
-    result = run_cli("run", "fit-alpha", "--path", str(root))
-    assert result.exit_code != 0
-    assert not (root / "specs/runs.toml").exists()
-
-
 def test_vouch_took_records_duration(root: Path) -> None:
     result = run_cli(
         "vouch", "fit-alpha", "--as", "reviewer", "--took", "212.4", "--path", str(root)
@@ -136,7 +121,7 @@ def test_check_attributes_expiry_to_package_blob(root: Path) -> None:
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
     write(root, "src/pkg/helpers.py", "X = 2\n")
     result = run_cli("check", "--path", str(root))
-    assert "moved since vouch: code: package blob moved" in result.output
+    assert "moved since vouch: code: ~package blob" in result.output
     assert "fit_alpha.py moved" not in result.output  # the script is innocent
 
 
@@ -144,32 +129,73 @@ def test_check_attributes_expiry_to_the_script(root: Path) -> None:
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
     (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
     result = run_cli("check", "--path", str(root))
-    assert "moved since vouch: code: scripts/fit_alpha.py moved" in result.output
+    assert "moved since vouch: code: ~scripts/fit_alpha.py" in result.output
     assert "package blob" not in result.output  # the blob is innocent
 
 
-def test_status_attributes_spec_movement_relative_to_block(root: Path) -> None:
+def test_check_attributes_a_file_added_to_the_binding(root: Path) -> None:
+    """A composed digest can only say "code moved"; the table says which
+    file entered the entry's scope, and that it was never judged."""
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
-    # prose outside the entry's ### block moves: file-level expiry, but
-    # the diagnosis says the entry's own contract text is untouched
+    write(root, "scripts/helpers.py", "def winsor(x, p): return x\n")
+    write(root, "specs/bindings.toml", BINDINGS.replace(
+        '[entries.fit-alpha]\nscripts = ["scripts/fit_alpha.py"]',
+        '[entries.fit-alpha]\nscripts = ["scripts/fit_alpha.py", "scripts/helpers.py"]',
+    ))
+    result = run_cli("check", "--path", str(root))
+    assert "moved since vouch: code: +scripts/helpers.py" in result.output
+    assert "~scripts/fit_alpha.py" not in result.output  # untouched, and says so
+
+
+def test_check_attributes_a_file_removed_from_the_binding(root: Path) -> None:
+    run_cli("vouch", "fit-beta", "--as", "reviewer", "--path", str(root))
+    write(root, "specs/bindings.toml", BINDINGS.replace(
+        '[entries.fit-beta]\nscripts = ["scripts/fit_beta.py"]',
+        '[entries.fit-beta]\nscripts = []',
+    ))
+    result = run_cli("check", "--path", str(root))
+    assert "-scripts/fit_beta.py" in result.output or "unimplemented" in result.output
+
+
+def test_spec_prose_outside_the_block_does_not_expire_the_vouch(root: Path) -> None:
+    """A vouch's subject is the entry's own block, never the whole file."""
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
     outside = COMPUTE_ALPHA.replace(
         "Fit the alpha model per models.md.",
         "Fit the alpha model per models.md. Now with more prose.",
     )
     write(root, "specs/compute-alpha.md", outside)
     result = run_cli("status", "fit-alpha", "--path", str(root))
-    assert "moved since last vouch:" in result.output
-    assert "compute-alpha.md moved outside this entry's block" in result.output
+    assert "certified" in result.output
+    assert "moved since last vouch:" not in result.output
 
-    # re-vouch at the new digests, then edit inside the block
+
+def test_status_attributes_spec_movement_inside_the_block(root: Path) -> None:
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
-    inside = outside.replace(
+    inside = COMPUTE_ALPHA.replace(
         "The fit must converge and record its loss.",
         "The fit must converge quickly and record its loss.",
     )
     write(root, "specs/compute-alpha.md", inside)
     result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "moved since last vouch:" in result.output
     assert "this entry's block in compute-alpha.md moved" in result.output
+
+
+def test_sibling_entry_edit_does_not_expire_this_entrys_vouch(root: Path) -> None:
+    """The defect this replaced: editing entry B expired entry A."""
+    two = COMPUTE_ALPHA + (
+        "\n### fit-sibling\n\nA second entry sharing the file.\n\n"
+        "Output: `results/sibling/fit.json`\n"
+    )
+    write(root, "specs/compute-alpha.md", two)
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    write(root, "specs/compute-alpha.md", two.replace(
+        "A second entry sharing the file.", "Rewritten sibling prose."
+    ))
+    result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "certified" in result.output
+    assert "moved since last vouch:" not in result.output
 
 
 def test_legacy_vouch_without_manifest_still_attributes_coarsely(root: Path) -> None:
@@ -177,185 +203,6 @@ def test_legacy_vouch_without_manifest_still_attributes_coarsely(root: Path) -> 
     (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
     result = run_cli("check", "--path", str(root))
     assert "moved since vouch: code moved" in result.output  # coarse, not wrong
-
-
-def test_run_records_duration_and_reports_time(root: Path) -> None:
-    result = run_cli("run", "fit-alpha", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    assert "recorded run of `fit-alpha` in " in result.output
-    row = read_runs(root / "specs")["fit-alpha"]
-    assert row.duration_seconds is not None and row.duration_seconds >= 0
-    result = run_cli("status", "fit-alpha", "--path", str(root))
-    assert "(took " in result.output
-
-
-def test_run_reports_output_reproduced_vs_moved(root: Path) -> None:
-    make_ready(root)
-    # deterministic script: a re-run reproduces identical bytes,
-    # which cuts the downstream cascade — and says so
-    result = run_cli("run", "fit-alpha", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    assert "output unchanged — downstream claims unaffected" in result.output
-
-    # change what the script writes: the output moves, consumers named
-    write(root, "scripts/fit_alpha.py", FIT_ALPHA_PY.replace('"loss": 1.0', '"loss": 2.0'))
-    result = run_cli("run", "fit-alpha", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    assert "output moved" in result.output
-    assert "fit-beta" in result.output  # the now-stale consumer is named
-
-
-def test_run_stale_narrates_plan_and_progress(root: Path) -> None:
-    for entry in ("fit-alpha", "fit-beta", "fig-beta"):
-        vouch_ok(root, entry)  # all vouched, none run: everything STALE
-    result = run_cli("run", "--stale", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    assert "3 entries in the machine queue: fit-alpha -> fit-beta -> fig-beta" in result.output
-    assert "[1/3]" in result.output
-    assert "[3/3]" in result.output
-    assert "rebuilt 3 entries in " in result.output
-
-
-def test_run_stale_rebuilds_in_topo_order_and_skips_minds(root: Path) -> None:
-    for entry in ("fit-alpha", "fit-beta", "fig-beta"):
-        vouch_ok(root, entry)  # all vouched, none run: everything STALE
-    result = run_cli("run", "--stale", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    assert "rebuilt 3" in result.output
-    reports = check_project(load_project(root))
-    assert {r.status for r in reports.values()} == {Status.READY}
-
-    # upstream re-run cascades: touch alpha's output and re-record it
-    write(root, "results/alpha/fit.json", '{"loss": 7.0}')
-    fake_run(root, "fit-alpha", execute=False)
-    result = run_cli("run", "--stale", "--path", str(root))
-    assert result.exit_code == 0
-    assert "rebuilt 2" in result.output  # beta then fig-beta, topo order
-
-    # mechanical policy: unvouched is no bar to compute — the machine
-    # rebuilds while a mind audits the definition in parallel
-    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
-    result = run_cli("run", "--stale", "--path", str(root))
-    assert result.exit_code == 0
-    assert "rebuilt 1" in result.output
-    assert "skipped" not in result.output
-
-
-def test_run_stale_skips_rejected_definitions(root: Path) -> None:
-    """The one certification state that gates compute: a machine must
-    not realize a definition a mind refused."""
-    from specthis.check import code_sha
-    from specthis.ledger import Vouch, record_vouch
-
-    make_ready(root)
-    project = load_project(root)
-    e = project.entries["fit-alpha"]
-    c = code_sha(project, e)
-    assert c is not None
-    record_vouch(
-        project.specs_dir,
-        "fit-alpha",
-        Vouch(
-            spec_sha=e.spec.spec_sha,
-            code_sha=c,
-            verdict="rejected",
-            attester="critic",
-            vouched="2026-01-02T00:00:00+00:00",
-        ),
-    )
-    write(root, "hut.fit-alpha.json", '{"backend": "pbs"}\n')  # stale, rejection stands
-    result = run_cli("run", "--stale", "--path", str(root))
-    assert result.exit_code == 0
-    assert "rebuilt 0" in result.output
-    assert "skipped fit-alpha: rejected (needs a mind, not a machine)" in result.output
-
-
-HANDSHAKE_PY = """\
-import pathlib, sys, time
-me, other = sys.argv[1], sys.argv[2]
-pathlib.Path("results").mkdir(exist_ok=True)
-pathlib.Path(f"results/{me}.started").write_text("x")
-deadline = time.time() + 30
-while not pathlib.Path(f"results/{other}.started").exists():
-    if time.time() > deadline:
-        raise SystemExit(f"never saw {other} start — the queue ran serially")
-    time.sleep(0.05)
-pathlib.Path(f"results/{me}.json").write_text("{}")
-"""
-
-
-def add_handshake_pair(root: Path) -> None:
-    """Two independent quick entries whose scripts each wait to see the
-    other one start: both finish only if the scheduler truly overlaps them."""
-    for name, other in (("left", "right"), ("right", "left")):
-        write(
-            root,
-            f"specs/compute-{name}.md",
-            f"""\
----
-name: compute-{name}
-kind: compute
-tier: quick
----
-
-# {name}
-
-## Entry
-
-### fit-{name}
-
-Handshake with fit-{other}.
-
-Output: `results/{name}.json`
-""",
-        )
-        with open(root / "specs/bindings.toml", "a", encoding="utf-8") as f:
-            f.write(
-                f'\n[entries.fit-{name}]\n'
-                f'scripts = ["scripts/handshake.py"]\n'
-                f"run = '{PY} scripts/handshake.py {name} {other}'\n"
-            )
-    write(root, "scripts/handshake.py", HANDSHAKE_PY)
-
-
-def test_run_stale_parallel_overlaps_independent_entries(root: Path) -> None:
-    make_ready(root)  # the original chain is READY: only the pair queues
-    add_handshake_pair(root)
-    vouch_ok(root, "fit-left")
-    vouch_ok(root, "fit-right")
-    result = run_cli("run", "--stale", "-p", "2", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    assert "(up to 2 in parallel)" in result.output
-    assert "rebuilt 2 entries" in result.output
-    assert (root / "results/left.json").exists()
-    assert (root / "results/right.json").exists()
-
-
-def test_run_stale_parallel_respects_chain_order(root: Path) -> None:
-    for entry in ("fit-alpha", "fit-beta", "fig-beta"):
-        vouch_ok(root, entry)  # a strict chain: workers must wait on upstream claims
-    result = run_cli("run", "--stale", "-p", "4", "--path", str(root))
-    assert result.exit_code == 0, result.output
-    assert "rebuilt 3 entries" in result.output
-    reports = check_project(load_project(root))
-    assert {r.status for r in reports.values()} == {Status.READY}
-
-
-def test_run_parallel_requires_stale(root: Path) -> None:
-    result = run_cli("run", "fit-alpha", "-p", "2", "--path", str(root))
-    assert result.exit_code != 0
-    assert "--stale" in result.output
-
-
-def test_run_stale_parallel_failure_schedules_nothing_new(root: Path) -> None:
-    (root / "scripts/fit_alpha.py").write_text("raise SystemExit(3)\n")
-    for entry in ("fit-alpha", "fit-beta", "fig-beta"):
-        vouch_ok(root, entry)  # vouched at the failing digests: all STALE
-    result = run_cli("run", "--stale", "-p", "4", "--path", str(root))
-    assert result.exit_code != 0
-    assert "exit 3" in result.output
-    assert "1 entry failed" in result.output
-    assert not (root / "specs/runs.toml").exists(), "failed runs record nothing"
 
 
 def test_init_scaffold_passes_check(tmp_path: Path) -> None:
@@ -395,3 +242,26 @@ def test_migrate_dry_run_then_write(root: Path) -> None:
     # refuses to clobber without --force
     result = run_cli("migrate", "--write", "--path", str(root))
     assert "runs.toml row exists" in result.output
+
+
+def test_status_leads_with_two_coordinates_not_one_word(root: Path) -> None:
+    """§11: a 2D state projected to 1D cannot say an entry is unvouched
+    *and* stale, which is the common case while both queues drain."""
+    make_ready(root)
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    out = run_cli("status", "fit-alpha", "--path", str(root)).output
+    assert "state:" in out and "unvouched · stale" in out
+    assert "audit needed" not in out, "the fused word is retired from surfaces"
+
+
+def test_status_list_shows_both_axes(root: Path) -> None:
+    make_ready(root)
+    out = run_cli("status", "--path", str(root)).output
+    assert "certified · current" in out
+
+
+def test_downstream_says_which_tree_it_waits_on(root: Path) -> None:
+    make_ready(root)
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    out = run_cli("status", "fit-beta", "--path", str(root)).output
+    assert "waiting on minds and machines" in out

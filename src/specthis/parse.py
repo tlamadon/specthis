@@ -42,10 +42,11 @@ else:  # pragma: no cover
     import tomli as tomllib
 
 from .hashing import sha256_text
+from .pipeline import PipelineError, Step, load_pipeline
 from .preview import CONTENT_TYPES
 
-KINDS = {"meta", "definitions", "templates", "library", "compute", "report"}
-ENTRY_KINDS = {"library", "compute", "report"}
+KINDS = {"meta", "definitions", "templates", "library", "source", "compute", "report"}
+ENTRY_KINDS = {"library", "source", "compute", "report"}
 TIERS = {"intensive", "quick"}
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -75,10 +76,20 @@ class Problem:
 
 @dataclass
 class Binding:
+    """What the map says about an entry (spec §4).
+
+    Two facts no pipeline format expresses: which of a step's
+    dependencies is *judged code*, and which file **is** a logical
+    product. Everything about how a step runs — command, config,
+    resources, executor — lives in the pipeline.
+    """
+
     scripts: list[str]
-    run: str | None
-    workflows: list[str] = field(default_factory=list)
-    executor: str | None = None
+    #: ``produces = { wages-panel = "data/wages.parquet" }`` — which file
+    #: **is** a logical name (spec §4). The one translation between the
+    #: spec's vocabulary and the pipeline's; empty when an entry declares
+    #: physical paths directly.
+    produces: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -103,16 +114,35 @@ class Entry:
     spec: "SpecFile"
     outputs: list[str]
     binding: Binding
-    #: sha256 of this entry's ``###`` block text. Diagnostic only: the
-    #: claim unit stays the whole file (an entry may lean on prose
-    #: anywhere in it), so expiry is still judged at ``spec_sha`` — the
-    #: block digest exists so an expired vouch can say WHERE the file
-    #: moved (inside or outside this entry's own block).
+    #: sha256 of this entry's ``###`` block text — **what a vouch pins**
+    #: (``check.spec_moved``). The claim unit is the entry, not the
+    #: file: editing a sibling entry is somebody else's business.
     block_sha: str = ""
+    #: Per-entry edges and props, from the target format's field list
+    #: (§3). ``None`` means this entry uses the legacy file-level
+    #: frontmatter, and the properties below fall back to it.
+    own_consumes: list[str] | None = None
+    own_props: list[str] | None = None
+    #: The logical names this entry declares, when the map translated
+    #: them into ``outputs``. Empty when the spec named paths directly.
+    logical: list[str] = field(default_factory=list)
+    #: Type inferred from this entry's own field list (§2). ``None`` for
+    #: entries written in the legacy form, which fall back to the file's
+    #: ``kind:``. Per-entry because type *is* per entry — one file may
+    #: hold a source, two computes and a library.
+    own_kind: str | None = None
+
+    @property
+    def kind(self) -> str:
+        return self.own_kind or self.spec.kind
 
     @property
     def consumes(self) -> list[str]:
-        return self.spec.consumes
+        return self.spec.consumes if self.own_consumes is None else self.own_consumes
+
+    @property
+    def props(self) -> list[str]:
+        return self.spec.props if self.own_props is None else self.own_props
 
     @property
     def tier(self) -> str:
@@ -133,6 +163,10 @@ class SpecFile:
     skip: bool = False  # commented out: entries dormant, body not grammar-checked
     group: str | None = None  # sidebar group label; display-only, outside spec_sha
     priority: int = 0  # sidebar rank, higher first; display-only, outside spec_sha
+    #: `props:` — free variables making this file's entries templates
+    #: (spec §15). Semantic, so inside spec_sha: adding a prop changes
+    #: what the contract promises.
+    props: list[str] = field(default_factory=list)
     entries: list[Entry] = field(default_factory=list)
 
 
@@ -143,7 +177,6 @@ class Project:
     specs: list[SpecFile]
     entries: dict[str, Entry]
     package_globs: list[str]
-    cache_url: str | None = None
     #: scripts bound to library entries — excluded from the package blob,
     #: so a module edit flags only its own entry and its consumers.
     library_scripts: frozenset[str] = frozenset()
@@ -151,6 +184,14 @@ class Project:
     skipped_entries: dict[str, str] = field(default_factory=dict)
     #: output suffix (".tex") -> preview recipe, from [preview] in bindings.
     previews: dict[str, PreviewRecipe] = field(default_factory=dict)
+    #: ``[backend] class`` — a dotted path to the project's own adapter
+    #: (``mypkg.adapters:ScripthutBackend``). None means the bundled
+    #: runner. Config, not a claim: it enters no digest.
+    backend_class: str | None = None
+    #: step id -> Step, from ``pipeline.toml`` when the project has one.
+    #: Empty otherwise, and then no claim carries a ``step:`` row — a
+    #: project without a pipeline behaves exactly as before it existed.
+    steps: dict[str, "Step"] = field(default_factory=dict)
 
 
 def _field_paths(block: str, label: str) -> list[str]:
@@ -188,6 +229,75 @@ def _str_list(raw: object, where: str, what: str) -> list[str]:
     return raw
 
 
+#: A `- key: value` line in an entry block — the target format's field
+#: list (spec §3 rule 2). Values may be backticked; a bare `- code`
+#: takes no value.
+_ENTRY_FIELD = re.compile(r"^- +([a-z_]+)\s*(?::\s*(.*?))?\s*$", re.MULTILINE)
+ENTRY_FIELDS = {"consumes", "produces", "code", "props"}
+
+
+def entry_fields(block: str, where: str) -> dict[str, list[str]]:
+    """Parse an entry block's field list, or ``{}`` if it has none.
+
+    Absent means the entry uses the legacy ``Output:``/``Export
+    outputs:`` form; both are accepted so a project migrates at its own
+    pace. Unknown keys are errors either way — a typo must not silently
+    demote an entry to narrative.
+    """
+    fields: dict[str, list[str]] = {}
+    for m in _ENTRY_FIELD.finditer(block):
+        key, raw = m.group(1), (m.group(2) or "").strip()
+        if key not in ENTRY_FIELDS:
+            raise SpecError(
+                f"{where}: unknown entry field `{key}` — expected one of "
+                f"{', '.join(sorted(ENTRY_FIELDS))}"
+            )
+        values = [v.strip().strip("`") for v in raw.split(",") if v.strip()]
+        fields.setdefault(key, []).extend(values)
+    return fields
+
+
+def infer_kind(fields: dict[str, list[str]], outputs: list[str]) -> str:
+    """Type from fields (§2), for entries written in the target format.
+
+    A bare ``code`` marks a library; a physical path in ``produces``
+    marks a source; anything producing logical names is computable.
+    """
+    if "code" in fields and not fields.get("produces"):
+        return "library"
+    if any("/" in p or "." in p for p in fields.get("produces", ())):
+        return "source"
+    return "compute"
+
+
+def _infer_file_kind(body: str) -> str:
+    """A file's kind from what its entries declare (§2).
+
+    Only needed while `kind:` is optional-but-supported: the target
+    format has no file-level kind at all, since type is a per-entry
+    consequence of fields. A file with no entry blocks is `definitions`
+    — prose nobody signs.
+    """
+    kinds = set()
+    for block in re.finditer(
+        r"^### +(.+?)\s*$\n(.*?)(?=^### |^## |\Z)", body, re.MULTILINE | re.DOTALL
+    ):
+        fields = entry_fields(block.group(2), "spec")
+        if not fields:
+            continue
+        kinds.add(infer_kind(fields, []))
+    if not kinds:
+        return "definitions"
+    if kinds == {"library"}:
+        return "library"
+    # `source` is a target-format type (§2) with no equivalent in the
+    # legacy vocabulary yet: an entry that produces bytes from outside
+    # any pipeline still reads as compute here, and its lack of code
+    # derives `unimplemented` exactly as a source entry should.
+    kinds.discard("library")
+    return "report" if len(kinds) > 1 else kinds.pop()
+
+
 def _spec_sha(text: str, m: "re.Match[str]") -> str:
     """``spec_sha`` with display-only frontmatter lines removed.
 
@@ -219,11 +329,23 @@ def parse_spec(path: Path) -> SpecFile:
             "`consumes:` (upstream entry names) and `references:` (vocabulary specs)"
         )
     kind = meta.get("kind")
+    if kind is None:
+        # Target format (§2): type is inferred from the fields entries
+        # declare, so `kind:` is optional. Files whose entries carry no
+        # field list default to prose-only.
+        kind = _infer_file_kind(text[m.end() :])
     if kind not in KINDS:
         raise SpecError(f"{path.name}: `kind: {kind}` is not one of {sorted(KINDS)}")
     name = meta.get("name")
-    if name != path.stem:
+    if name is not None and name != path.stem:
         raise SpecError(f"{path.name}: `name: {name}` must match the filename stem")
+    name = path.stem
+
+    props = meta.get("props") or []
+    if isinstance(props, str):
+        props = [props]
+    if not isinstance(props, list) or not all(isinstance(x, str) for x in props):
+        raise SpecError(f"{path.name}: `props:` must be a name or a list of names")
 
     tier = meta.get("tier", "intensive" if kind == "compute" else "quick")
     if tier not in TIERS:
@@ -250,6 +372,7 @@ def parse_spec(path: Path) -> SpecFile:
         consumes=_str_list(meta.get("consumes"), path.name, "consumes"),
         references=_str_list(meta.get("references"), path.name, "references"),
         spec_sha=_spec_sha(text, m),
+        props=props,
         body=body,
         title=str(meta.get("title") or (heading.group(1) if heading else name)),
         skip=skip,
@@ -258,13 +381,15 @@ def parse_spec(path: Path) -> SpecFile:
     )
 
     if kind in ENTRY_KINDS:
-        label = "Output" if kind == "compute" else "Export outputs"
+        label = "Output" if kind in ("compute", "source") else "Export outputs"
         for block_match in re.finditer(
             r"^### +(.+?)\s*$\n(.*?)(?=^### |^## |\Z)", body, re.MULTILINE | re.DOTALL
         ):
             entry_name = block_match.group(1).strip()
             if not _ENTRY_NAME.match(entry_name):
                 raise SpecError(f"{path.name}: bad entry name `{entry_name}`")
+            fields = entry_fields(block_match.group(2), f"{path.name}: `{entry_name}`")
+            own_kind = infer_kind(fields, []) if fields else None
             if spec.skip:
                 # Commented out: keep the entry names (for views and for
                 # "consumes skipped entry" diagnostics) but grammar-check
@@ -280,13 +405,20 @@ def parse_spec(path: Path) -> SpecFile:
                         f"{path.name}: library entry `{entry_name}` must not declare an output"
                     )
                 outputs = []
+            elif own_kind == "library":
+                outputs = []
+            elif fields.get("produces"):
+                # Target format (§3): the field list carries the products,
+                # so the legacy `Output:` line is neither needed nor read.
+                outputs = fields["produces"]
             else:
                 outputs = _field_paths(block_match.group(2), label)
                 if not outputs:
                     raise SpecError(
-                        f"{path.name}: entry `{entry_name}` declares no `{label}:` path"
+                        f"{path.name}: entry `{entry_name}` declares no `{label}:` path "
+                        "(or a `- produces:` field)"
                     )
-                if kind == "compute" and len(outputs) > 1:
+                if kind in ("compute", "source") and len(outputs) > 1:
                     raise SpecError(
                         f"{path.name}: compute entry `{entry_name}` must declare exactly one output"
                     )
@@ -297,6 +429,9 @@ def parse_spec(path: Path) -> SpecFile:
                     outputs=outputs,
                     binding=None,  # type: ignore[arg-type]
                     block_sha=sha256_text(block_match.group(0)),
+                    own_consumes=fields.get("consumes"),
+                    own_props=fields.get("props"),
+                    own_kind=own_kind,
                 )
             )
     return spec
@@ -330,32 +465,41 @@ def _parse_previews(data: dict) -> dict[str, PreviewRecipe]:
 
 def _load_bindings(
     specs_dir: Path,
-) -> tuple[dict[str, Binding], list[str], str | None, dict[str, PreviewRecipe]]:
+) -> tuple[dict[str, Binding], list[str], dict[str, PreviewRecipe], str | None]:
     path = specs_dir / "bindings.toml"
     if not path.is_file():
-        return {}, [], None, {}
+        return {}, [], {}, None
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise SpecError(f"bindings.toml: {exc}") from exc
     globs = _str_list(data.get("package", {}).get("globs"), "bindings.toml", "package.globs")
-    cache_url = data.get("cache", {}).get("url")
+    backend_class = data.get("backend", {}).get("class")
     bindings: dict[str, Binding] = {}
     for entry_name, table in data.get("entries", {}).items():
         bindings[entry_name] = Binding(
             scripts=_str_list(table.get("scripts"), "bindings.toml", "scripts"),
-            run=table.get("run"),
-            workflows=_str_list(table.get("workflows"), "bindings.toml", "workflows"),
-            executor=table.get("executor"),
+            produces=_produces_map(entry_name, table.get("produces")),
         )
-    return bindings, globs, cache_url, _parse_previews(data)
+    return bindings, globs, _parse_previews(data), backend_class
+
+
+def _produces_map(entry_name: str, raw: object) -> dict[str, str]:
+    """``[entries.X] produces`` — logical name -> physical path."""
+    if raw is None:
+        return {}
+    where = f"bindings.toml: [entries.{entry_name}] produces"
+    if not isinstance(raw, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
+    ):
+        raise SpecError(f"{where}: must be a table of logical-name = \"path\"")
+    return dict(raw)
 
 
 def _default_binding(entry_name: str) -> Binding:
     # The documented naming convention: an unbound entry is implemented
     # by scripts/<entry>.py and run with the project's python.
-    script = f"scripts/{entry_name}.py"
-    return Binding(scripts=[script], run=f"python {script}")
+    return Binding(scripts=[f"scripts/{entry_name}.py"])
 
 
 def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
@@ -380,10 +524,18 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             problems.append(Problem(path.name, str(exc)))
 
     try:
-        bindings, package_globs, cache_url, previews = _load_bindings(specs_dir)
+        bindings, package_globs, previews, backend_class = _load_bindings(specs_dir)
     except SpecError as exc:
         problems.append(Problem("bindings.toml", str(exc)))
-        bindings, package_globs, cache_url, previews = {}, [], None, {}
+        bindings, package_globs, previews, backend_class = {}, [], {}, None
+
+    steps: dict[str, Step] = {}
+    pipeline_file = root / "pipeline.toml"
+    if pipeline_file.is_file():
+        try:
+            steps = load_pipeline(pipeline_file)
+        except PipelineError as exc:
+            problems.append(Problem("pipeline.toml", str(exc)))
 
     entries: dict[str, Entry] = {}
     skipped_entries: dict[str, str] = {}
@@ -396,7 +548,7 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                 entry.binding = bindings.get(entry.name) or (
                     # no convention fallback for library modules: an
                     # invented path must not be carved out of the blob
-                    Binding(scripts=[], run=None)
+                    Binding(scripts=[])
                     if spec.kind == "library"
                     else _default_binding(entry.name)
                 )
@@ -425,12 +577,45 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                             "`scripts` in specs/bindings.toml (no convention default)",
                         )
                     )
-                    entry.binding = Binding(scripts=[], run=None)
+                    entry.binding = Binding(scripts=[])
                 else:
                     entry.binding = binding
             else:
                 entry.binding = bindings.get(entry.name, _default_binding(entry.name))
+            # Logical names become paths here, and only here: the spec
+            # speaks in names, the pipeline in files, and the map is the
+            # one translation between them (§4).
+            if entry.binding.produces:
+                missing = [p for p in entry.outputs if p not in entry.binding.produces]
+                if missing and not any(
+                    "/" in p or "." in p for p in entry.outputs
+                ):
+                    problems.append(
+                        Problem(
+                            spec.path.name,
+                            f"{spec.path.name}: `{entry.name}` produces "
+                            f"{', '.join(missing)}, which specs/bindings.toml gives no path for",
+                        )
+                    )
+                entry.logical = list(entry.outputs)
+                entry.outputs = [
+                    entry.binding.produces.get(p, p) for p in entry.outputs
+                ]
             entries[entry.name] = entry
+
+    # A `consumes` target may name a logical product rather than the
+    # entry producing it (§3): naming the product is more precise when
+    # one entry produces several. Resolve those to their producer before
+    # validating, so both forms reach the same graph.
+    producer_of = {
+        name: e.name for e in entries.values() for name in e.logical
+    }
+    if producer_of:
+        for e in entries.values():
+            if e.own_consumes is not None:
+                e.own_consumes[:] = [producer_of.get(u, u) for u in e.own_consumes]
+        for spec in specs:
+            spec.consumes[:] = [producer_of.get(u, u) for u in spec.consumes]
 
     spec_names = {s.name for s in specs}
     for spec in specs:
@@ -453,6 +638,25 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                     Problem(spec.path.name, f"{spec.path.name}: consumes unknown entry `{up}`")
                 )
             spec.consumes.remove(up)
+        # Per-entry `- consumes:` edges get the same validation as the
+        # file-level ones: an unknown upstream is dropped and reported,
+        # never left to crash a lookup downstream.
+        for entry in spec.entries:
+            if entry.own_consumes is None:
+                continue
+            for up in list(entry.own_consumes):
+                if up in entries:
+                    continue
+                where = f"{spec.path.name}: `{entry.name}`"
+                problems.append(
+                    Problem(
+                        spec.path.name,
+                        f"{where} consumes skipped entry `{up}`"
+                        if up in skipped_entries
+                        else f"{where} consumes unknown entry `{up}`",
+                    )
+                )
+                entry.own_consumes.remove(up)
         for ref in spec.references:
             if Path(ref).stem not in spec_names:
                 problems.append(
@@ -465,7 +669,6 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         specs=specs,
         entries=entries,
         package_globs=package_globs,
-        cache_url=cache_url,
         # Skipped library modules stay carved out of the blob: their
         # claims are dormant, not deleted, and re-enabling the spec
         # must not shift every other entry's code manifest.
@@ -478,6 +681,8 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         ),
         skipped_entries=skipped_entries,
         previews=previews,
+        steps=steps,
+        backend_class=backend_class,
     )
     return project, problems
 

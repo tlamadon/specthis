@@ -33,7 +33,7 @@ That replaces every existence / freshness / hash check. What remains —
 the part that needs you — is judgment:
 
 4. The **machine queue** (stale / never-run): compute, nothing to
-   judge. Report it; `specthis run --stale` clears it — including
+   judge. Report it; `specthis build` clears it — including
    unvouched entries, which rebuild while a mind audits them.
    (Entries marked *bytes remote* with a current claim are NOT stale
    and NOT queued: the claim stands, the bytes live in the byte

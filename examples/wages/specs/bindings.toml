@@ -1,0 +1,15 @@
+# The map: which dependencies are judged code, and which file is which
+# logical product. Everything about *how* a step runs lives in
+# pipeline.toml.
+
+[entries.clean-wages]
+scripts  = ["scripts/clean_wages.py"]
+produces = { wages-panel = "data/wages.csv" }
+
+[entries.wage-moments]
+scripts  = ["scripts/moments.py"]
+produces = { wage-moments = "results/moments.json" }
+
+[entries.wage-table]
+scripts  = ["scripts/table.py"]
+produces = { wage-table = "reports/table.md" }

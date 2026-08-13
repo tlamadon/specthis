@@ -11,28 +11,24 @@ does not gate compute; only a `rejected` definition does.
    machine" section, report the queues as-is and stop — what remains
    needs a mind (`/specthis-vouch`) or an author, not a machine.
 2. Decide the command:
-   - Arguments given → they are entry names: run each with
-     `specthis run <entry>`, upstream-first if several.
-   - No arguments → `specthis run --stale` (topo order, the machine
-     queue; skips only `rejected` and `unimplemented` definitions).
-   - Add `-p 4` (`--parallel`) when the machine queue spans independent
-     branches of the DAG — independent entries rebuild concurrently,
-     and an entry still starts only after all its upstreams have
-     recorded their claims. Keep intensive-tier queues serial unless
-     the user asked for parallelism: `-p` multiplies concurrent
-     compute burn. On a failure nothing new is scheduled; in-flight
-     entries finish and are recorded.
-   - Add `--fetch` when a cache is configured (`[cache] url` in
-     `specs/bindings.toml` or `SPECTHIS_CACHE_URL` is set) — verified
-     bytes beat recompute. Add `--push` too if the user asked to
-     share results.
-   - Entries reading `current` with `bytes not local` are NOT stale
-     and need nothing: the claim stands, the bytes live in the cache.
-     `--fetch` materializes them only if a local step actually needs
-     the files; never re-run an entry just to get bytes back.
-   - An entry that ran remotely and was certified there
-     (`specthis manifest` on the compute machine) is recorded here
-     with `specthis run <entry> --adopt` — no execution, no bytes.
+   - Arguments given → they are entry names: `specthis build <entry>`.
+   - No arguments → `specthis build`. specthis hands the **whole**
+     pipeline to the compute manager, which decides what actually runs;
+     it never selects steps itself, because only the manager knows what
+     is already in its cache and whether a rerun reproduces identical
+     bytes.
+   - Parallelism, remote execution and caching are the **manager's**
+     business, not specthis's. If the user wants them, the project needs
+     a backend that has them (`[backend] class` in
+     `specs/bindings.toml`); the bundled runner walks the DAG serially
+     and nothing else.
+   - Entries reading `current` with `bytes not local` are NOT stale and
+     need nothing: the claim stands, the bytes live in the manager's
+     store. Never rebuild an entry just to get bytes back.
+   - An entry a manager ran elsewhere is recorded from its manifest:
+     `specthis adopt <entry> path/to/manifest.json` — no execution.
+   - An artefact edited on disk is the one case needing a targeted
+     repair: `specthis build <entry> --force`.
 3. **Respect the tiers.** If the machine queue contains
    `tier: intensive` entries (check the spec frontmatter or
    `specs/_index.json`), do not block on them casually:
@@ -42,7 +38,7 @@ does not gate compute; only a `rejected` definition does.
      file) and monitor for milestones/errors instead of tailing —
      or hand off to the `experiment-runner` subagent.
    Quick-tier queues can just run in the foreground.
-4. **Relay progress, not silence.** `specthis run --stale` narrates
+4. **Relay progress, not silence.** `specthis build` narrates
    itself: an upfront plan line (`3 entries in the machine queue:
    a -> b -> c`), a `[k/N]` counter per entry, and after each run its wall
    time plus what it did to the DAG — `output unchanged — downstream

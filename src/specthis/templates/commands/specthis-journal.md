@@ -33,5 +33,5 @@ explicit slug.
 4. **Report.** Show the user the path and title, and remind them the
    entry appears under "Journal" on the dashboard. If something in
    the session was a claim about spec/code (not narrative), say so —
-   that belongs to `/specthis-vouch` or `specthis run`, not the
+   that belongs to `/specthis-vouch` or `specthis build`, not the
    journal.

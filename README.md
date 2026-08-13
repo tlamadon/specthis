@@ -1,17 +1,24 @@
 # specthis
 
-**A notary for a DAG it also knows how to build.** You describe *what
-the pipeline should be* in a clean set of specs; specthis keeps one
-ledger, versioned in git, of claims about the project — and answers,
-cheaply and at any moment: which claims are still true, and what kind
-of repair does each broken one need — a mind (re-judge), a machine
-(re-run), or patience (upstream will heal it).
+**A notary for a research pipeline.** You describe *what the pipeline
+should be* in a clean set of specs; specthis keeps two git-versioned
+ledgers of claims about the project — one **tree of judgments** (a mind
+said the code satisfies the contract) and one **tree of runs** (this
+artifact came from that code on these inputs) — and answers, cheaply
+and at any moment: which claims are still true, and what kind of repair
+does each broken one need — a mind (re-judge), a machine (re-run), or
+patience (upstream will heal it). The two trees break and heal
+independently: one entry can wait on a mind and a machine at once, and
+neither blocks the other.
 
-> Status: **implemented and tested** — the ledger verbs (`check` /
-> `status` / `run` / `vouch` / `migrate`), the scaffolding (`install` /
-> `init`), the live dashboard (`export` / `serve`) with spec browsing,
-> the DAG overview, the journal view, and the remote cache. See
-> [Roadmap](#roadmap) for the deliberately-deferred extensions.
+**specthis makes nothing.** It never forks a process. Execution belongs
+to a compute manager — the bundled runner, or one your project supplies
+— and specthis compiles the plan, reads what came back, and
+countersigns it. New here? [`docs/analogy.md`](docs/analogy.md) explains
+the whole model as a bakery.
+
+> Status: **implemented and tested**. See [Roadmap](#roadmap) for what is
+> deliberately not built.
 
 ## The model
 
@@ -41,10 +48,29 @@ Judgment cannot be computed; computation need not be judged.
 
 **Claims are shallow; trust propagates.** A vouch covers only the
 entry's own blobs. When something upstream moves, downstream vouches
-don't expire — they get flagged. `specthis check` walks the DAG and
-reports the **frontier**: entries broken for local reasons itemized,
-everything merely downstream summarized. Per entry the diagnosis is
-one of:
+don't expire — they get flagged.
+
+**Status is two coordinates, not one word.** The two claim species
+become two status axes — one per ledger, one per tree — and each entry
+sits on both; specthis derives them independently, neither gating the
+other:
+
+- **Certification** (the attested claim, the vouch tree — *is the
+  definition judged?*): `unimplemented → unvouched → certified`, or
+  `rejected`. A mind's claim about the (spec, code) pair; expires only
+  when a digest moves.
+- **Realization** (the derived claim, the run tree — *is the recorded
+  call the one today's content implies?*): `never-run → stale →
+  current` (absent for `library` entries, whose chain stops at code).
+  A machine's claim about bytes.
+
+So `specthis check` reports **two queues** — definitions needing a
+mind, realizations needing a machine — with everything merely
+downstream summarized per tree. An entry can sit in both (a mind
+audits it while a machine reruns it), and the two queues drain in
+parallel. The flattened single-word diagnosis — what `status`, the
+dashboard, and older surfaces show — is derived from the pair, with
+certification breaks winning:
 
 | status | meaning | repair |
 |---|---|---|
@@ -53,7 +79,7 @@ one of:
 | `rejected` | a judge said no at exactly these digests | a mind |
 | `stale` | inputs moved (or it never ran); the vouch stands | a machine |
 | `upstream-unverified` | your claim stands on ground that moved | patience |
-| `ready` | every claim checks out | — |
+| `ready` | certified ∧ current, whole lineage | — |
 
 **Two kinds of edge, only one carries trust.** `consumes:` edges are
 artifact flows — they enter signatures and propagate status.
@@ -68,11 +94,13 @@ by the author of the change, human or agent. A rejection binds at its
 exact digest pair: `vouch` refuses an `ok` over a standing rejection
 until something changes.
 
-**Executors are ingredients, never authorities.** Intensive entries
-dispatch to a configured runner (e.g. scripthut — its cache key is its
-own business); quick entries run locally. git holds claims, caches
-hold bytes, digests join them. No mtime appears anywhere in ledger
-logic: a fresh clone on another machine gives identical answers.
+**The notary never forks a process.** You author a pipeline in your
+compute manager's own format; specthis reads it, hands over the whole
+thing, and adopts the manifests that come back. A bundled runner ships
+for projects with no manager of their own; anything implementing four
+operations can replace it. git holds claims, the manager holds bytes,
+digests join them. No mtime appears anywhere in ledger logic: a fresh
+clone on another machine gives identical answers.
 
 ### Division of labor
 
@@ -82,42 +110,41 @@ Three roles, three pens — and only one of them is free-form:
 |---|---|---|
 | **author** (you, or an implementer agent) | spec edits, code, and the binding in `specs/bindings.toml` (where the code lives, how to run it) | any editor |
 | **critic** (a non-author: a colleague, you-next-week, a designated critic session) | attested claims in `specs/vouches.toml` | `specthis vouch --as` — only |
-| **machine** | derived claims in `specs/runs.toml` | `specthis run` — only |
+| **machine** | derived claims in `specs/runs.toml` | `specthis build` / `adopt` / `record` — only |
 
 The author's pen is unguarded because nothing it writes becomes
 trusted on its own: a binding edit changes which files the code
 manifest covers, which expires the standing vouch — it can revoke
-trust, never mint it. And when the critic vouches, the binding is
-swept up in the judgment anyway: the `code_sha` they attest is
-computed over exactly the files the binding names, and `run` executes
-exactly the command it gives. Author proposes, critic attests,
-machine executes — and `check` believes none of them without
-re-deriving the digests.
+trust, never mint it. And when the critic vouches, the binding *and the
+pipeline step* are swept into the judgment: they attest exactly the
+files the binding names and exactly the command, inputs and outputs the
+step declares. Realizing a spec means writing code **and** wiring it —
+perfect code pointed at last year's data still fails the contract.
+Author proposes, critic attests, a manager executes — and `check`
+believes none of them without re-deriving the digests.
 
-## The five verbs
+## The verbs
 
 ```bash
-specthis check                 # the frontier; exit non-zero on any local break
-specthis status [entry]        # table / detail, incl. WHICH input moved
-specthis run <entry>           # resolve+record upstream digests -> dispatch -> runs.toml
-specthis run --stale           # rebuild every machine-repairable entry in dependency order
-                               #   narrates: plan line, [k/N] per entry, wall time, and whether
-                               #   each output moved (consumers now stale) or was reproduced
-                               #   (cascade cut — downstream claims unaffected)
-specthis run --stale -p 4      # same queue, but independent branches of the DAG rebuild
-                               #   concurrently (an entry still starts only after all its
-                               #   upstreams have recorded their claims)
+specthis check                 # the two queues (minds, machines); non-zero on any local break
+specthis status [entry]        # both axes, and WHICH input moved
+specthis lint                  # every problem at once: spec, map, and pipeline correspondence
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
+specthis build [entries…]      # hand the pipeline to the manager, adopt what comes back
+specthis build <entry> --force # rebuild an artefact edited on disk
+specthis record <entry>        # pin bytes no pipeline produced (a download, a one-off)
+specthis adopt <entry> FILE    # countersign a manifest from a manager specthis did not launch
+specthis certify               # code-identity certificates, if you use [package] globs
 ```
 
-Boundaries are load-bearing: `check`/`status` never write, `run`
-never touches `vouches.toml`, `vouch` never touches `runs.toml`.
+Boundaries are load-bearing: `check`/`status`/`lint` never write,
+`vouch` never touches `runs.toml`, and nothing but `vouch` touches
+`vouches.toml`.
 
-Two more verbs render **views** — regenerated, never read back by the
+Three more render **views** — regenerated, never read back by the
 ledger:
 
 ```bash
-specthis lint      # grammar check: EVERY problem across all files at once
 specthis export    # write specs/specs.html + _index.json
 specthis serve     # live dashboard at localhost:8765; re-renders on any
                    # spec / ledger / code / output change (writes nothing)
@@ -130,7 +157,7 @@ Readers are lenient, writers are strict: `check`, `lint`, and the
 dashboard load whatever parses and *surface* the grammar problems (in
 the page, in a red "does not parse" sidebar group with the broken
 file's markdown still rendered best-effort, and in `check`'s output —
-which exits non-zero on problems). `run`, `vouch`, and `migrate`
+which exits non-zero on problems). `vouch`, `record` and `migrate`
 refuse to write ledgers against a tree that doesn't parse. The
 `/specthis-lint` slash command explains each problem and fixes the
 mechanical ones.
@@ -165,38 +192,41 @@ Editing the preamble invalidates exactly the previews that read it. A
 failing recipe shows its compile log in the browser — failures are
 not cached, so fixing and reloading retries.
 
-And the **remote cache** moves bytes without ever touching claims:
+## Running the pipeline
 
-```bash
-specthis cache push <entry>     # upload certified outputs, keyed by signature
-specthis cache fetch <entry>    # download + verify against the recorded claim
-specthis run --stale --fetch    # try the cache before recomputing
-specthis run <entry> --push     # push after a successful run
+You author the pipeline in your manager's own format — specthis reads
+it and never writes it. Steps contribute four things: an id (the entry
+name), a command, declared inputs, declared outputs.
+
+The bundled runner reads `pipeline.toml`:
+
+```toml
+[steps.clean-wages]
+command = "python src/clean_wages.py"
+deps    = ["src/clean_wages.py", "config/clean.toml", "data/raw/wages.parquet"]
+outs    = ["data/wages.parquet"]
 ```
 
-Configure with `[cache] url = "s3://bucket/prefix"` (needs
-`specthis[s3]`) or `file:///shared/drive` (no extras) in
-`specs/bindings.toml`, or `SPECTHIS_CACHE_URL`. `push` refuses bytes
-that don't match the recorded run; `fetch` verifies digests before
-anything lands on disk; neither writes a ledger row — git carries the
-claim, the cache carries the bytes.
+Edges are derived, not declared twice: a step follows every step whose
+`outs` its `deps` name. It walks the DAG and nothing else — no
+parallelism, no resources, no remote, no retries. Wanting any of those
+is the signal to point a real manager at the same declarations:
 
-When an entry runs **where the bytes should stay** (an HPC cluster, a
-collaborator's machine), the claim still travels without them:
-
-```bash
-specthis manifest <entry>       # ON THE MACHINE THAT RAN IT: certify + upload
-                                #   tarball + manifest under the composed signature
-specthis run <entry> --adopt    # ON YOUR MACHINE: record the runs.toml row
-                                #   from that manifest — no bytes move
+```toml
+[backend]
+class = "mypkg.adapters:ScripthutBackend"
 ```
 
-Adoption is self-verifying: your machine composes the expected
-signature from its own tree and looks the manifest up at exactly that
-key — a drifted tree finds nothing. The adopted entry reads *ready*
-with its bytes marked remote (`check` names it; absence is not
-staleness — only edited bytes or moved inputs are stale), and anyone
-who actually needs the bytes is one verified `cache fetch` away.
+Anything implementing `parse` / `submit` / `poll` / `manifests`
+qualifies. specthis **never selects steps** — it hands over the whole
+pipeline, because only the manager can know whether a rerun reproduces
+identical bytes, or whether the work is already in its cache.
+
+Every manifest is verified against the bytes on disk before it is
+recorded. That proves *transcription*, not derivation: it catches a
+garbled manifest, and it does not make a manager trustworthy —
+establishing that outputs really came from that code would mean
+re-running, which is the capability specthis does not have.
 
 ## Use cases
 
@@ -211,9 +241,9 @@ hands:
 vim specs/compute-alpha.md          # contract edit -> entries flagged: audit needed
 vim scripts/fit_alpha.py            # bring the code back in line
 specthis vouch fit-alpha --as ana   # a NON-author judges code vs contract
-specthis run fit-alpha              # execute, record the derived claim
+specthis build fit-alpha            # the manager runs it; specthis countersigns
 specthis check                      # ready — and downstream entries now
-                                    # show stale, ready for `run --stale`
+                                    # show stale, ready for `specthis build`
 ```
 
 **Did anything change?** The daily question — after a `git pull`,
@@ -222,10 +252,11 @@ month. One read-only command answers it and names the repair:
 
 ```bash
 $ specthis check
-frontier (broken for local reasons):
-  audit needed    fit-beta        spec or code moved since vouch
-  stale           fig-gamma       moved: upstream:fit-gamma
-waiting on the frontier: 3 upstream-unverified
+vouch tree — definitions needing a mind:
+  unvouched      fit-beta        moved since vouch: code: fit_beta.py moved
+run tree — realizations needing a machine:
+  stale          fig-gamma       moved: upstream:fit-gamma
+waiting on upstream: 3 (2 on minds, 1 on machines)
 ready: 11/16
 ```
 
@@ -239,9 +270,8 @@ re-ran, or after a migration, every downstream entry with a standing
 vouch is just compute:
 
 ```bash
-specthis run --stale     # topo order; skips audit-needed entries
-                         # ("needs a mind, not a machine")
-specthis run --stale -p 4  # up to 4 independent entries at once, DAG order intact
+specthis build           # hand over the whole pipeline; the manager rebuilds
+                         # what its content keys say is out of date
 ```
 
 **Reject bad work.** A critic reads an implementation and disagrees
@@ -259,10 +289,8 @@ same pair, so nobody can quietly re-stamp the same bytes.
 **Onboard a machine (or a collaborator).** Clone the repo anywhere
 and run `specthis check`: same claims, same digests, same answer — no
 mtimes to confuse a fresh checkout. Vouches travel with git; artifacts
-don't have to. Whatever reads *stale* is one
-`specthis run --stale --fetch` away: entries whose recorded claim
-matches today's inputs are pulled from the cache (digest-verified,
-zero recompute, zero ledger writes); only genuinely new work executes.
+don't have to. Whatever reads *stale* is one `specthis build` away —
+and whatever your manager already has cached costs nothing to restore.
 
 **Let agents work, keep the pen.** The `spec-auditor` runs the checks
 and judges contract-in-spirit but only ever *proposes* verdicts; the
@@ -299,20 +327,38 @@ and it's that baseline that makes later drift legible and delegable.
   table (each script, workflow file, the package blob, and one
   `upstream:<entry>` digest per consumed artifact — so an upstream
   re-run is never invisible).
-- **`specs/bindings.toml`** — hand-edited vocabulary, not a claim:
-  entry → scripts, run command, workflow files, executor; plus
-  `[package]` globs for the shared library that every code manifest
-  covers. Unbound entries follow the `scripts/<entry>.py` convention.
+- **`specs/bindings.toml`** — the map: not a claim, and deliberately
+  small. Two facts no pipeline format can express — `scripts` (which of
+  a step's dependencies is *judged code*, the boundary between the two
+  trees) and `produces` (which file **is** a logical product) — plus
+  `[package]` globs for the shared library every code manifest covers.
+  Everything about *how* a step runs lives in the pipeline. Unbound
+  entries follow the `scripts/<entry>.py` convention.
 
-The spec files themselves carry YAML frontmatter (`name`, `kind`,
-`tier`, `consumes`, `references`, plus display-only `title` /
-`group` / `priority` that name and organize specs in the dashboard)
-and `### entry` blocks declaring each entry's `Output:` / `Export
-outputs:`. The whole file, frontmatter included, is the contract —
-any edit returns its entries to *audit needed* (the display-only keys
-are the one carve-out: they are stripped before hashing, so retitling
-or retagging never disturbs vouches). No `Script:`, no `Status:`:
-bindings live in `bindings.toml`, status is derived. See
+A spec file is markdown. Each `### entry` block declares its own
+interface as a field list:
+
+```markdown
+### clean-wages
+
+Drop negative wages, winsorize at the 99th percentile via `winsor`.
+One row per worker-year; no duplicates.
+
+- consumes: raw-wages
+- produces: wages-panel
+```
+
+Type is inferred from the fields — a bare `- code` is a library, a
+physical path is a source, logical `produces` is computable, and
+`- props: dataset` makes it a **template** whose instances the pipeline
+declares. `kind:` and `name:` are optional; the older frontmatter form
+still parses, so a project migrates at its own pace.
+
+**A vouch pins the entry's own block**, not the whole file: editing a
+sibling entry is somebody else's business. Display-only keys (`title`,
+`group`, `priority`) are stripped before hashing, so retitling never
+disturbs a vouch. No `Script:`, no `Status:`: the map holds bindings,
+status is derived. See
 [`src/specthis/templates/specs/README.md`](src/specthis/templates/specs/README.md)
 for the full convention (the bundled templates ship a research/paper
 instantiation — compute entries producing JSON, report entries
@@ -323,7 +369,6 @@ domain-general).
 
 ```bash
 pip install specthis          # core: CLI + agent templates
-pip install "specthis[s3]"    # adds the remote (S3) cache backend (stub)
 ```
 
 Or with [uv](https://docs.astral.sh/uv/) — no install needed, works from
@@ -389,7 +434,7 @@ operations:
   binds it, smoke-tests it, then stops and proposes the vouch. It
   authored the change, so the pen is not its.
 - **`experiment-runner`** — launches a long run in the background
-  (preferring `specthis run <entry>` so the claim is recorded),
+  (preferring `specthis build <entry>` so the claim is recorded),
   watches the log, reports completion.
 - **`spec-critic`** + **`/specthis-vouch [entries…]`** — the one
   sanctioned agent pen. The slash command is your explicit
@@ -400,11 +445,10 @@ operations:
   agent-made and who asked for it), rejects clear violations, and
   leaves every doubt unvouched for you. Independence here is
   contextual, not personal — the ledger records exactly that.
-- **`/specthis-run [entries…]`** — the machine half: rebuilds the
-  stale queue in dependency order (`run --stale`, with `--fetch` when
-  a cache is configured), backgrounds and monitors intensive entries
-  instead of blocking, and reports what was rebuilt, fetched, and
-  skipped as needing a mind. Together the two commands split the
+- **`/specthis-run [entries…]`** — the machine half: hands the pipeline
+  to the manager (`specthis build`), backgrounds and monitors long runs
+  instead of blocking, and reports what was rebuilt, restored from
+  cache, and left for a mind. Together the two commands split the
   frontier by repair kind: `/specthis-vouch` for minds,
   `/specthis-run` for machines.
 - **`/specthis-journal [topic]`** — the narrative pen: writes a dated
@@ -422,49 +466,49 @@ specthis migrate --write    # import run rows
 Old certified inputs import as derived claims only — **no vouches
 migrate**, by design: judgment does not transfer from a hash file.
 Post-migration everything reads *audit needed* or *stale*, and the
-humans work the queue with `specthis vouch` / `specthis run --stale`.
+humans work the queue with `specthis vouch` / `specthis build`.
 
 ## Roadmap
 
-Done: spec/bindings parsing, content hashing + composed signatures,
-both ledgers, status derivation + frontier, the five verbs, migration,
-scaffolding, agent templates, the dashboard (`export` + `serve` with
-live reload, a spec-level DAG — status rails on the dashboard, a
-layered figure and layout JSON via `specthis dag` — stdlib only), the
-remote cache (`file://` and `s3://`
-backends, digest-verified fetch keyed by the composed signature), the
-journal (`journal/` narratives rendered into the dashboard, plus
-`/specthis-journal`), and output previews (`[preview]` recipes in
-bindings, rendered on view at `/preview/<path>`, cached
-content-addressed outside the repo; images and PDFs viewable with no
-recipe).
+**Done.** Spec and map parsing; content hashing, per-file tables and the
+step digest; both ledgers; the two-tree status model (certification ×
+realization, derived independently — `check` prints two queues, every
+surface shows both axes); template entries with per-instance claims;
+source entries and `record`; the pipeline reader, the bundled runner,
+project-supplied backends, `build` and `adopt`; correspondence lint;
+code-identity certificates; migration; scaffolding and agent templates;
+the two-tree dashboard (`export` + `serve` with live reload — a
+vouch-tree landing and a run-tree page plus an activity log, a
+spec-level DAG with status rails, a layered figure and layout JSON via
+`specthis dag`, stdlib only); the journal; and output previews.
 
 Also done: **`skip: true` in frontmatter** — comment a spec out while
-developing. Skipped entries leave the frontier and every count;
-`run`/`vouch` refuse them; their ledger rows stay dormant; the body is
-not grammar-checked; consuming a skipped entry is a lint problem; the
-dashboard renders the spec greyed and marked *skipped*. Honesty is
-content-addressed: a spec edited while skipped comes back as *audit
-needed* (its bytes moved), while a pure skip/un-skip round-trip
-restores the exact vouched bytes and trust returns with them.
+developing. Skipped entries leave every count and every queue; writers
+refuse them; their ledger rows stay dormant; the body is not
+grammar-checked; consuming a skipped entry is a lint problem; the
+dashboard renders the spec greyed. Honesty is content-addressed: a spec
+edited while skipped comes back as unvouched, while a pure skip/un-skip
+round-trip restores the exact vouched bytes and trust returns with them.
 
-Known future extensions — each additive, none precluded by the core:
+**Deliberately not built.**
 
-- **Adoption path: `specthis init --from-code`.** Kick-start an
-  existing repo: walk `scripts/`, read what's already there
-  (docstrings, filenames, imports), and *draft* spec files plus
-  proposed bindings from it — a one-time extraction the human then
-  edits. Drafts arrive unvouched, so the first pass through the queue
-  is human-grade judgment, exactly as the model prescribes. Specs
-  remain the single home: docstrings seed the draft but are never
-  read back by the ledger — spec-in-docstring was considered and
-  rejected (it breaks spec-first authoring, muddies the
-  spec-moved/code-moved audit lanes, and couples hashing to
-  per-language parsing).
+- **Parallel rebuilds, a byte cache, remote execution.** These left with
+  the built-in executor in v0.1.0. A compute manager that has them
+  supplies them; specthis does not reimplement half a scheduler.
+- **One merged ledger.** `vouches.toml` and `runs.toml` stay two files.
+  Collapsing them into a single record type changes no behaviour, and
+  the payoff — a third capability landing free — has no third capability
+  to land.
+
+**Known future extensions** — each additive, none precluded by the core:
+
+- **Adoption path: `specthis init --from-code`.** Kick-start an existing
+  repo: walk `scripts/`, read what is already there (docstrings,
+  filenames, imports), and *draft* spec files plus proposed bindings — a
+  one-time extraction the human then edits. Drafts arrive unvouched, so
+  the first pass is human-grade judgment. Specs remain the single home:
+  docstrings seed the draft but are never read back by the ledger.
 - **Output-schema-into-signature.**
-- **Quick-tier caching** as an executor concern.
-- **Section-scoped spec hashing** if whole-file contract hashing ever
-  causes too much re-judgment churn.
 
 ## License
 

@@ -86,9 +86,9 @@ def test_export_writes_despite_problems(root: Path) -> None:
     assert "Spec problems" in (root / "specs/specs.html").read_text()
 
 
-def test_run_and_vouch_stay_strict(root: Path) -> None:
+def test_writing_verbs_stay_strict(root: Path) -> None:
     write(root, "specs/estimators.md", ESTIMATORS)  # unbound library entry
-    for verb in (("run", "fit-alpha"), ("vouch", "fit-alpha", "--as", "ana")):
+    for verb in (("record", "fit-alpha"), ("vouch", "fit-alpha", "--as", "ana")):
         result = run_cli(*verb, "--path", str(root))
         assert result.exit_code != 0
         assert "needs `scripts`" in result.output

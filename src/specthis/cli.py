@@ -9,30 +9,40 @@ command) lives here and only here — everything below the CLI is pure.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
 from . import __version__, hashing
+from .certificates import write_all as write_certificates
 from .check import (
     Certification,
     Realization,
     Report,
-    Status,
     check_project,
     code_manifest,
+    coordinates,
     code_sha,
     expected_inputs,
+    instance_inputs,
     is_library,
+    is_source,
+    keys_for,
     machine_repairable,
     queues,
-    topo_order,
+    sibling_keys,
+    step_digest,
+    ordered_keys,
+    verified,
 )
+from .adopt import AdoptError, adopt_manifest
+from .backends import FAILED, BackendError, resolve as resolve_backend
+from .correspond import correspondence_problems, correspondence_warnings
+from .instances import by_step as instances_by_step, resolve_key, template_problems
 from .install import init_specs_dir, install_agents, install_commands
+from .pipeline import PipelineError
 from .ledger import (
     RUNS_FILE,
     LedgerError,
@@ -96,7 +106,7 @@ def _path_option(f):
 def _mind_hint(report: Report, project: Project) -> str:
     """Why this definition needs a mind (the vouch-axis diagnosis)."""
     if report.certification is Certification.UNIMPLEMENTED:
-        scripts = project.entries[report.entry].binding.scripts
+        scripts = project.entries[report.instance_of or report.entry].binding.scripts
         return "no code at " + ", ".join(scripts)
     if report.certification is Certification.UNVOUCHED:
         if report.expired:
@@ -120,7 +130,7 @@ def _machine_hint(report: Report) -> str:
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(__version__, prog_name="specthis")
 def main() -> None:
-    """A notary for a DAG it also knows how to build."""
+    """A notary for a research pipeline. It makes nothing."""
 
 
 # ---------------------------------------------------------------- check
@@ -189,18 +199,32 @@ def check_cmd(project_path: Path) -> None:
 @main.command("lint")
 @_path_option
 def lint_cmd(project_path: Path) -> None:
-    """Check the spec directory's grammar and list EVERY problem.
+    """Check that spec, map and pipeline describe the same graph.
 
-    Frontmatter, entry blocks, bindings, consumes/references edges —
-    all files, all problems at once (the other verbs stop at the
-    first). Exits non-zero if anything is wrong. Reads only.
+    All files, all problems at once (the other verbs stop at the
+    first): frontmatter, entry blocks, bindings, consumes edges — and,
+    when the project has a pipeline.toml, the correspondence between
+    the contract's graph and the one that will actually run.
+
+    That last group is load-bearing. The pipeline is authored rather
+    than generated, so lint is what replaces a compiler's guarantee
+    that the two agree. Exits non-zero if anything is wrong. Reads only.
     """
-    _, problems = _load_lenient(project_path)
-    if not problems:
-        click.echo("specs are clean")
-        return
+    project, problems = _load_lenient(project_path)
+    problems = (
+        problems
+        + [Problem('specs', m) for m in template_problems(project)]
+        + correspondence_problems(project)
+    )
+    warnings = correspondence_warnings(project)
     for p in problems:
         click.echo(f"  {p.message}")
+    for w in warnings:
+        click.echo(f"  warning: {w.message}", err=True)
+    if not problems:
+        clean = "specs are clean"
+        click.echo(clean if not warnings else f"{clean} ({len(warnings)} warning(s))")
+        return
     click.echo(f"{len(problems)} problem(s)", err=True)
     sys.exit(1)
 
@@ -216,26 +240,28 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
     project = _load(project_path)
     reports = check_project(project)
     if entry is None:
-        for name in topo_order(project):
+        for name in ordered_keys(project, reports):
             r = reports[name]
-            e = project.entries[name]
-            kind = e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}"
+            e = project.entries[r.instance_of or name]
+            kind = e.kind if e.kind in ("library", "source") else f"{e.kind}/{e.tier}"
             marker = "" if r.materialized else "   [bytes remote]"
-            axes = r.certification.value + (
-                f" · {r.realization.value}" if r.realization else ""
-            )
-            click.echo(f"  {r.status.value:<20} {axes:<24} {name:<28} {kind}{marker}")
+            click.echo(f"  {coordinates(r):<44} {name:<28} {kind}{marker}")
         return
     _require_active(project, entry)
+    if entry not in reports:
+        raise click.ClickException(
+            f"no claim for `{entry}`"
+            + (" — it is a template; name one of its instances" if entry in project.entries else "")
+        )
     r = reports[entry]
-    e = project.entries[entry]
-    click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.spec.kind}/{e.tier})")
-    axes = r.certification.value + (f" · {r.realization.value}" if r.realization else "")
-    click.echo(f"status:    {r.status.value}  ({axes})")
+    e = project.entries[r.instance_of or entry]
+    click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.kind}/{e.tier})")
+    click.echo(f"state:     {coordinates(r)}")
     click.echo(f"spec_sha:  {r.spec_sha}")
     click.echo(f"code_sha:  {r.code_sha or '(code missing)'}")
     click.echo(f"scripts:   {', '.join(e.binding.scripts)}")
-    click.echo(f"outputs:   {', '.join(e.outputs) or '(none — library: chain stops at code)'}")
+    outs = list(r.run.outputs) if r.run and r.run.outputs else list(e.outputs)
+    click.echo(f"outputs:   {', '.join(outs) or '(none — library: chain stops at code)'}")
     if e.consumes:
         click.echo(f"consumes:  {', '.join(e.consumes)}")
     if r.vouch:
@@ -273,376 +299,204 @@ def status_cmd(entry: str | None, project_path: Path) -> None:
             click.echo(f"  - {k}")
 
 
-# ------------------------------------------------------------------ run
+# ---------------------------------------------------------------- adopt
 
 
-def _execute_entry(
-    project: Project, name: str, push_after: bool = False, position: str = ""
-) -> None:
-    """Resolve+record upstream digests -> dispatch -> write runs.toml."""
-    entry = project.entries[name]
+@main.command("adopt")
+@click.argument("entry")
+@click.argument("manifest_file", type=click.Path(exists=True, path_type=Path))
+@_path_option
+def adopt_cmd(entry: str, manifest_file: Path, project_path: Path) -> None:
+    """Countersign a manager's MANIFEST_FILE as ENTRY's derived claim.
+
+    A manifest is an unsigned factual report from a machine; adopting it
+    is the notary act. Every digest it asserts is checked against the
+    bytes on disk and the whole thing is refused if any disagrees.
+
+    That proves *transcription*, not derivation: it catches a garbled or
+    mismatched manifest, and it does not make the manager trustworthy —
+    establishing that the outputs came from that code on those inputs
+    would mean re-running, which needs the capability specthis lacks.
+
+    `build` does this for you; use this verb for a manager specthis did
+    not launch.
+    """
+    project = _load(project_path)
+    try:
+        doc = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"{manifest_file}: {exc}") from exc
+    try:
+        result = adopt_manifest(project, entry, doc)
+    except AdoptError as exc:
+        raise click.ClickException(str(exc)) from exc
+    note = " (output unchanged — downstream claims unaffected)" if result.reproduced else ""
+    click.echo(f"adopted `{entry}` -> {result.run.output_sha[:12]}…{note}")
+
+
+# --------------------------------------------------------------- record
+
+
+@main.command("record")
+@click.argument("entry")
+@click.option(
+    "--as", "executor", default="hand", show_default=True,
+    help="Who or what put these bytes here — a person, a one-off script, a vendor.",
+)
+@_path_option
+def record_cmd(entry: str, executor: str, project_path: Path) -> None:
+    """Pin the bytes already on disk for ENTRY, without running anything.
+
+    The way content that no pipeline produced enters the ledger: a
+    downloaded dataset, an extract a collaborator sent, the output of a
+    one-off nobody wants to automate. Place the file, record it, and it
+    becomes an ordinary upstream — a source entry is a compute entry
+    that computes nothing.
+
+    Records a derived claim only; it never writes a vouch. Whether the
+    data is what it claims to be is a *provenance* judgment, and that
+    needs a mind: `specthis vouch`.
+    """
+    project = _load(project_path)
+    try:
+        e, inst = resolve_key(project, entry)
+    except KeyError:
+        raise click.ClickException(f"no entry or instance named `{entry}`") from None
+    _require_active(project, e.name)
+    outs = list(inst.outputs if inst else e.outputs)
+    if not outs:
+        raise click.ClickException(f"`{entry}` declares no output — nothing to pin")
+
+    missing = [p for p in outs if not (project.root / p).is_file()]
+    if missing:
+        raise click.ClickException(
+            f"`{entry}`: no bytes at {', '.join(missing)} — place the file first"
+        )
+    out_sha = hashing.output_sha(project.root, outs)
+    assert out_sha is not None
     runs = read_runs(project.specs_dir)
-    prior = runs.get(name)
-
-    missing_up = [
-        u
-        for u in entry.consumes
-        if u not in runs and not is_library(project.entries[u])
-    ]
-    if missing_up:
-        raise click.ClickException(
-            f"`{name}` consumes entries with no recorded run: "
-            f"{', '.join(missing_up)} — run those first (or use --stale)"
-        )
-    inputs = expected_inputs(project, entry, runs)
-    missing_files = sorted(k for k, v in inputs.items() if v == hashing.MISSING)
-    if missing_files:
-        raise click.ClickException(
-            f"`{name}` has missing input files: {', '.join(missing_files)}"
-        )
-    if not entry.binding.run:
-        raise click.ClickException(f"`{name}` has no run command in specs/bindings.toml")
-
-    executor = entry.binding.executor or "local"
-    if entry.tier == "intensive" and executor == "local":
-        click.echo(
-            f"note: intensive entry `{name}` running locally; set "
-            "`executor` in specs/bindings.toml to dispatch to scripthut",
-            err=True,
-        )
-    prefix = f"{position} " if position else ""
-    click.echo(f"{prefix}running `{name}` via {executor}: {entry.binding.run}")
-    started = time.monotonic()
-    result = subprocess.run(entry.binding.run, shell=True, cwd=project.root)
-    elapsed = time.monotonic() - started
-    if result.returncode != 0:
-        raise click.ClickException(
-            f"`{name}` failed (exit {result.returncode}) after "
-            f"{_fmt_duration(elapsed)}; nothing recorded"
-        )
-    out_sha = hashing.output_sha(project.root, entry.outputs)
-    if out_sha is None:
-        missing = [p for p in entry.outputs if not (project.root / p).is_file()]
-        raise click.ClickException(
-            f"`{name}` finished but declared output(s) missing: {', '.join(missing)}"
-        )
+    prior = runs.get(entry)
+    inputs = (
+        instance_inputs(project, e, inst, runs, sibling_keys(project, e, inst)) if inst
+        else expected_inputs(project, e, runs)
+    )
     record_run(
         project.specs_dir,
-        name,
+        entry,
         Run(
             signature=hashing.signature(inputs),
-            output=", ".join(entry.outputs),
+            output=", ".join(outs),
             output_sha=out_sha,
             ran=_now(),
             executor=executor,
             inputs=inputs,
-            duration_seconds=round(elapsed, 3),
+            outputs=hashing.files_manifest(project.root, outs),
         ),
     )
-    # Say what the run did to the DAG: a reproduced output cuts the
-    # cascade (downstream signatures unmoved); a moved one names the
-    # blast radius so the wait ahead is legible.
-    consumers = sorted(n for n, e in project.entries.items() if name in e.consumes)
-    if prior is None:
-        verdict = ""
-    elif prior.output_sha == out_sha:
-        verdict = " (output unchanged — downstream claims unaffected)"
-    elif consumers:
-        verdict = f" (output moved — {len(consumers)} consumer(s) now stale: {', '.join(consumers)})"
-    else:
-        verdict = " (output moved)"
-    click.echo(
-        f"{prefix}recorded run of `{name}` in {_fmt_duration(elapsed)} "
-        f"-> {out_sha[:12]}…{verdict}"
+    moved = "" if prior is None else (
+        " (bytes unchanged)" if prior.output_sha == out_sha else " (bytes moved)"
     )
-    if push_after:
-        from .cache import CacheError, push
-
-        try:
-            key = push(project, name)
-            click.echo(f"pushed `{name}` -> {key}")
-        except CacheError as exc:
-            click.echo(f"cache push failed for `{name}`: {exc}", err=True)
+    click.echo(f"recorded `{entry}` -> {out_sha[:12]}…{moved}")
+    if is_source(e):
+        click.echo("note: provenance is a judgment — `specthis vouch` says it is what it claims")
 
 
-def _try_fetch(project: Project, name: str) -> bool:
-    """Best-effort cache fetch; True when verified bytes landed."""
-    from .cache import try_fetch
-    from .ledger import read_runs as _read_runs
-
-    entry = project.entries[name]
-    expected = hashing.signature(expected_inputs(project, entry, _read_runs(project.specs_dir)))
-    if try_fetch(project, name, expected):
-        click.echo(f"fetched `{name}` from cache (no recompute)")
-        return True
-    return False
+# -------------------------------------------------------------- certify
 
 
-def _run_stale_parallel(
-    project: Project, jobs: int, do_fetch: bool, do_push: bool
-) -> tuple[int, int, list[tuple[str, str]], list[str]]:
-    """The --stale walk with a worker pool: an entry is examined the
-    moment its last upstream finishes, so independent branches of the
-    DAG rebuild concurrently.
+@main.command("certify")
+@_path_option
+def certify_cmd(project_path: Path) -> None:
+    """Write a code-identity certificate per entry (spec §6).
 
-    The serial pass's guarantee survives: no entry starts until every
-    upstream's claim is recorded, so each worker composes exactly the
-    signature a serial pass would have. Ledger writes are already
-    flock-serialized; reads take the shared lock. On a failure nothing
-    new is scheduled — in-flight entries finish and are recorded.
+    Most projects need none: a step lists its code among its deps, so
+    those digests already reach the manager and the manifest. Certificates
+    earn their place when `[package] globs` are used — a glob has no
+    stable file list, so its composed digest can only enter a key as a
+    file.
+
+    Deterministic: unchanged code regenerates byte-identical bytes, so
+    running this never stales anything.
     """
-    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-    from graphlib import TopologicalSorter
-
-    idx = {n: i for i, n in enumerate(topo_order(project))}
-    sorter = TopologicalSorter({n: e.consumes for n, e in project.entries.items()})
-    sorter.prepare()
-    ran = fetched = dispatched = 0
-    skipped: list[tuple[str, str]] = []
-    failures: list[str] = []
-    unseen = set(project.entries)  # neither dispatched nor resolved yet
-
-    def build(name: str, position: str) -> str:
-        if do_fetch and _try_fetch(project, name):
-            return "fetched"
-        _execute_entry(project, name, push_after=do_push, position=position)
-        return "ran"
-
-    def materialize(name: str) -> str:
-        return "fetched" if _try_fetch(project, name) else ""
-
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures: dict = {}
-        while True:
-            if not failures and sorter.is_active():
-                ready = sorted(sorter.get_ready(), key=idx.__getitem__)
-                # One derivation per ready batch: a node's staleness is
-                # settled once its upstreams are done, and cousins still
-                # running cannot move it.
-                reports = check_project(project) if ready else {}
-                for name in ready:
-                    unseen.discard(name)
-                    report = reports[name]
-                    if machine_repairable(report):
-                        dispatched += 1
-                        left = sum(1 for m in unseen if machine_repairable(reports[m]))
-                        pos = f"[{dispatched}/{dispatched + left}]"
-                        futures[pool.submit(build, name, pos)] = name
-                    elif do_fetch and not report.materialized:
-                        futures[pool.submit(materialize, name)] = name
-                    else:
-                        if report.certification is not Certification.CERTIFIED:
-                            skipped.append((name, report.certification.value))
-                        sorter.done(name)
-            if futures:
-                done_set, _ = wait(list(futures), return_when=FIRST_COMPLETED)
-                for fut in done_set:
-                    name = futures.pop(fut)
-                    try:
-                        outcome = fut.result()
-                    except click.ClickException as exc:
-                        failures.append(exc.message)
-                        click.echo(f"  {exc.message}", err=True)
-                    except Exception as exc:  # a worker crash, not a failed build
-                        failures.append(f"`{name}`: {exc}")
-                        click.echo(f"  `{name}`: {exc}", err=True)
-                    else:
-                        ran += outcome == "ran"
-                        fetched += outcome == "fetched"
-                    sorter.done(name)
-                continue
-            if failures or not sorter.is_active():
-                break
-    return ran, fetched, skipped, failures
+    project = _load(project_path)
+    written = write_certificates(project)
+    click.echo(f"{len(written)} certificate(s) in {project.specs_dir / 'certificates'}")
 
 
-@main.command("run")
-@click.argument("entry", required=False)
+# ---------------------------------------------------------------- build
+
+
+@main.command("build")
+@click.argument("entries", nargs=-1)
 @click.option(
-    "--stale",
-    "run_stale",
+    "--force",
     is_flag=True,
-    help="Rebuild every machine-repairable entry in dependency order.",
+    help="Bypass the manager's cache for the named entries — the integrity "
+    "repair path, for an artefact edited on disk.",
 )
 @click.option(
-    "-p",
-    "--parallel",
-    "jobs",
-    type=click.IntRange(min=1),
-    default=1,
-    metavar="N",
-    help="With --stale: rebuild up to N independent entries at once. DAG order "
-    "still holds — an entry starts only after all its upstreams have recorded.",
-)
-@click.option(
-    "--fetch",
-    "do_fetch",
-    is_flag=True,
-    help="Try the remote cache before recomputing (verified bytes, no ledger writes).",
-)
-@click.option(
-    "--push",
-    "do_push",
-    is_flag=True,
-    help="Push outputs to the remote cache after each successful run.",
-)
-@click.option(
-    "--adopt",
-    "do_adopt",
-    is_flag=True,
-    help=(
-        "Record the row for a remotely-certified entry (see `specthis manifest`) "
-        "without running anything or holding the bytes."
-    ),
+    "--pipeline",
+    "pipeline_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Pipeline file (default: pipeline.toml at the project root).",
 )
 @_path_option
-def run_cmd(
-    entry: str | None,
-    run_stale: bool,
-    jobs: int,
-    do_fetch: bool,
-    do_push: bool,
-    do_adopt: bool,
-    project_path: Path,
+def build_cmd(
+    entries: tuple[str, ...], force: bool, pipeline_path: Path | None, project_path: Path
 ) -> None:
-    """Run one entry (or the whole machine queue) and record the claim.
+    """Hand the pipeline to a compute manager and adopt what comes back.
 
-    Writes runs.toml only; never touches vouches.toml. --stale takes
-    the machine queue: every stale or never-run entry with code whose
-    definition is not rejected — certification does not gate compute
-    (an unvouched entry rebuilds while a mind audits it). With --fetch,
-    an entry whose recorded claim already matches today's inputs is
-    materialized from the cache instead of recomputed. With --adopt,
-    nothing runs and no bytes move: the claim certified where the
-    entry ran (`specthis manifest`) is recorded here. With --stale -p N,
-    independent branches of the DAG rebuild concurrently.
+    specthis never selects steps: the whole pipeline goes over, and the
+    manager decides what actually executes (it alone can know whether a
+    rerun reproduces identical bytes). Naming ENTRIES scopes a repair;
+    --force bypasses the manager's cache for them.
+
+    Every manifest is verified against the bytes on disk before it is
+    recorded. That proves transcription, never derivation.
     """
     project = _load(project_path)
-    if run_stale == (entry is not None):
-        raise click.ClickException("give exactly one of ENTRY or --stale")
-    if do_adopt and (run_stale or do_fetch or do_push):
-        raise click.ClickException(
-            "--adopt records a remote claim for one entry; it does not run, "
-            "fetch, or push bytes"
-        )
-    if jobs > 1 and not run_stale:
-        raise click.ClickException(
-            "-p/--parallel applies to --stale — a single entry is one run"
-        )
-    if entry is not None:
-        _require_active(project, entry)
-        if is_library(project.entries[entry]):
-            raise click.ClickException(
-                f"`{entry}` is a library entry — the chain stops at code; "
-                "there is nothing to run, only to vouch"
-            )
-        if do_adopt:
-            from .cache import CacheError
-            from .remote import RemoteError, adopt
-
-            try:
-                run = adopt(project, entry)
-            except (RemoteError, CacheError) as exc:
-                raise click.ClickException(str(exc)) from exc
-            click.echo(
-                f"adopted remote run of `{entry}` -> {run.output_sha[:12]}… "
-                f"(via {run.executor}; bytes stay remote — "
-                f"`specthis cache fetch {entry}` materializes)"
-            )
-            return
-        if do_fetch and _try_fetch(project, entry):
-            return
-        _execute_entry(project, entry, push_after=do_push)
-        return
-    order = topo_order(project)
-    queue = [n for n in order if machine_repairable(check_project(project)[n])]
-    if queue:
-        par = f" (up to {jobs} in parallel)" if jobs > 1 else ""
-        click.echo(
-            f"{len(queue)} entr{'y' if len(queue) == 1 else 'ies'} in the machine "
-            f"queue{par}: " + " -> ".join(queue)
-        )
-    started = time.monotonic()
-    failures: list[str] = []
-    if jobs > 1:
-        ran, fetched, skipped, failures = _run_stale_parallel(project, jobs, do_fetch, do_push)
-    else:
-        ran, fetched, skipped = 0, 0, []
-        for i, name in enumerate(order):
-            # Re-derive after every run: an upstream rebuild makes new entries stale.
-            reports = check_project(project)
-            report = reports[name]
-            if machine_repairable(report):
-                if do_fetch and _try_fetch(project, name):
-                    fetched += 1
-                    continue
-                # The queue can grow mid-run (an upstream whose output moved
-                # makes new entries stale), so the total is re-counted live.
-                done = ran + fetched
-                left = sum(1 for m in order[i + 1 :] if machine_repairable(reports[m]))
-                _execute_entry(
-                    project, name, push_after=do_push, position=f"[{done + 1}/{done + 1 + left}]"
-                )
-                ran += 1
-            elif do_fetch and not report.materialized and _try_fetch(project, name):
-                # Claim stands, bytes elsewhere: --fetch is the explicit demand
-                # to materialize; without it the entry is left alone (never
-                # recomputed just because the bytes are not local).
-                fetched += 1
-            elif report.certification is not Certification.CERTIFIED:
-                skipped.append((name, report.certification.value))
-    summary = f"rebuilt {ran} entr{'y' if ran == 1 else 'ies'}"
-    if fetched:
-        summary += f", fetched {fetched} from cache"
-    if ran or fetched:
-        summary += f" in {_fmt_duration(time.monotonic() - started)}"
-    click.echo(summary)
-    for name, why in skipped:
-        click.echo(f"  skipped {name}: {why} (needs a mind, not a machine)", err=True)
-    if failures:
-        n = len(failures)
-        raise click.ClickException(
-            f"{n} entr{'y' if n == 1 else 'ies'} failed; nothing recorded for failed runs"
-        )
-
-
-# ------------------------------------------------------------- manifest
-
-
-@main.command("manifest")
-@click.argument("entry")
-@click.option(
-    "--executor",
-    default="remote",
-    show_default=True,
-    help="Executor label recorded in the claim (e.g. scripthut:mercury).",
-)
-@_path_option
-def manifest_cmd(entry: str, executor: str, project_path: Path) -> None:
-    """Certify THIS machine's bytes for ENTRY and upload them to the cache.
-
-    Run where the repo checkout and the output bytes coexist — an HPC
-    task's last step. Uploads the outputs tarball plus a manifest
-    sidecar under the entry's composed signature, and records the
-    derived row in this clone's runs.toml (so later entries in the same
-    workflow compose fresh signatures) — the tool never commits it.
-    The git pen stays wherever `specthis run --adopt` is used.
-    """
-    project = _load(project_path)
-    _require_active(project, entry)
-    from .cache import CacheError
-    from .remote import RemoteError, certify
-
     try:
-        m = certify(project, entry, executor=executor)
-    except (RemoteError, CacheError) as exc:
+        backend = resolve_backend(project, pipeline_path)
+        steps = backend.parse()
+    except (BackendError, PipelineError) as exc:
         raise click.ClickException(str(exc)) from exc
-    n = len(m.outputs)
-    click.echo(
-        f"certified `{entry}` at signature {m.signature[:12]}… "
-        f"({n} output{'s' if n != 1 else ''}, output_sha {m.output_sha[:12]}…)"
-    )
-    click.echo(f"adopt on the ledger machine with: specthis run {entry} --adopt")
+
+    unknown = sorted(set(entries) - set(steps))
+    if unknown:
+        raise click.ClickException(f"no pipeline step for: {', '.join(unknown)}")
+    if force and not entries:
+        raise click.ClickException("--force needs the entries to force; it is a repair, not a mode")
+
+    handle = backend.submit(list(entries) or None, force=force)
+    state = backend.poll(handle)
+    produced = backend.manifests(handle)
+
+    # Steps carry pipeline ids; claims are keyed by entry — or by
+    # instance, for a template. The mapping comes from output patterns,
+    # never from how a backend chose to name its steps.
+    instance_of_step = {sid: inst.name for sid, (_e, inst) in instances_by_step(project).items()}
+
+    adopted, refused = [], []
+    for sid, manifest in sorted(produced.items()):
+        key = instance_of_step.get(sid, sid)
+        if key not in project.entries and key not in instance_of_step.values():
+            continue  # a step with no entry: lint's business, not adoption's
+        try:
+            adopted.append(adopt_manifest(project, key, manifest))
+        except AdoptError as exc:
+            refused.append(str(exc))
+
+    for a in adopted:
+        note = " (output unchanged — downstream claims unaffected)" if a.reproduced else ""
+        click.echo(f"  adopted {a.entry} -> {a.run.output_sha[:12]}…{note}")
+    click.echo(f"{len(adopted)} claim(s) recorded from {backend.name}")
+    for why in refused:
+        click.echo(f"  refused: {why}", err=True)
+    if refused or state == FAILED:
+        raise click.ClickException(
+            "some steps failed or their manifests were refused; nothing recorded for those"
+        )
 
 
 # ---------------------------------------------------------------- vouch
@@ -684,9 +538,16 @@ def vouch_cmd(
     Writes vouches.toml only; never touches runs.toml.
     """
     project = _load(project_path)
-    _require_active(project, entry)
-    e = project.entries[entry]
-    c = code_sha(project, e)
+    try:
+        e, inst = resolve_key(project, entry)
+    except KeyError:
+        raise click.ClickException(f"unknown entry `{entry}`") from None
+    _require_active(project, e.name)
+    c = (
+        hashing.output_sha(project.root, list(inst.outputs))
+        if inst and is_source(e)
+        else code_sha(project, e)
+    )
     if c is None:
         raise click.ClickException(
             f"`{entry}` has no code on disk ({', '.join(e.binding.scripts)}) — nothing to judge"
@@ -701,6 +562,9 @@ def vouch_cmd(
         # Decomposed digests: when this vouch later expires, check/status
         # can say WHAT moved instead of only that something did.
         spec_block_sha=e.block_sha,
+        # The wiring is part of what was judged: realizing a spec means
+        # writing code *and* feeding it the right inputs (spec §1).
+        step_sha=(step_digest(project, e) or "") if inst is None else "",
         code_manifest=code_manifest(project, e),
         duration_seconds=took_seconds,
     )
@@ -714,7 +578,15 @@ def vouch_cmd(
     # won't read `ready` yet.
     if vouch.verdict == "ok" and e.consumes:
         reports = check_project(project)
-        pending = sorted(up for up in e.consumes if reports[up].status is not Status.READY)
+        # An upstream may be a template, which has no report of its own —
+        # its instances carry the claims, and any one of them unverified
+        # leaves this entry waiting.
+        by_entry = keys_for(reports)
+        pending = sorted(
+            up
+            for up in e.consumes
+            if not all(verified(reports[k]) for k in by_entry.get(up, []))
+        )
         if pending:
             click.echo(
                 f"note: upstream not yet verified ({', '.join(pending)}) — "
@@ -825,83 +697,6 @@ def serve_cmd(host: str, port: int, project_path: Path) -> None:
 
     _load(project_path)  # fail fast with a clear message if specs/ is absent/broken
     serve(host, port, project_path)
-
-
-# ---------------------------------------------------------------- cache
-
-
-@main.group("cache")
-def cache_group() -> None:
-    """Remote byte cache keyed by composed signature (never writes ledgers).
-
-    Configure with `[cache] url = "s3://bucket/prefix"` (or file:///path)
-    in specs/bindings.toml, or the SPECTHIS_CACHE_URL env var.
-    """
-
-
-def _cache_op(project_path: Path, entry: str | None = None):
-    from . import cache as cache_mod
-
-    project = _load(project_path)
-    if entry is not None:
-        _require_active(project, entry)
-    return cache_mod, project
-
-
-@cache_group.command("push")
-@click.argument("entry")
-@_path_option
-def cache_push_cmd(entry: str, project_path: Path) -> None:
-    """Upload the entry's certified outputs under its recorded signature."""
-    cache_mod, project = _cache_op(project_path, entry)
-    try:
-        key = cache_mod.push(project, entry)
-    except cache_mod.CacheError as exc:
-        raise click.ClickException(str(exc)) from exc
-    click.echo(f"pushed {key}")
-
-
-@cache_group.command("fetch")
-@click.argument("entry")
-@_path_option
-def cache_fetch_cmd(entry: str, project_path: Path) -> None:
-    """Materialize the entry's recorded outputs (verified against the claim)."""
-    cache_mod, project = _cache_op(project_path, entry)
-    try:
-        key = cache_mod.fetch(project, entry)
-    except cache_mod.CacheError as exc:
-        raise click.ClickException(str(exc)) from exc
-    click.echo(f"fetched {key}")
-
-
-@cache_group.command("has")
-@click.argument("entry")
-@_path_option
-def cache_has_cmd(entry: str, project_path: Path) -> None:
-    """Exit 0 if the cache holds the entry's recorded signature."""
-    cache_mod, project = _cache_op(project_path, entry)
-    try:
-        present = cache_mod.has(project, entry)
-    except cache_mod.CacheError as exc:
-        raise click.ClickException(str(exc)) from exc
-    click.echo("hit" if present else "miss")
-    if not present:
-        sys.exit(1)
-
-
-@cache_group.command("list")
-@_path_option
-def cache_list_cmd(project_path: Path) -> None:
-    """List cached archives."""
-    cache_mod, project = _cache_op(project_path)
-    try:
-        keys = cache_mod.list_keys(project)
-    except cache_mod.CacheError as exc:
-        raise click.ClickException(str(exc)) from exc
-    for key in keys:
-        click.echo(key)
-    if not keys:
-        click.echo("(cache is empty)", err=True)
 
 
 # -------------------------------------------------------------- migrate

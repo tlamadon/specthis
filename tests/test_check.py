@@ -10,7 +10,8 @@ from specthis.check import (
     Realization,
     Status,
     check_project,
-    frontier,
+    queues,
+    verified,
 )
 from specthis.parse import load_project
 
@@ -95,14 +96,24 @@ def test_package_edit_returns_every_entry_to_audit_needed(root: Path) -> None:
 # --------------------------------------------------- what makes it stale
 
 
-def test_workflow_file_edit_is_stale_not_audit(root: Path) -> None:
-    # hut.*.json is an execution input, not judged code: signature moves,
-    # vouch stands.
+def test_a_config_edit_is_stale_not_unvouched(root: Path) -> None:
+    """An execution input is not judged code: the run claim moves, the
+    vouch stands. Config lives in the pipeline's deps now, which is what
+    makes the distinction the map's `scripts` field draws."""
+    from .conftest import PY
+
+    write(root, "pipeline.toml", f'''
+[steps.fit-alpha]
+command = '{PY} scripts/fit_alpha.py'
+deps    = ["scripts/fit_alpha.py", "hut.fit-alpha.json"]
+outs    = ["results/alpha/fit.json"]
+''')
     make_ready(root)
     write(root, "hut.fit-alpha.json", '{"backend": "pbs"}\n')
     r = report(root, "fit-alpha")
-    assert r.status is Status.STALE
-    assert r.moved == ["hut.fit-alpha.json"]
+    assert r.certification is Certification.CERTIFIED, "config is not judged code"
+    assert r.realization is Realization.STALE
+    assert r.moved == ["~hut.fit-alpha.json"]
 
 
 def test_output_edited_on_disk_is_stale(root: Path) -> None:
@@ -110,7 +121,7 @@ def test_output_edited_on_disk_is_stale(root: Path) -> None:
     write(root, "results/alpha/fit.json", '{"loss": 999}')
     r = report(root, "fit-alpha")
     assert r.status is Status.STALE
-    assert "output" in r.moved[0]
+    assert r.moved == ["out:results/alpha/fit.json"]
 
 
 def test_output_deleted_reads_ready_bytes_remote(root: Path) -> None:
@@ -122,9 +133,10 @@ def test_output_deleted_reads_ready_bytes_remote(root: Path) -> None:
     r = report(root, "fig-beta")
     assert r.status is Status.READY
     assert not r.materialized
-    local, _waiting, ready = frontier(check_project(load_project(root)))
-    assert "fig-beta" not in {x.entry for x in local}
-    assert ready == 3
+    reports = check_project(load_project(root))
+    mind, machine = queues(reports)
+    assert "fig-beta" not in {x.entry for x in [*mind, *machine]}
+    assert sum(1 for x in reports.values() if verified(x)) == 3
 
 
 def test_upstream_rerun_makes_downstream_stale(root: Path) -> None:
@@ -135,7 +147,7 @@ def test_upstream_rerun_makes_downstream_stale(root: Path) -> None:
     s = statuses(root)
     assert s["fit-alpha"] is Status.READY
     assert s["fit-beta"] is Status.STALE, "upstream re-run must not be invisible"
-    assert "upstream:fit-alpha" in report(root, "fit-beta").moved
+    assert "~upstream:fit-alpha" in report(root, "fit-beta").moved
 
 
 # ------------------------------------------------------------ propagation
@@ -150,13 +162,16 @@ def test_upstream_break_propagates_without_expiring_vouches(root: Path) -> None:
     assert s["fig-beta"] is Status.UPSTREAM_UNVERIFIED  # transitive
 
 
-def test_frontier_itemizes_local_summarizes_downstream(root: Path) -> None:
+def test_queues_itemize_local_breaks_and_downstream_is_a_count(root: Path) -> None:
     make_ready(root)
     (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
-    local, waiting, ready = frontier(check_project(load_project(root)))
-    assert [r.entry for r in local] == ["fit-alpha"]
-    assert waiting == 2
-    assert ready == 0
+    reports = check_project(load_project(root))
+    mind, machine = queues(reports)
+    # the edit broke both axes of one entry; downstream is never itemized
+    assert [r.entry for r in mind] == ["fit-alpha"]
+    assert [r.entry for r in machine] == ["fit-alpha"]
+    assert sum(1 for r in reports.values() if not verified(r)) == 3
+    assert sum(1 for r in reports.values() if verified(r)) == 0
 
 
 def test_consumes_cycle_is_an_error(root: Path) -> None:
@@ -194,7 +209,7 @@ def test_code_edit_breaks_both_axes(root: Path) -> None:
     assert r.status is Status.AUDIT_NEEDED  # legacy word unchanged
     assert r.certification is Certification.UNVOUCHED
     assert r.realization is Realization.STALE
-    assert r.moved == ["scripts/fit_alpha.py"]  # run-axis attribution, never vouch-gated
+    assert r.moved == ["~scripts/fit_alpha.py"]  # run-axis attribution, never vouch-gated
 
 
 def test_spec_prose_edit_breaks_only_the_vouch_axis(root: Path) -> None:

@@ -1,0 +1,7 @@
+.specthis/
+data/chile/
+data/argentina/
+results/
+reports/
+specs/runs.toml
+specs/vouches.toml

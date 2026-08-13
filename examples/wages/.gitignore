@@ -1,0 +1,6 @@
+.specthis/
+data/wages.csv
+results/
+reports/
+specs/runs.toml
+specs/vouches.toml

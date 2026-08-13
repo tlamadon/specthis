@@ -1,10 +1,14 @@
-"""Status derivation and the frontier report. Pure — zero writes.
+"""Status derivation. Pure — zero writes.
 
-``status()`` answers, per entry, whether its claims still hold and
-what kind of repair a broken one needs: a mind (AUDIT_NEEDED /
-REJECTED), a machine (STALE), or patience (UPSTREAM_UNVERIFIED).
-Everything derives from content digests and the two ledgers; nothing
-here consults mtime or writes a byte.
+Per entry, two independent coordinates — ``Certification`` (the logic
+axis: is the definition judged?) and ``Realization`` (the compute axis:
+do the recorded bytes follow?) — plus per-tree propagation. Together
+they say what a broken claim needs: a mind, a machine, or patience.
+
+Everything is decided on the recorded *tables* (``code_manifest``,
+``Run.inputs``) against the tables today's content implies; composed
+digests are a fast path, and ``Status`` is a rendering of the pair, not
+an input to anything. Nothing here consults mtime or writes a byte.
 """
 
 from __future__ import annotations
@@ -14,11 +18,20 @@ from enum import Enum
 from graphlib import CycleError, TopologicalSorter
 
 from . import hashing
+from .instances import Instance, instances, is_template
 from .ledger import Run, Vouch, read_runs, read_vouches
 from .parse import Entry, Project
 
 
 class Status(Enum):
+    """The flattened single word — **display only**.
+
+    Derived from the two axes (certification breaks win, then
+    staleness, then composition). Nothing decides on it; ``verified()``
+    is the two-coordinate form of ``READY``. Retired from every surface
+    per `docs/specification.md` §11.
+    """
+
     UNIMPLEMENTED = "unimplemented"
     AUDIT_NEEDED = "audit needed"
     REJECTED = "rejected"
@@ -47,10 +60,6 @@ class Realization(Enum):
     NEVER_RUN = "never-run"
     STALE = "stale"  # signature mismatch, or output bytes edited on disk
     CURRENT = "current"
-
-
-#: Broken for reasons local to the entry — itemized on the frontier.
-LOCAL_BREAKS = {Status.UNIMPLEMENTED, Status.AUDIT_NEEDED, Status.REJECTED, Status.STALE}
 
 
 class CheckError(Exception):
@@ -87,6 +96,10 @@ class Report:
     #: on this disk (they live in the cache / on the machine that ran) —
     #: ready-but-fetchable, never a local break.
     materialized: bool = True
+    #: For a template instance: the template it realizes, and the props
+    #: that distinguish it. ``None``/empty for an ordinary entry.
+    instance_of: str | None = None
+    props: dict[str, str] = field(default_factory=dict)
 
 
 def code_present(project: Project, entry: Entry) -> bool:
@@ -96,7 +109,17 @@ def code_present(project: Project, entry: Entry) -> bool:
 
 
 def is_library(entry: Entry) -> bool:
-    return entry.spec.kind == "library"
+    return entry.kind == "library"
+
+
+def is_source(entry: Entry) -> bool:
+    """A dataset: bytes arriving from outside any pipeline (§2).
+
+    It computes nothing, so it has no code and no step. Its *vouch*
+    attests provenance — "this is IPUMS extract #14" — and its run claim
+    pins the bytes, placed by hand and recorded.
+    """
+    return entry.kind == "source"
 
 
 def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
@@ -106,7 +129,13 @@ def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
     Recorded on vouches so that when the composed digest moves, the
     movement can be attributed (which script? the blob?) instead of
     only detected.
+
+    A **source** entry has no code: its data is the subject, so the
+    bytes stand in and a provenance vouch expires exactly when the
+    dataset is replaced.
     """
+    if is_source(entry):
+        return hashing.files_manifest(project.root, entry.outputs)
     manifest = {
         s: hashing.file_sha(project.root / s) or hashing.MISSING
         for s in entry.binding.scripts
@@ -119,10 +148,79 @@ def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
 
 
 def code_sha(project: Project, entry: Entry) -> str | None:
-    """Manifest over the entry's scripts plus the package blob digest."""
+    """Manifest over the entry's scripts plus the package blob digest.
+
+    For a **source** entry there is no code: the subject of the claim is
+    the data itself, so the bytes stand in. A provenance vouch then
+    expires exactly when the dataset is replaced, which is the only
+    thing that should expire it.
+    """
+    if is_source(entry):
+        return hashing.output_sha(project.root, entry.outputs)
     if not code_present(project, entry):
         return None
     return hashing.manifest_sha(code_manifest(project, entry).items())
+
+
+def sibling_keys(project: Project, entry: Entry, inst: Instance) -> dict[str, str]:
+    """For each consumed entry, the ledger key that feeds *this* instance.
+
+    A templated upstream contributes the sibling agreeing on every prop
+    they share — the binding is by name, so it is already written down.
+    Anything else contributes itself. Derived from the project alone, so
+    ``adopt`` and ``check`` cannot disagree about what a claim pins.
+    """
+    keys: dict[str, str] = {}
+    for up in entry.consumes:
+        up_entry = project.entries.get(up)
+        if up_entry is None or not is_template(up_entry):
+            continue
+        for cand in instances(project, up_entry):
+            if all(inst.binding.get(k) == v for k, v in cand.binding.items()
+                   if k in inst.binding):
+                keys[up] = cand.name
+                break
+    return keys
+
+
+def instance_inputs(
+    project: Project,
+    entry: Entry,
+    inst: Instance,
+    runs: dict[str, Run],
+    upstream_keys: dict[str, str],
+) -> dict[str, str]:
+    """The input table one *instance* of a template would record.
+
+    Same shape as :func:`expected_inputs`: shared code (every instance
+    runs the same code — that is what lets one vouch cover the
+    template), the package blob, this instance's own step, and each
+    upstream's recorded output digest. ``upstream_keys`` maps a consumed
+    entry name to the ledger key that actually feeds this instance,
+    which for a templated upstream is a sibling instance.
+    """
+    step = project.steps.get(inst.step)
+    read = list(step.deps) if step is not None else list(entry.binding.scripts)
+    upstream_paths = {
+        p for up in entry.consumes for p in project.entries[up].outputs
+    }
+    inputs = hashing.files_manifest(
+        project.root, [p for p in read if p not in upstream_paths]
+    )
+    if project.package_globs:
+        inputs["package"] = hashing.package_sha(
+            project.root, project.package_globs, project.library_scripts
+        )
+    if step is not None:
+        inputs[f"step:{inst.name}"] = hashing.step_sha(step.command, step.deps, step.outs)
+    for up in entry.consumes:
+        key = upstream_keys.get(up)
+        if key and key != up:  # a sibling instance feeds this one
+            r = runs.get(key)
+            inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
+        else:
+            inputs[f"upstream:{up}"] = upstream_digest(project, up, runs)
+    return inputs
 
 
 def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dict[str, str]:
@@ -135,21 +233,115 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
     A library upstream has no output: its code manifest stands in, so
     a module edit makes its consumers stale (rerun with the new code).
     """
+    if is_source(entry):
+        return hashing.files_manifest(project.root, entry.outputs)
+
+    # The pipeline declares what a step reads, so its deps *are* the
+    # input set: code (whatever `map.scripts` names among them) and
+    # execution inputs alike. Without a pipeline, the bound scripts and
+    # workflows stand in.
+    step = project.steps.get(entry.name)
+    read = list(step.deps) if step is not None else list(entry.binding.scripts)
+    upstream_paths = {
+        p for up in entry.consumes for p in project.entries[up].outputs
+    }
     inputs = hashing.files_manifest(
-        project.root, [*entry.binding.scripts, *entry.binding.workflows]
+        project.root, [p for p in read if p not in upstream_paths]
     )
     if project.package_globs:
         inputs["package"] = hashing.package_sha(
             project.root, project.package_globs, project.library_scripts
         )
+    if (sd := step_digest(project, entry)) is not None:
+        inputs[f"step:{entry.name}"] = sd
     for up in entry.consumes:
-        up_entry = project.entries[up]
-        if is_library(up_entry):
-            inputs[f"upstream:{up}"] = code_sha(project, up_entry) or hashing.MISSING
-        else:
-            r = runs.get(up)
-            inputs[f"upstream:{up}"] = r.output_sha if r else hashing.MISSING
+        inputs[f"upstream:{up}"] = upstream_digest(project, up, runs)
     return inputs
+
+
+def upstream_digest(project: Project, up: str, runs: dict[str, Run]) -> str:
+    """The digest a consumer pins for one upstream entry.
+
+    A library has no product, so its code manifest stands in. A
+    **template** has no claim of its own — its instances do — so a
+    consumer aggregating the whole family pins a composition over their
+    recorded outputs, which moves when any one of them moves.
+    """
+    up_entry = project.entries[up]
+    if is_library(up_entry):
+        return code_sha(project, up_entry) or hashing.MISSING
+    if is_template(up_entry):
+        return hashing.manifest_sha(
+            (i.name, (runs[i.name].output_sha if i.name in runs else hashing.MISSING))
+            for i in instances(project, up_entry)
+        )
+    r = runs.get(up)
+    return r.output_sha if r else hashing.MISSING
+
+
+def step_digest(project: Project, entry: Entry) -> str | None:
+    """The entry's pipeline step digest, or ``None`` when it has no step.
+
+    Source and library entries never have one; nor does any entry in a
+    project without a ``pipeline.toml``, which is why adding the file
+    is the only thing that brings ``step:`` rows into existence.
+    """
+    step = project.steps.get(entry.name)
+    if step is None:
+        return None
+    return hashing.step_sha(step.command, step.deps, step.outs)
+
+
+def step_moved(project: Project, entry: Entry, v: Vouch) -> bool:
+    """Has the wiring moved since this vouch?
+
+    Only decidable when both sides have a digest: a project that gained
+    a pipeline after the vouch was filed has nothing to compare against,
+    and inventing a break there would expire every judgment at once.
+    """
+    now = step_digest(project, entry)
+    if now is None or not v.step_sha:
+        return False
+    return v.step_sha != now
+
+
+def spec_moved(entry: Entry, v: Vouch) -> bool:
+    """Has the *judged text* moved since this vouch?
+
+    A vouch's subject is the entry's own block, never the whole file:
+    editing a sibling entry must not expire this one. Rows written
+    before ``spec_block_sha`` existed fall back to the file digest —
+    coarser, so they over-expire rather than under-expire.
+    """
+    if v.spec_block_sha:
+        return v.spec_block_sha != entry.block_sha
+    return v.spec_sha != entry.spec.spec_sha
+
+
+def table_diff(before: dict[str, str], after: dict[str, str], prefix: str = "") -> list[str]:
+    """Rows that differ between a recorded table and an implied one.
+
+    ``+path`` entered the claim's scope, ``-path`` left it, ``~path``
+    kept its place and moved its content. A composed digest can only
+    say that *something* differs; the table says which, and how.
+    """
+    out: list[str] = []
+    for k in sorted(set(before) | set(after)):
+        b, a = before.get(k), after.get(k)
+        if b == a:
+            continue
+        mark = "+" if b is None else "-" if a is None else "~"
+        out.append(f"{prefix}{mark}{'package blob' if k == 'package' else k}")
+    return out
+
+
+def code_moved(project: Project, entry: Entry, v: Vouch, code_sha_now: str | None) -> bool:
+    """Has the judged code moved? Decided on the recorded *table*; rows
+    written before ``code_manifest`` existed fall back to the composed
+    digest, which detects the same movements but cannot attribute them."""
+    if v.code_manifest:
+        return code_manifest(project, entry) != v.code_manifest
+    return v.code_sha != code_sha_now
 
 
 def expired_since_vouch(
@@ -159,23 +351,20 @@ def expired_since_vouch(
     and now. Falls back to bare "spec moved" / "code moved" for rows
     written before the decomposed fields existed."""
     out: list[str] = []
-    if v.spec_sha != spec_sha_now:
+    if spec_moved(entry, v):
         fname = entry.spec.path.name
-        if not v.spec_block_sha:
-            out.append(f"spec: {fname} moved")
-        elif v.spec_block_sha == entry.block_sha:
-            out.append(f"spec: {fname} moved outside this entry's block")
-        else:
+        if v.spec_block_sha:
             out.append(f"spec: this entry's block in {fname} moved")
-    if v.code_sha != code_sha_now:
+        else:
+            out.append(f"spec: {fname} moved")
+    if step_moved(project, entry, v):
+        out.append(f"step: {entry.name} rewired")
+    if code_moved(project, entry, v, code_sha_now):
         if v.code_manifest:
-            current = code_manifest(project, entry)
-            moved = [
-                "code: package blob moved" if k == "package" else f"code: {k} moved"
-                for k in sorted(set(current) | set(v.code_manifest))
-                if current.get(k) != v.code_manifest.get(k)
-            ]
-            out.extend(moved or ["code moved"])
+            out.extend(
+                table_diff(v.code_manifest, code_manifest(project, entry), "code: ")
+                or ["code moved"]
+            )
         else:
             out.append("code moved")
     return out
@@ -193,39 +382,46 @@ def topo_order(project: Project) -> list[str]:
 def _certify(
     project: Project, entry: Entry, v: Vouch | None, s: str, c: str | None
 ) -> tuple[Certification, list[str]]:
-    """The vouch axis, with expiry attribution when a prior vouch exists."""
-    if v is None or (v.spec_sha, v.code_sha) != (s, c):
-        if c is None:
-            return Certification.UNIMPLEMENTED, []
-        expired = expired_since_vouch(project, entry, v, s, c) if v is not None else []
-        return Certification.UNVOUCHED, expired
+    """The vouch axis, with expiry attribution when a prior vouch exists.
+
+    Decided on the two recorded tables — the entry's own block
+    (``spec_moved``) and its code manifest (``code_moved``). A sibling
+    entry's edit is somebody else's business, and a composed digest is
+    only a fast path.
+    """
+    if c is None:
+        return Certification.UNIMPLEMENTED, []
+    if v is None:
+        return Certification.UNVOUCHED, []
+    if spec_moved(entry, v) or code_moved(project, entry, v, c) or step_moved(project, entry, v):
+        return Certification.UNVOUCHED, expired_since_vouch(project, entry, v, s, c)
     if v.verdict == "rejected":
         return Certification.REJECTED, []
     return Certification.CERTIFIED, []
 
 
-def _realize(
-    project: Project, entry: Entry, r: Run | None, runs: dict[str, Run]
+def _realize_table(
+    project: Project, r: Run | None, expected: dict[str, str], outputs: list[str]
 ) -> tuple[Realization, list[str], bool]:
-    """The run axis: (realization, moved attribution, materialized).
-
-    Absent bytes are not edited bytes: the row is a claim, not an
-    observation. The claim stands with the bytes elsewhere (fetch
-    verifies on materialization); only present-but-different bytes
-    are stale."""
-    expected = expected_inputs(project, entry, runs)
+    """The compute axis over an explicit table — shared by entries and
+    template instances, which differ only in which table they pin."""
     if r is None:
         return Realization.NEVER_RUN, [], True
-    if r.signature != hashing.signature(expected):
-        moved = sorted(
-            k for k in set(expected) | set(r.inputs) if expected.get(k) != r.inputs.get(k)
-        )
-        return Realization.STALE, moved, True
-    disk_sha = hashing.output_sha(project.root, entry.outputs)
+    if r.inputs:  # decided on the recorded table
+        if r.inputs != expected:
+            return Realization.STALE, table_diff(r.inputs, expected), True
+    elif r.signature != hashing.signature(expected):  # legacy row: nothing to diff
+        return Realization.STALE, ["inputs moved"], True
+    disk_sha = hashing.output_sha(project.root, outputs)
     if disk_sha is None:
         return Realization.CURRENT, [], False
     if disk_sha != r.output_sha:
-        return Realization.STALE, ["output (edited on disk)"], True
+        edited = [
+            f"out:{p}"
+            for p in sorted(outputs)
+            if r.outputs and hashing.file_sha(project.root / p) != r.outputs.get(p)
+        ]
+        return Realization.STALE, edited or ["output (edited on disk)"], True
     return Realization.CURRENT, [], True
 
 
@@ -246,48 +442,156 @@ def check_project(
     runs = read_runs(project.specs_dir) if runs is None else runs
 
     reports: dict[str, Report] = {}
+    #: entry name -> the ledger keys standing in for it. A template
+    #: contributes its instances; everything else contributes itself.
+    keys: dict[str, list[str]] = {}
+
     for name in topo_order(project):  # upstream first, so recursion is a lookup
         entry = project.entries[name]
-        s = entry.spec.spec_sha
-        c = code_sha(project, entry)
-        v = vouches.get(name)
-        r = runs.get(name)
-        report = Report(entry=name, status=Status.READY, spec_sha=s, code_sha=c, vouch=v, run=r)
-        reports[name] = report
-
-        report.certification, expired = _certify(project, entry, v, s, c)
-        certified = report.certification is Certification.CERTIFIED
-        if is_library(entry):
-            # The chain stops at code: no run, no output. A vouch at the
-            # current digests is the whole claim.
-            realization, moved, materialized = None, [], True
-        else:
-            realization, moved, materialized = _realize(project, entry, r, runs)
-        report.realization = realization
-
-        # Attribution and byte locality are run-axis facts: never gated
-        # by the vouch axis. An unvouched entry still knows what moved
-        # and where its bytes are.
-        report.expired = expired
-        report.moved = moved
-        report.materialized = materialized
-
-        report.computable = certified and all(reports[up].computable for up in entry.consumes)
-        report.realized = (
-            realization is None or realization is Realization.CURRENT
-        ) and all(reports[up].realized for up in entry.consumes)
-
-        if report.certification is Certification.UNIMPLEMENTED:
-            report.status = Status.UNIMPLEMENTED
-        elif report.certification is Certification.UNVOUCHED:
-            report.status = Status.AUDIT_NEEDED
-        elif report.certification is Certification.REJECTED:
-            report.status = Status.REJECTED
-        elif realization in (Realization.NEVER_RUN, Realization.STALE):
-            report.status = Status.STALE
-        elif any(reports[up].status is not Status.READY for up in entry.consumes):
-            report.status = Status.UPSTREAM_UNVERIFIED
+        for report in _reports_for(project, entry, vouches, runs, reports, keys):
+            reports[report.entry] = report
+            keys.setdefault(name, []).append(report.entry)
     return reports
+
+
+
+def _reports_for(
+    project: Project,
+    entry: Entry,
+    vouches: dict[str, Vouch],
+    runs: dict[str, Run],
+    reports: dict[str, Report],
+    keys: dict[str, list[str]],
+) -> list[Report]:
+    """One report per entry — or one per instance, for a template."""
+    name = entry.name
+    s = entry.spec.spec_sha
+    c = code_sha(project, entry)
+
+    if not is_template(entry):
+        return [
+            _one(
+                project, entry, name, vouches.get(name), runs.get(name), s, c,
+                expected_inputs(project, entry, runs), list(entry.outputs),
+                [k for up in entry.consumes for k in keys.get(up, [up])], reports,
+            )
+        ]
+
+    out: list[Report] = []
+    for inst in instances(project, entry):
+        # A source has no code: its data is the subject, and for a
+        # templated source that data is *this instance's* bytes — the
+        # pattern hashes to nothing.
+        if is_source(entry):
+            c = hashing.output_sha(project.root, list(inst.outputs))
+        # A vouch on the instance wins over one on the template (§15.4):
+        # the narrower claim is the more honest one.
+        v = vouches.get(inst.name) or vouches.get(name)
+        upstream_keys = sibling_keys(project, entry, inst)
+        upstream_reports = [
+            k for up in entry.consumes
+            for k in ([upstream_keys[up]] if up in upstream_keys else keys.get(up, []))
+            if k in reports
+        ]
+        report = _one(
+            project, entry, inst.name, v, runs.get(inst.name), s, c,
+            instance_inputs(project, entry, inst, runs, upstream_keys),
+            list(inst.outputs), upstream_reports, reports,
+        )
+        report.instance_of, report.props = name, inst.binding
+        out.append(report)
+    return out
+
+
+def _one(
+    project: Project,
+    entry: Entry,
+    key: str,
+    v: Vouch | None,
+    r: Run | None,
+    s: str,
+    c: str | None,
+    inputs: dict[str, str],
+    outputs: list[str],
+    upstream: list[str],
+    reports: dict[str, Report],
+) -> Report:
+    """Derive one report: both axes, then propagation over `upstream`."""
+    report = Report(entry=key, status=Status.READY, spec_sha=s, code_sha=c, vouch=v, run=r)
+    report.certification, report.expired = _certify(project, entry, v, s, c)
+    certified = report.certification is Certification.CERTIFIED
+
+    if is_library(entry):
+        realization, moved, materialized = None, [], True
+    else:
+        realization, moved, materialized = _realize_table(project, r, inputs, outputs)
+    report.realization = realization
+    report.moved, report.materialized = moved, materialized
+
+    report.computable = certified and all(reports[u].computable for u in upstream)
+    report.realized = (
+        realization is None or realization is Realization.CURRENT
+    ) and all(reports[u].realized for u in upstream)
+
+    if report.certification is Certification.UNIMPLEMENTED:
+        report.status = Status.UNIMPLEMENTED
+    elif report.certification is Certification.UNVOUCHED:
+        report.status = Status.AUDIT_NEEDED
+    elif report.certification is Certification.REJECTED:
+        report.status = Status.REJECTED
+    elif realization in (Realization.NEVER_RUN, Realization.STALE):
+        report.status = Status.STALE
+    elif any(reports[u].status is not Status.READY for u in upstream):
+        report.status = Status.UPSTREAM_UNVERIFIED
+    return report
+
+
+def coordinates(r: Report) -> str:
+    """The two coordinates as one readable string — `certified · stale`.
+
+    The rendering surfaces use in place of the flattened word (§11): a
+    2D state projected to 1D cannot say that an entry is unvouched *and*
+    stale, which is the common case while a mind and a machine work in
+    parallel.
+    """
+    axes = r.certification.value
+    if r.realization is not None:
+        axes += f" · {r.realization.value}"
+    if not r.materialized:
+        axes += " · bytes remote"
+    if r.computable and r.realized:
+        return axes
+    waiting = [
+        tree
+        for tree, ok in (("minds", r.computable), ("machines", r.realized))
+        if not ok
+    ]
+    local = r.certification is not Certification.CERTIFIED or r.realization in (
+        Realization.NEVER_RUN,
+        Realization.STALE,
+    )
+    return axes if local else f"{axes} · waiting on {' and '.join(waiting)}"
+
+
+def keys_for(reports: dict[str, Report]) -> dict[str, list[str]]:
+    """Entry name -> the report keys standing for it.
+
+    An ordinary entry stands for itself; a template stands for its
+    instances and has no report of its own. Surfaces that walk entries
+    must go through this, or they will look up a template by name and
+    find nothing.
+    """
+    out: dict[str, list[str]] = {}
+    for key, r in reports.items():
+        out.setdefault(r.instance_of or r.entry, []).append(key)
+    return out
+
+
+def ordered_keys(project: Project, reports: dict[str, Report]) -> list[str]:
+    """Every report key, upstream first — instances in place of their
+    template."""
+    keys = keys_for(reports)
+    return [k for name in topo_order(project) for k in sorted(keys.get(name, []))]
 
 
 def machine_repairable(r: Report) -> bool:
@@ -312,15 +616,10 @@ def queues(reports: dict[str, Report]) -> tuple[list[Report], list[Report]]:
     return mind, machine
 
 
-def frontier(reports: dict[str, Report]) -> tuple[list[Report], int, int]:
-    """Split reports into (itemized local breaks, waiting count, ready count).
+def verified(r: Report) -> bool:
+    """Every claim in this entry's lineage holds, on both trees.
 
-    The frontier itemizes entries broken for their own reasons; entries
-    that are merely downstream of a break are summarized as a count —
-    fixing the frontier heals them for free. Never report only "the
-    first broken link": this is a DAG.
+    The two-coordinate form of what the flattened word calls "ready".
+    Nothing decides on ``Status``; it is a rendering of this pair.
     """
-    local = [r for r in reports.values() if r.status in LOCAL_BREAKS]
-    waiting = sum(1 for r in reports.values() if r.status is Status.UPSTREAM_UNVERIFIED)
-    ready = sum(1 for r in reports.values() if r.status is Status.READY)
-    return local, waiting, ready
+    return r.computable and r.realized
