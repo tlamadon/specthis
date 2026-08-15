@@ -1,4 +1,4 @@
-"""Countersign a manager's manifest into the run ledger.
+"""Countersign a manager's manifest into the run ledger — and answer back.
 
 A manifest is an *unsigned factual report* from a machine: these input
 digests, through this command, produced these output digests. Adopting
@@ -14,17 +14,31 @@ manifest; it does not make the runner trustworthy.
 
 Fail closed: a manifest that disagrees with the bytes on disk is
 refused, never recorded with a warning.
+
+Adoption also has a **return path** (:func:`publish`, §7.8). Recording a
+claim and telling the manager nothing is what let ``check`` and ``build``
+disagree permanently about the same entry; the adopted set is the ledger
+projected into the manager's vocabulary, republished whenever a verb
+writes ``runs.toml``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import hashing
-from .check import expected_inputs, instance_inputs, sibling_keys
+from . import hashing, seam
+from .check import (
+    Realization,
+    Report,
+    check_project,
+    expected_inputs,
+    instance_inputs,
+    sibling_keys,
+)
 from .ledger import Run, read_runs, record_run
 from .instances import resolve_key
 from .parse import Project
+from .pipeline import producers
 
 
 class AdoptError(Exception):
@@ -109,3 +123,103 @@ def adopt_manifest(project: Project, entry_name: str, manifest: dict) -> Adopted
     )
     record_run(project.specs_dir, entry_name, run)
     return Adopted(entry_name, run, prior is not None and prior.output_sha == out_sha)
+
+
+# ------------------------------------------------------- the return path
+
+
+def step_of(project: Project, key: str) -> str | None:
+    """The pipeline step whose bytes a ledger key claims, or ``None``.
+
+    The seam runs on step ids and the ledger on entry keys, so every
+    bridge between them goes through here. **Identity comes from the
+    output path** (§15.3): a template's step ids are whatever the
+    backend called them, and matching an instance against the ``{prop}``
+    pattern is the only resolution that survives that. An ordinary entry
+    is looked up by name first, because that is the correspondence lint
+    enforces (§7.4) and the one ``check`` itself uses — falling back to
+    whichever step declares its outputs.
+
+    ``None`` for library and source entries, which have no step, and for
+    an entry whose bytes no step produces (lint's business, not ours).
+    """
+    entry, inst = resolve_key(project, key)
+    if inst is not None:
+        return inst.step or None
+    if key in project.steps:
+        return key
+    by_out = producers(project.steps)
+    return next((by_out[out] for out in entry.outputs if out in by_out), None)
+
+
+def _accounted_for(report: Report) -> bool:
+    """Does the ledger already answer for this key's bytes?
+
+    The **run axis only**. Adoption is a machine-currency claim and must
+    never imply a mind has judged anything, so an unvouched entry whose
+    bytes are current is still accounted for — telling a manager to
+    re-run it would not produce a vouch, only a bill.
+
+    ``materialized`` is the other half: a claim can stand while its bytes
+    live on the machine that made them (§10.3), and a manager cannot skip
+    work whose products are not here.
+    """
+    return report.realization is Realization.CURRENT and report.materialized
+
+
+def adopted_steps(
+    project: Project, reports: dict[str, Report] | None = None
+) -> dict[str, dict]:
+    """The adopted set: every step whose bytes the ledger accounts for.
+
+    Pure — derives the whole document from the ledger, the pipeline and
+    the bytes on disk, so it is a projection rather than state that can
+    drift. A step is published only when *every* key claiming it is
+    current (one command can serve many entries) and every path it
+    declares is on this disk: a partly-adopted step is not a satisfied
+    one, and recording an absent file's digest would let a manager skip
+    work whose output does not exist.
+
+    Propagation is deliberately not consulted. A step whose upstream is
+    stale still gets published, because the manager re-runs that upstream
+    and the resulting digests no longer match this record — the digest
+    comparison is what makes the answer safe, not our opinion about it.
+    """
+    reports = check_project(project) if reports is None else reports
+
+    claimed: dict[str, list[str]] = {}
+    for key in sorted(reports):
+        sid = step_of(project, key)
+        if sid is not None and sid in project.steps:
+            claimed.setdefault(sid, []).append(key)
+
+    out: dict[str, dict] = {}
+    for sid, keys in sorted(claimed.items()):
+        if not all(_accounted_for(reports[k]) for k in keys):
+            continue
+        step = project.steps[sid]
+        deps = hashing.files_manifest(project.root, step.deps)
+        outs = hashing.files_manifest(project.root, step.outs)
+        if not outs or hashing.MISSING in {*deps.values(), *outs.values()}:
+            continue
+        out[sid] = {"entries": keys, "command": step.command, "deps": deps, "outs": outs}
+    return out
+
+
+def publish(project: Project, reports: dict[str, Report] | None = None) -> dict[str, dict]:
+    """Write the adopted set and return it. The one writer of that file.
+
+    No pipeline, no seam: a project without one has no manager to answer
+    and gets no document — unless a stale one is lying there, which is
+    emptied rather than left to be believed.
+
+    Concurrency errs in the safe direction. A claim recorded by another
+    process between this projection's ledger read and its write is simply
+    absent from the document, which costs a re-run — never a wrong skip,
+    since a step is published only against digests read here. ``build``
+    republishes before every handoff, so the miss does not persist.
+    """
+    steps = adopted_steps(project, reports)
+    if project.steps or (project.root / seam.DOCUMENT).is_file():
+        seam.write_adopted(project.root, steps)
+    return steps

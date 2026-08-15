@@ -178,15 +178,44 @@ def test_skipped_steps_report_the_digests_a_run_would_have(proj: Path) -> None:
 # -------------------------------------------------------------- boundary
 
 
+SRC = Path(__file__).parent.parent / "src/specthis"
+NOTARY = {"check", "ledger", "parse", "hashing", "cache", "remote", "adopt", "cli"}
+
+
+def siblings_imported_by(module: str) -> set[str]:
+    """Modules of this package that ``module`` imports, however phrased."""
+    tree = ast.parse((SRC / f"{module}.py").read_text())
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module:
+                out.add(node.module.split(".")[-1] if node.level else node.module)
+            elif node.level:  # `from . import hashing`
+                out.update(a.name for a in node.names)
+        elif isinstance(node, ast.Import):
+            out.update(a.name.split(".")[-1] for a in node.names)
+    return out
+
+
 def test_runner_never_imports_the_notary() -> None:
     """`specthis never forks a process` stays true of the notary: the
-    runner is a co-shipped tool, not part of it."""
-    src = Path(__file__).parent.parent / "src/specthis/runner.py"
-    tree = ast.parse(src.read_text())
-    imported = {
-        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
-    } | {a.name for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names}
-    assert not imported & {"check", "ledger", "parse", "hashing", "cache", "remote"}
+    runner is a co-shipped tool, not part of it.
+
+    Transitively, because the seam is now three documents and reading the
+    third could so easily have been done by importing `adopt`. The runner
+    may read what crosses the seam and nothing behind it — if satisfying
+    §14 needed notary internals, the contract would be underspecified.
+    """
+    reachable: set[str] = set()
+    frontier = ["runner"]
+    while frontier:
+        module = frontier.pop()
+        if module in reachable:
+            continue
+        reachable.add(module)
+        frontier.extend(m for m in siblings_imported_by(module) if (SRC / f"{m}.py").is_file())
+    assert not reachable & NOTARY, f"the runner reaches the notary via {sorted(reachable & NOTARY)}"
+    assert reachable == {"runner", "pipeline", "seam"}
 
 
 def test_a_command_change_reruns_the_step(proj: Path) -> None:

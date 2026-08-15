@@ -179,8 +179,19 @@ specthis build [entries…]      # hand the pipeline to the manager, adopt what 
 specthis build <entry> --force # rebuild an artefact edited on disk
 specthis record <entry>        # pin bytes no pipeline produced (a download, a one-off)
 specthis adopt <entry> FILE    # countersign a manifest from a manager specthis did not launch
+specthis adopted               # publish the steps your manager can skip (.specthis/adopted.json)
 specthis certify               # code-identity certificates, if you use [package] globs
 ```
+
+`adopted` is the answer back across the seam. When results are made
+elsewhere — a cluster, a collaborator — `adopt` records that their bytes
+are current, but your compute manager keeps its own bookkeeping and
+would re-execute the step anyway, submitting jobs for work already on
+disk and verified. So specthis publishes the ledger in the manager's
+vocabulary: per step, the command and the dependency and output digests.
+`build` republishes it before every handoff; run the verb yourself if
+you drive make or snakemake directly. It is evidence, not an order — the
+manager still decides, and a moved digest still means run the step.
 
 Boundaries are load-bearing: `check`/`status`/`lint` never write,
 `vouch` never touches `runs.toml`, and nothing but `vouch` touches

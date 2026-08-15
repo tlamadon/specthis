@@ -12,10 +12,12 @@ is the signal to point scripthut or DVC at the same ``deps``/``outs``
 declarations. Every one of those, added here, is a step back toward the
 half-executor whose removal motivated the delegation in the first place.
 
-**Boundary.** This module imports the standard library and
-:mod:`specthis.pipeline` — never ``check``, ``ledger``, ``parse`` or
-``hashing``. *specthis never forks a process* stays true of the notary;
-the package merely ships a separate tool that does. A test asserts it.
+**Boundary.** This module imports the standard library and the two seam
+readers — :mod:`specthis.pipeline` and :mod:`specthis.seam` — never
+``check``, ``ledger``, ``parse`` or ``hashing``. *specthis never forks a
+process* stays true of the notary; the package merely ships a separate
+tool that does. A test asserts it, transitively: if satisfying the
+contract needed notary internals, the contract would be underspecified.
 
 What it guarantees, in the contract's terms:
 
@@ -37,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .pipeline import Step, load_pipeline, predecessors, topo_order
+from .seam import read_adopted, satisfies
 
 MISSING = "MISSING"
 STATE_DIR = ".specthis/runner"
@@ -89,25 +92,30 @@ def _write_lock(state: Path, lock: dict) -> None:
     )
 
 
-def _up_to_date(root: Path, step: Step, lock: dict, inputs: dict[str, str]) -> bool:
-    """Skip only when the recorded work matches *and* its products are
-    still on disk unchanged. Absent or edited outputs mean re-run: this
-    runner has no store to restore them from.
+def _accounted_for(
+    root: Path, step: Step, records: tuple[dict | None, ...], inputs: dict[str, str]
+) -> dict | None:
+    """The record that answers for this step's work, if any.
 
-    The **command** is part of the key. Without it, editing a command
-    would leave the recorded work looking identical here while specthis
-    stales the claim — the entry would be stale forever and no rebuild
-    would ever fix it. Locks written before this field rebuild once.
+    Two sources, one decision procedure (:func:`specthis.seam.satisfies`,
+    which spells out the four conditions): this runner's own lock — work
+    it did — and the **adopted set**, work accounted for elsewhere and
+    countersigned by the notary. Without the second, a step whose bytes
+    arrived by ``specthis adopt`` would be re-executed forever, because
+    nothing in the lock could ever mention a step this runner never ran.
+
+    Neither source pins a step as permanently satisfied: both are
+    compared against the digests on disk right now, so touching a
+    dependency puts the step back on the list.
     """
-    prior = lock.get(step.id)
-    if not prior or prior.get("command") != step.command:
-        return False
-    if prior.get("deps") != inputs:
-        return False
-    recorded = prior.get("outs", {})
-    if set(recorded) != set(step.outs):
-        return False
-    return all(_file_sha(root / p) == sha for p, sha in recorded.items())
+    return next(
+        (
+            record
+            for record in records
+            if satisfies(record, step.command, inputs, step.outs, lambda p: _file_sha(root / p))
+        ),
+        None,
+    )
 
 
 def _manifest(step: Step, inputs: dict, outputs: dict, code: int, t0: float, t1: float) -> dict:
@@ -143,6 +151,7 @@ def run_pipeline(
     steps = load_pipeline(pipeline_path or root / "pipeline.toml")
     state = root / state_dir
     lock = _read_lock(state)
+    adopted = read_adopted(root)  # work the ledger already accounts for (§7.8)
     preds = predecessors(steps)
 
     wanted = set(steps)
@@ -171,10 +180,13 @@ def run_pipeline(
             continue
 
         inputs = _table(root, step.deps)
-        if sid not in forced and _up_to_date(root, step, lock, inputs):
-            outputs = lock[sid]["outs"]
+        record = (
+            None if sid in forced
+            else _accounted_for(root, step, (lock.get(sid), adopted.get(sid)), inputs)
+        )
+        if record is not None:
             results.append(
-                StepResult(sid, "skipped", None, inputs, outputs, 0)
+                StepResult(sid, "skipped", None, inputs, dict(record["outs"]), 0)
             )
             continue
 

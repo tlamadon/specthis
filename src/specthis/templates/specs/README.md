@@ -107,6 +107,16 @@ or just patience while upstream heals.
 | `specs/bindings.toml` | the map: `scripts` (which deps are judged code) and `produces` (which file is which logical product); plus `[package]` globs and `[preview]` recipes | you, by hand |
 | `pipeline.toml` | the production sheet: one step per entry — command, deps, outs | you, by hand |
 
+One more file is **derived**, so it is not in that table and belongs in
+`.gitignore`: `.specthis/adopted.json`, the *adopted set*. It is the
+ledger projected into your compute manager's vocabulary — per pipeline
+step, the command and the dependency and output digests — so the manager
+can tell that a step's bytes are already accounted for. Without it, work
+brought in by `adopt` (a cluster run, a collaborator's extract) is
+invisible to the manager and it re-executes the step, which is precisely
+what adoption exists to avoid. `build` republishes it before every
+handoff; run `specthis adopted` when you drive your manager yourself.
+
 `bindings.toml` is vocabulary, not a claim, and it is deliberately
 small: everything about *how* a step runs lives in `pipeline.toml`.
 Pointing an entry at different code moves its code manifest, which

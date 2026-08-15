@@ -88,6 +88,23 @@ def test_a_failing_step_records_nothing_and_exits_non_zero(piped: Path) -> None:
     assert not (piped / "specs/runs.toml").exists()
 
 
+def test_a_failed_step_says_why_it_failed(piped: Path) -> None:
+    """A step that cannot run locally used to report `manifest reports a
+    failed step` — which named neither the exit code nor the command, and
+    said nothing about the requested step never being attempted."""
+    write(piped, "pipeline.toml", PIPELINE.replace(
+        f"{PY} scripts/fit_alpha.py", "hut_submit_that_is_not_on_path"
+    ))
+    result = run_cli("build", "fit-beta", "--path", str(piped))
+    assert result.exit_code != 0
+    assert "failed: `fit-alpha` exited 127" in result.output
+    assert "hut_submit_that_is_not_on_path" in result.output
+    assert "command not found" in result.output
+    assert "never attempted" in result.output
+    assert "1 step(s) failed" in result.output
+    assert not (piped / "specs/runs.toml").exists()
+
+
 def test_force_needs_entries(piped: Path) -> None:
     result = run_cli("build", "--force", "--path", str(piped))
     assert result.exit_code != 0

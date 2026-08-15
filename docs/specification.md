@@ -382,6 +382,9 @@ manifests(handle)                 -> { entry: manifest }
 - **`manifests`** returns, per step, input hashes as used, output paths
   and hashes, and the exit code (§14, MUST 3).
 
+The pipeline and the **adopted set** (§7.8) go down; manifests come back
+up. Three documents, and no adapter is required to write any of them.
+
 Optional fifth: `probe(steps) -> {entry: hit | miss}`, answering **cost**
 (§11). Never required for correctness.
 
@@ -473,6 +476,71 @@ applies unchanged.
 Every logical name in `spec.produces` needs a `map.produces` entry whose
 value appears among the step's declared outputs. Adoption records each
 path separately.
+
+### 7.8 The adopted set — `.specthis/adopted.json`
+
+The seam's third document, and the only one that goes **down** besides
+the pipeline. It answers the one question a manager can ask the notary:
+*which of these steps are already accounted for?*
+
+It exists because `adopt` is how off-machine results enter a project.
+Without it, `adopt` wrote the ledger and told the manager nothing: the
+manager consulted its own bookkeeping, found no record of a step it had
+never run, and executed it again — while `check`, reading the ledger,
+called the same entry current. The two disagreed permanently, and where
+a step's command submits a cluster job, the disagreement costs a queue
+rather than a core.
+
+```json
+{
+  "adopted_version": 1,
+  "steps": {
+    "omega_weights_full": {
+      "entries": ["omega_weights[profile=full]"],
+      "command": "bash scripts/hut_submit.sh .hut/workflows/omega.json",
+      "deps": {"scripts/compute_omega_weights.py": "9f2a…"},
+      "outs": {"results/omega/full.json": "41bd…"}
+    }
+  }
+}
+```
+
+Four properties are load-bearing:
+
+- **A projection, not a second ledger.** Every field is derived from
+  `runs.toml`, the pipeline, and the bytes on disk. Republishing an
+  unchanged project rewrites identical bytes; deleting the file loses
+  nothing. Two records that can drift apart is the bug being fixed —
+  a cache that regenerates is not one.
+- **Manager-agnostic.** specthis must not learn one manager's lock
+  format, so it publishes its own vocabulary. The bundled runner is the
+  first consumer, not the privileged one.
+- **Evidence, never an order.** specthis never selects steps (§14
+  MUST 2). A record says *these bytes are accounted for, at these
+  digests*; a manager that finds the digests moved runs the step anyway.
+  That is why publishing does not consult propagation: a step whose
+  upstream is stale is still published, because re-running the upstream
+  moves the digests this record pins.
+- **Keyed by step, resolved by output path.** For a template, step ids
+  are whatever the backend called them (§15.3), so an instance is
+  matched by binding its outputs against the `{prop}` pattern — never by
+  string surgery on ids.
+
+A step is published only when **every** ledger key claiming it is
+current on the run axis, and **every** path it declares is on this disk.
+A partly-adopted step is not a satisfied one, and a claim can stand
+while its bytes live elsewhere (§10.3) — which a manager cannot skip on.
+Certification is not consulted: adoption is a machine-currency claim and
+must never imply a mind judged anything.
+
+Consuming it is four comparisons, and each is a bug somebody has had:
+the command matches, the dependency table matches exactly, the recorded
+outputs are the ones the step now declares, and those outputs are still
+on disk with the recorded bytes. Any of them failing means run the step.
+`--force` bypasses the whole document, as it bypasses any cache.
+
+Written by `adopt`, `record`, `build` (before every handoff) and
+`specthis adopted`. Derived state: gitignore it.
 
 ---
 
@@ -682,8 +750,9 @@ real compute. That needs the manager's probe.
 | `vouch <entry>` | file a mind-attestation | `ledger/mind.toml` |
 | `lint` | spec ↔ map ↔ pipeline correspondence (§13) | nothing |
 | `certify` | regenerate certificates, if `[package] globs` are used (§6) | `specs/certificates/` |
-| `adopt <entry>` | verify a manifest, countersign | `ledger/machine.toml` |
-| `record <entry>` | pin bytes for a manual edge or a source entry | `ledger/machine.toml` |
+| `adopt <entry>` | verify a manifest, countersign | `ledger/machine.toml`, adopted set |
+| `record <entry>` | pin bytes for a manual edge or a source entry | `ledger/machine.toml`, adopted set |
+| `adopted` | publish the steps the ledger accounts for (§7.8) | `.specthis/adopted.json` |
 | `run --stale` | `submit()` the whole pipeline → `poll` → adopt | via `adopt` |
 | `run --force <entry>` | `submit(entries, force=True)` — the integrity repair path (§10.3) | via `adopt` |
 | `init` / `install` | scaffolding, agent templates | project files |
@@ -776,7 +845,10 @@ It replaces a compiler, and must therefore be complete.
 side-effect-free probe; **support a per-step cache bypass** (the
 integrity repair path, §10.3 — scripthut's `cache: false`, DVC's
 `repro -f`); fail loudly on unverifiable inputs; avoid partial outputs;
-keep logs addressable per step.
+keep logs addressable per step; **consult the adopted set** (§7.8) — a
+manager that does not will re-execute every step whose bytes were made
+off-machine, which for an adapter over a cluster is the expensive
+failure, not the slow one.
 
 **MUST NOT:** write specthis's ledgers; edit the map.
 

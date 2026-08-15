@@ -37,7 +37,8 @@ from .check import (
     ordered_keys,
     verified,
 )
-from .adopt import AdoptError, adopt_manifest
+from . import seam
+from .adopt import AdoptError, adopt_manifest, publish, step_of
 from .backends import FAILED, BackendError, resolve as resolve_backend
 from .correspond import correspondence_problems, correspondence_warnings
 from .instances import by_step as instances_by_step, resolve_key, template_problems
@@ -116,6 +117,22 @@ def _mind_hint(report: Report, project: Project) -> str:
         v = report.vouch
         return f"rejected by {v.attester}" + (f": {v.note}" if v.note else "")
     return ""
+
+
+def _publish_adopted(project: Project, entry: str | None = None) -> dict[str, dict]:
+    """Republish the adopted set after a ledger write, and say so.
+
+    Every verb that records a derived claim goes through here. A claim
+    the manager never hears about is the whole bug: `check` calls the
+    entry current, the manager re-executes it, and no amount of
+    rebuilding converges. The note is printed only when this entry's own
+    step is in the set, so a `record` on a source entry — which has no
+    step — stays quiet.
+    """
+    steps = publish(project)
+    if entry is not None and step_of(project, entry) in steps:
+        click.echo(f"  {seam.DOCUMENT}: {len(steps)} step(s) the manager can skip")
+    return steps
 
 
 def _machine_hint(report: Report) -> str:
@@ -332,6 +349,7 @@ def adopt_cmd(entry: str, manifest_file: Path, project_path: Path) -> None:
         raise click.ClickException(str(exc)) from exc
     note = " (output unchanged — downstream claims unaffected)" if result.reproduced else ""
     click.echo(f"adopted `{entry}` -> {result.run.output_sha[:12]}…{note}")
+    _publish_adopted(project, entry)
 
 
 # --------------------------------------------------------------- record
@@ -397,6 +415,7 @@ def record_cmd(entry: str, executor: str, project_path: Path) -> None:
         " (bytes unchanged)" if prior.output_sha == out_sha else " (bytes moved)"
     )
     click.echo(f"recorded `{entry}` -> {out_sha[:12]}…{moved}")
+    _publish_adopted(project, entry)
     if is_source(e):
         click.echo("note: provenance is a judgment — `specthis vouch` says it is what it claims")
 
@@ -452,6 +471,11 @@ def build_cmd(
     rerun reproduces identical bytes). Naming ENTRIES scopes a repair;
     --force bypasses the manager's cache for them.
 
+    Before handing over, the **adopted set** is republished (§7.8) so the
+    manager can see which steps the ledger already accounts for —
+    including those whose bytes were made off-machine and countersigned
+    by `adopt`, which it has no other way to learn about.
+
     Every manifest is verified against the bytes on disk before it is
     recorded. That proves transcription, never derivation.
     """
@@ -468,6 +492,10 @@ def build_cmd(
     if force and not entries:
         raise click.ClickException("--force needs the entries to force; it is a repair, not a mode")
 
+    accounted = publish(project)
+    if accounted:
+        click.echo(f"{len(accounted)} step(s) already accounted for by the ledger")
+
     handle = backend.submit(list(entries) or None, force=force)
     state = backend.poll(handle)
     produced = backend.manifests(handle)
@@ -477,8 +505,15 @@ def build_cmd(
     # never from how a backend chose to name its steps.
     instance_of_step = {sid: inst.name for sid, (_e, inst) in instances_by_step(project).items()}
 
-    adopted, refused = [], []
+    adopted, refused, failed = [], [], []
     for sid, manifest in sorted(produced.items()):
+        # A failed step is not a refused manifest: the manager is
+        # reporting honestly that the work did not happen. Saying
+        # "manifest reports a failed step" buried that, and buried the
+        # exit code with it.
+        if manifest.get("exit_code") not in (0, None):
+            failed.append((sid, manifest))
+            continue
         key = instance_of_step.get(sid, sid)
         if key not in project.entries and key not in instance_of_step.values():
             continue  # a step with no entry: lint's business, not adoption's
@@ -491,12 +526,57 @@ def build_cmd(
         note = " (output unchanged — downstream claims unaffected)" if a.reproduced else ""
         click.echo(f"  adopted {a.entry} -> {a.run.output_sha[:12]}…{note}")
     click.echo(f"{len(adopted)} claim(s) recorded from {backend.name}")
+    if adopted:
+        publish(project)  # the claims just recorded, back to the manager
+
+    for sid, manifest in failed:
+        click.echo(f"  failed: `{sid}` exited {manifest['exit_code']}", err=True)
+        click.echo(f"          command: {manifest.get('command', '(not reported)')}", err=True)
+        if manifest.get("exit_code") == 127:
+            click.echo(
+                "          exit 127 is the shell's `command not found` — the command may "
+                "not be on PATH in a non-interactive shell", err=True,
+            )
+    if failed:
+        click.echo(
+            "  steps downstream of a failure are never attempted, so anything you asked "
+            "for above a failed step was not built", err=True,
+        )
     for why in refused:
         click.echo(f"  refused: {why}", err=True)
-    if refused or state == FAILED:
+    if failed or refused or state == FAILED:
         raise click.ClickException(
-            "some steps failed or their manifests were refused; nothing recorded for those"
+            f"{len(failed)} step(s) failed, {len(refused)} manifest(s) refused; "
+            "nothing was recorded for those or for anything downstream"
         )
+
+
+# -------------------------------------------------------------- adopted
+
+
+@main.command("adopted")
+@_path_option
+def adopted_cmd(project_path: Path) -> None:
+    """Publish the steps the ledger already accounts for (§7.8).
+
+    The seam's third document. `adopt` records that bytes made elsewhere
+    are current, but a compute manager keeps its own bookkeeping and
+    consults that — so without this, a manager re-executes exactly the
+    work adoption exists to bring in.
+
+    `build` republishes it for you. Run this verb when you drive your
+    manager yourself (make, snakemake, a submit script) — then have it
+    consult `.specthis/adopted.json`: per step, the command and the
+    dependency and output digests, so it can decide for itself.
+
+    It is derived state, not a ledger: regenerating it is always safe,
+    and it belongs in .gitignore.
+    """
+    project = _load(project_path)
+    steps = publish(project)
+    click.echo(f"{len(steps)} step(s) accounted for -> {seam.DOCUMENT}")
+    for sid, record in sorted(steps.items()):
+        click.echo(f"  {sid}  ({', '.join(record['entries'])})")
 
 
 # ---------------------------------------------------------------- vouch
