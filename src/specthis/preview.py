@@ -143,6 +143,7 @@ def render_preview(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                check=False,  # a failed recipe is a log to show, not an exception
             )
         except subprocess.TimeoutExpired:
             return Preview(key=key, path=None, log=f"timed out after {timeout:g}s")

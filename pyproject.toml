@@ -37,7 +37,10 @@ serve = ["uvicorn>=0.27", "starlette>=0.36"]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
-    "ruff>=0.3",
+    # Pinned, not floored: a linter's default rule set changes between
+    # releases, so `>=` meant CI resolved to something no contributor had
+    # and main went red on code nobody had touched. Bump it deliberately.
+    "ruff==0.16.3",
 ]
 
 [project.urls]

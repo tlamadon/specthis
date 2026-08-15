@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 def fmt_duration(seconds: float) -> str:
     """Wall time: ``4s``, ``3m 12s``, ``1h 04m``."""
-    s = int(round(seconds))
+    s = round(seconds)
     if s < 60:
         return f"{s}s"
     if s < 3600:

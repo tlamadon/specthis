@@ -6,7 +6,6 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-
 from click.testing import CliRunner
 
 from specthis.check import check_project

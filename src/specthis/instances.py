@@ -169,7 +169,7 @@ def template_problems(project: Project) -> list[str]:
     return out
 
 
-def by_step(project: Project) -> dict[str, tuple[Entry, "Instance"]]:
+def by_step(project: Project) -> dict[str, tuple[Entry, Instance]]:
     """Pipeline step id -> the template entry and instance it realizes.
 
     The seam runs on step ids, but claims are keyed by instance name, so
@@ -184,7 +184,7 @@ def by_step(project: Project) -> dict[str, tuple[Entry, "Instance"]]:
     return out
 
 
-def resolve_key(project: Project, key: str) -> tuple[Entry, "Instance | None"]:
+def resolve_key(project: Project, key: str) -> tuple[Entry, Instance | None]:
     """A ledger key -> the entry it claims about, and its instance if any.
 
     ``clean-wages`` is an entry; ``clean-wages[dataset=chile]`` is one

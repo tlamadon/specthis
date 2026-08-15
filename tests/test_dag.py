@@ -137,7 +137,7 @@ def test_dag_dots_aggregate_per_status(root: Path) -> None:
     write(root, "specs/report-many.md", _REPORT_MANY)
     svg = _svg(render(load_project(root))[0])
     m = re.search(
-        r'<g class="dag-node[^"]*"[^>]*data-spec="report-many"[^>]*>.*?</g></a>', svg, re.S
+        r'<g class="dag-node[^"]*"[^>]*data-spec="report-many"[^>]*>.*?</g></a>', svg, re.DOTALL
     )
     assert m is not None
     node = m.group(0)

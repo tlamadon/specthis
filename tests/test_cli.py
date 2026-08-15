@@ -9,7 +9,12 @@ from specthis.ledger import read_vouches
 from specthis.parse import load_project
 
 from .conftest import (
-    PY, BINDINGS, COMPUTE_ALPHA, make_ready, vouch_ok, write,
+    BINDINGS,
+    COMPUTE_ALPHA,
+    PY,
+    make_ready,
+    vouch_ok,
+    write,
 )
 
 

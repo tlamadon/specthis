@@ -111,7 +111,7 @@ class PreviewRecipe:
 @dataclass
 class Entry:
     name: str
-    spec: "SpecFile"
+    spec: SpecFile
     outputs: list[str]
     binding: Binding
     #: sha256 of this entry's ``###`` block text — **what a vouch pins**
@@ -191,7 +191,7 @@ class Project:
     #: step id -> Step, from ``pipeline.toml`` when the project has one.
     #: Empty otherwise, and then no claim carries a ``step:`` row — a
     #: project without a pipeline behaves exactly as before it existed.
-    steps: dict[str, "Step"] = field(default_factory=dict)
+    steps: dict[str, Step] = field(default_factory=dict)
 
 
 def _field_paths(block: str, label: str) -> list[str]:
@@ -298,7 +298,7 @@ def _infer_file_kind(body: str) -> str:
     return "report" if len(kinds) > 1 else kinds.pop()
 
 
-def _spec_sha(text: str, m: "re.Match[str]") -> str:
+def _spec_sha(text: str, m: re.Match[str]) -> str:
     """``spec_sha`` with display-only frontmatter lines removed.
 
     A file that never uses ``title:``/``group:``/``priority:`` hashes

@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-from specthis.parse import load_project
 from specthis.instances import (
     bind,
     instances,
@@ -10,6 +9,7 @@ from specthis.instances import (
     resolve,
     template_problems,
 )
+from specthis.parse import load_project
 
 from .conftest import PY, write
 

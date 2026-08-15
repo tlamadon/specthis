@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from specthis.export import render
-from specthis.parse import Project, PreviewRecipe, load_project, load_project_lenient
+from specthis.parse import PreviewRecipe, Project, load_project, load_project_lenient
 from specthis.preview import Preview, find_recipe, preview_key, render_preview
 from specthis.serve import Dashboard, _make_handler
 

@@ -40,11 +40,11 @@ from urllib.parse import quote
 import markdown as _markdown
 
 from .check import (
-    keys_for,
     Certification,
     Realization,
     Report,
     check_project,
+    keys_for,
     machine_repairable,
 )
 from .dag import dag_svg
@@ -896,13 +896,13 @@ def _sidebar(
         '<nav class="sidebar">',
         f"<h1>{_e(project.root.name)} &middot; specs/</h1>",
         f'<div class="meta-line">{len(project.specs) + len(broken)} files &middot; generated {_e(generated[:10])}</div>',
-        '<div class="nav-group">'
+        ('<div class="nav-group">'
         '<div class="nav-file" data-file-anchor="vouch">'
         '<a href="#vouch">Vouch tree</a></div>'
         '<div class="nav-file" data-file-anchor="run">'
         '<a href="#run">Run tree</a></div>'
         '<div class="nav-file" data-file-anchor="activity">'
-        '<a href="#activity">Activity log</a></div></div>',
+        '<a href="#activity">Activity log</a></div></div>'),
     ]
     if broken:
         parts.append(
@@ -1041,8 +1041,8 @@ def _detail_row(
         lines.append(
             (
                 "vouch",
-                f'{_e(r.vouch.verdict)} <span class="who">by {_e(r.vouch.attester)}, '
-                f"{_e(r.vouch.vouched[:10])}{_e(note)}</span>",
+                (f'{_e(r.vouch.verdict)} <span class="who">by {_e(r.vouch.attester)}, '
+                f"{_e(r.vouch.vouched[:10])}{_e(note)}</span>"),
             )
         )
     if r.run:
@@ -1333,8 +1333,8 @@ def _activity_section(
             events.append(
                 (
                     v.vouched,
-                    f"<tr>{_when_cell(v.vouched, now)}<td{note}>{badge}</td>"
-                    f"<td>{link}</td><td>{_e(v.attester)}</td><td>{took}</td></tr>",
+                    (f"<tr>{_when_cell(v.vouched, now)}<td{note}>{badge}</td>"
+                    f"<td>{link}</td><td>{_e(v.attester)}</td><td>{took}</td></tr>"),
                 )
             )
         if r.run:
@@ -1342,8 +1342,8 @@ def _activity_section(
             events.append(
                 (
                     r.run.ran,
-                    f'<tr>{_when_cell(r.run.ran, now)}<td><span class="badge evt-run">ran</span></td>'
-                    f"<td>{link}</td><td>{_e(r.run.executor)}</td><td>{took}</td></tr>",
+                    (f'<tr>{_when_cell(r.run.ran, now)}<td><span class="badge evt-run">ran</span></td>'
+                    f"<td>{link}</td><td>{_e(r.run.executor)}</td><td>{took}</td></tr>"),
                 )
             )
     for j in journal:
@@ -1352,8 +1352,8 @@ def _activity_section(
         events.append(
             (
                 j.date,
-                f'<tr>{when}<td><span class="badge evt-journal">journal</span></td>'
-                f"<td>{jlink}</td><td>{empty}</td><td>{empty}</td></tr>",
+                (f'<tr>{when}<td><span class="badge evt-journal">journal</span></td>'
+                f"<td>{jlink}</td><td>{empty}</td><td>{empty}</td></tr>"),
             )
         )
     events.sort(key=lambda e: e[0], reverse=True)

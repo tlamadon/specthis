@@ -191,7 +191,9 @@ def run_pipeline(
             continue
 
         t0 = time.time()
-        proc = subprocess.run(step.command, shell=True, cwd=root)
+        # check=False: a non-zero exit is data — it blocks dependents and
+        # writes a failed manifest (§14 MUST 4), never an exception.
+        proc = subprocess.run(step.command, shell=True, cwd=root, check=False)
         t1 = time.time()
 
         if proc.returncode != 0:

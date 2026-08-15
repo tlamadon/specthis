@@ -40,7 +40,8 @@ from pathlib import Path
 from typing import Protocol
 
 from .pipeline import Step, load_pipeline
-from .runner import StepResult, manifests as runner_manifests, run_pipeline
+from .runner import StepResult, run_pipeline
+from .runner import manifests as runner_manifests
 
 RUNNING, DONE, FAILED = "running", "done", "failed"
 

@@ -15,7 +15,10 @@ from pathlib import Path
 
 import click
 
-from . import __version__, hashing
+from . import __version__, hashing, seam
+from .adopt import AdoptError, adopt_manifest, publish, step_of
+from .backends import FAILED, BackendError
+from .backends import resolve as resolve_backend
 from .certificates import write_all as write_certificates
 from .check import (
     Certification,
@@ -23,27 +26,24 @@ from .check import (
     Report,
     check_project,
     code_manifest,
-    coordinates,
     code_sha,
+    coordinates,
     expected_inputs,
     instance_inputs,
     is_library,
     is_source,
     keys_for,
     machine_repairable,
+    ordered_keys,
     queues,
     sibling_keys,
     step_digest,
-    ordered_keys,
     verified,
 )
-from . import seam
-from .adopt import AdoptError, adopt_manifest, publish, step_of
-from .backends import FAILED, BackendError, resolve as resolve_backend
 from .correspond import correspondence_problems, correspondence_warnings
-from .instances import by_step as instances_by_step, resolve_key, template_problems
 from .install import init_specs_dir, install_agents, install_commands
-from .pipeline import PipelineError
+from .instances import by_step as instances_by_step
+from .instances import resolve_key, template_problems
 from .ledger import (
     RUNS_FILE,
     LedgerError,
@@ -54,6 +54,7 @@ from .ledger import (
     record_vouch,
 )
 from .parse import Problem, Project, SpecError, load_project, load_project_lenient
+from .pipeline import PipelineError
 from .timefmt import fmt_duration as _fmt_duration
 
 

@@ -35,8 +35,8 @@ from .check import (
     instance_inputs,
     sibling_keys,
 )
-from .ledger import Run, read_runs, record_run
 from .instances import resolve_key
+from .ledger import Run, read_runs, record_run
 from .parse import Project
 from .pipeline import producers
 

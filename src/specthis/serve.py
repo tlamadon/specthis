@@ -247,7 +247,7 @@ class Dashboard:
 
 def _make_handler(dashboard: Dashboard) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 (stdlib API)
+        def do_GET(self) -> None:  # the stdlib's spelling, not ours
             token, page = dashboard.snapshot()
             if self.path in ("/", "/specs.html", "/index.html"):
                 self._send(page.encode("utf-8"), "text/html; charset=utf-8")

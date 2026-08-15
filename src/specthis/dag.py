@@ -557,13 +557,13 @@ def _render_layered(
     widths = {p.spec.name: p.width for p in placed}
 
     parts = [
-        f'<svg class="dag" xmlns="http://www.w3.org/2000/svg" '
+        (f'<svg class="dag" xmlns="http://www.w3.org/2000/svg" '
         f'viewBox="0 0 {total_w} {total_h}" '
         f'width="{total_w}" height="{total_h}" role="img" '
-        'aria-label="spec dependency graph">',
-        '<defs><marker id="dag-arrow" viewBox="0 0 8 8" refX="7" refY="4" '
+        'aria-label="spec dependency graph">'),
+        ('<defs><marker id="dag-arrow" viewBox="0 0 8 8" refX="7" refY="4" '
         'markerWidth="6.5" markerHeight="6.5" orient="auto">'
-        '<path d="M0.5,0.5 L7.5,4 L0.5,7.5 z" fill="#b9b3a7"/></marker></defs>',
+        '<path d="M0.5,0.5 L7.5,4 L0.5,7.5 z" fill="#b9b3a7"/></marker></defs>'),
     ]
     if standalone:
         parts.insert(1, _STANDALONE_STYLE + '<rect width="100%" height="100%" fill="#fdfdfc"/>')
@@ -648,10 +648,10 @@ def _render_rails(
         return _PAD + row[n] * _RAILS_ROW_H + _RAILS_ROW_H // 2
 
     parts = [
-        f'<svg class="dag" xmlns="http://www.w3.org/2000/svg" '
+        (f'<svg class="dag" xmlns="http://www.w3.org/2000/svg" '
         f'viewBox="0 0 {total_w} {total_h}" '
         f'width="{total_w}" height="{total_h}" role="img" '
-        'aria-label="spec dependency rails">',
+        'aria-label="spec dependency rails">'),
     ]
     if standalone:
         parts.append(_STANDALONE_STYLE + '<rect width="100%" height="100%" fill="#fdfdfc"/>')
