@@ -17,9 +17,22 @@ from specthis.parse import load_project, load_project_lenient
 from .conftest import COMPUTE_ALPHA, MODELS, make_ready, write
 
 
+def test_every_kind_has_an_icon() -> None:
+    """The DAG draws an icon per spec with no fallback, so a kind missing
+    from the dict is a KeyError that takes `export` and `dag` down —
+    which is how `kind: source` crashed both."""
+    from specthis.icons import ICONS
+    from specthis.parse import KINDS
+
+    assert not KINDS - set(ICONS)
+
+
 def _svg(page: str) -> str:
+    """The DAG's own svg — closing tag searched *from* its opening one,
+    since the sidebar's kind pills are inline svgs earlier in the page."""
     assert '<svg class="dag"' in page
-    return page[page.index('<svg class="dag"'): page.index("</svg>")]
+    start = page.index('<svg class="dag"')
+    return page[start : page.index("</svg>", start)]
 
 
 def _node_pos(svg: str) -> dict[str, tuple[int, int]]:

@@ -188,8 +188,6 @@ kind: <kind>               # see below
 tier: intensive | quick    # compute specs; intensive is the default
 skip: true                 # optional: comment this spec out (see below)
 title: <display title>     # optional: dashboard title, else first heading
-group: <label>             # optional: dashboard sidebar group (display-only)
-priority: <int>            # optional: sidebar rank, higher first; default 0
 consumes:                  # upstream ENTRY names whose artefacts this
   - <entry-name>           #   spec's code reads — enters signatures
 references:                # other spec FILES read for vocabulary —

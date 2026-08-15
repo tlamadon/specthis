@@ -94,12 +94,15 @@ against the claim) if a local step actually needs them.
 - Frontmatter: `name`, `kind`, `tier` (compute), `consumes:` (upstream
   entry names — signature-bearing), `references:` (vocabulary spec
   files — ledger-invisible). `depends_on:` is retired; flag it.
-  Optional `title:`, `group:` / `priority:` (int, higher first) only
-  name and organize specs in the dashboard.
+  Optional `title:` names the spec in the dashboard. Organize specs by
+  **file name**: a dot is a folder, so `compute.omega.weights.md` sits
+  under `compute › omega` in the sidebar. (`group:` / `priority:` are
+  retired — inert if left behind, but they do nothing.)
 - The whole file, frontmatter included, is the contract: any edit
   returns its entries to *unvouched*. Sole carve-out: the
-  display-only `title:` / `group:` / `priority:` lines are stripped
-  before `spec_sha`, so retitling or retagging never disturbs vouches.
+  display-only `title:` line is stripped before `spec_sha`, so
+  retitling never disturbs vouches. (So are leftover `group:` /
+  `priority:` lines, which were never in the digest either.)
 
 ## Compute / report responsibility split
 

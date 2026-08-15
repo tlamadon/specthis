@@ -30,23 +30,24 @@ def test_spec_sha_covers_frontmatter(root: Path) -> None:
     assert before != after  # frontmatter edits count as contract edits
 
 
-def test_group_and_priority_parse(root: Path) -> None:
-    plain = parse_spec(root / "specs/compute-alpha.md")
-    assert plain.group is None
-    assert plain.priority == 0
+def test_retired_group_and_priority_are_inert(root: Path) -> None:
+    """The sidebar is a file tree now. A file still carrying the old keys
+    must parse, not error — nobody should have to edit a spec to upgrade."""
     write(
         root,
         "specs/compute-alpha.md",
         COMPUTE_ALPHA.replace("tier: quick", "tier: quick\ngroup: estimation\npriority: 5"),
     )
-    tagged = parse_spec(root / "specs/compute-alpha.md")
-    assert tagged.group == "estimation"
-    assert tagged.priority == 5
+    spec = parse_spec(root / "specs/compute-alpha.md")
+    assert not hasattr(spec, "group") and not hasattr(spec, "priority")
+    assert spec.name == "compute-alpha"
 
 
 def test_display_keys_stay_outside_spec_sha(root: Path) -> None:
-    # display-only keys: retitling or reshuffling the sidebar must not
-    # invalidate vouches, so they are carved out of spec_sha
+    # display-only keys: retitling must not invalidate vouches, so they
+    # are carved out of spec_sha. `group:`/`priority:` are retired but
+    # stay carved out — putting a leftover line back into the digest
+    # would expire every vouch on the file that carries it.
     before = parse_spec(root / "specs/compute-alpha.md").spec_sha
     write(
         root,
@@ -92,8 +93,6 @@ def test_compute_tier_defaults_intensive(root: Path) -> None:
             "exactly one output",
         ),
         (lambda t: t.replace("tier: quick", "tier: warm"), "not one of"),
-        (lambda t: t.replace("tier: quick", "tier: quick\ngroup: ''"), "non-empty string"),
-        (lambda t: t.replace("tier: quick", "tier: quick\npriority: soon"), "must be an integer"),
     ],
 )
 def test_grammar_violations(root: Path, mutation, match: str) -> None:

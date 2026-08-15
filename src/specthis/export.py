@@ -1,10 +1,15 @@
 """Dashboard renderer: specs/specs.html + _index.json.
 
-The page is an mkdocs-style spec browser: a sticky sidebar lists every
-spec file grouped by frontmatter ``group:`` (ranked by ``priority:``,
-higher first; untagged specs fall back to kind groups below, each row
-carrying a small kind/tier pill), and hash routing shows one page at a
-time. The two trees get one page each: the **Vouch tree** (the
+The page is an mkdocs-style spec browser: a sticky sidebar is a **file
+tree** — dots in a name are folders, so ``compute.omega.weights.md``
+lives at ``compute › omega › weights.md`` — with collapsible folders,
+a kind/tier pill per row, and counts of entries and of what each is
+waiting on. Hash routing shows one page at a time.
+
+The tree is read off the file names and nothing else. ``group:`` and
+``priority:`` frontmatter used to organize this sidebar and were
+retired with it: two organizing principles, one of them invisible in a
+directory listing, and the file names were already doing the work. The two trees get one page each: the **Vouch tree** (the
 landing) carries every definition's trust state — attester, vouch
 date, judgment cost, what moved since — above the spec-level DAG
 (:mod:`specthis.dag` — a git-log-style rails list in story order;
@@ -32,7 +37,7 @@ from __future__ import annotations
 import html
 import json
 import re
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -52,16 +57,6 @@ from .icons import ICONS
 from .journal import JournalEntry, load_journal
 from .parse import _FRONTMATTER, Entry, Problem, Project, SpecFile, load_project_lenient
 from .timefmt import fmt_ago, fmt_duration
-
-_KIND_ORDER = {
-    "meta": 0,
-    "definitions": 1,
-    "library": 2,
-    "templates": 3,
-    "compute": 4,
-    "report": 5,
-}
-
 
 
 def _consumed_by(project: Project) -> dict[str, list[str]]:
@@ -118,8 +113,6 @@ def build_index(
                 "kind": spec.kind,
                 "skip": spec.skip,
                 "tier": spec.tier,
-                "group": spec.group,
-                "priority": spec.priority,
                 "consumes": spec.consumes,
                 "references": spec.references,
                 "entries": entries,
@@ -143,6 +136,7 @@ _CSS = """
   --kind-templates: #6a3d8a; --kind-compute: #2e6e9e;
   --kind-report: #b85a1e;
   --kind-library: #8a6d1f; --kind-journal: #335c81;
+  --kind-source: #3f7f8c;
 }
 * { box-sizing: border-box; }
 html { font-size: 16px; scroll-behavior: smooth; }
@@ -168,6 +162,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
 .kind-templates { color: var(--kind-templates); } .kind-compute { color: var(--kind-compute); }
 .kind-report { color: var(--kind-report); }
 .kind-library { color: var(--kind-library); }
+.kind-source { color: var(--kind-source); }
 .kind-journal { color: var(--kind-journal); }
 .kind-broken { color: #a40e26; }
 .kind-custom { color: var(--accent); }
@@ -176,6 +171,31 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
   border: 1px solid currentColor; opacity: 0.65; flex: none; }
 .pill svg { width: 9px; height: 9px; display: block; }
 .pill-tier { color: var(--muted); }
+.pill-num { width: auto; min-width: 15px; padding: 0 4px; border-radius: 999px;
+  font-size: 0.63rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  line-height: 1; opacity: 1; }
+.pill-entries { color: var(--muted); border-color: var(--border); }
+.pill-mind { color: #a40e26; background: rgba(164, 14, 38, 0.07); }
+.pill-machine { color: #2e6e9e; background: rgba(46, 110, 158, 0.08); }
+
+/* The file tree: dots in a name are folders (`compute.omega.weights.md`
+   -> compute > omega > weights.md). <details> does the collapsing, so
+   it works with the script disabled and from file://. */
+.nav-dir > summary { display: flex; align-items: center; cursor: pointer;
+  list-style: none; padding: 0.1rem 0 0.1rem 0.5rem; margin-bottom: 0.55rem;
+  border-left: 3px solid transparent; }
+.nav-dir > summary::-webkit-details-marker { display: none; }
+.nav-dir > summary:hover .dir-name { color: var(--accent); }
+.nav-dir > summary .nav-file { margin: 0; padding: 0; border-left: 0; flex: 1; min-width: 0; }
+.nav-dir > summary .pills { margin-left: auto; padding-left: 0.4rem; display: flex;
+  gap: 3px; flex: none; }
+.dir-name { font-weight: 600; letter-spacing: 0.01em; }
+.caret { flex: none; width: 0; height: 0; margin-right: 0.4rem;
+  border-left: 4px solid var(--muted); border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent; transition: transform 0.12s ease; }
+.nav-dir[open] > summary .caret { transform: rotate(90deg) translateX(-1px); }
+.nav-dir-body { margin-left: 0.55rem; padding-left: 0.5rem;
+  border-left: 1px solid var(--border); }
 .nav-file { margin-bottom: 0.55rem; padding: 0.1rem 0 0.1rem 0.5rem;
   border-left: 3px solid transparent; display: flex; align-items: baseline; }
 .nav-file a { min-width: 0; }
@@ -361,12 +381,36 @@ _ROUTER_JS = """
     s.querySelectorAll('[id]').forEach((el) => { anchorToFile[el.id] = s.id; });
   }
 
+  // File tree: <details> already collapses without us. We remember
+  // which folders were closed (across the live-reload cycle, like focus
+  // and scroll do), and open whatever holds the active file — a section
+  // you navigated to must never be hidden behind a closed folder.
+  const dirs = Array.from(document.querySelectorAll('.nav-dir[data-dir]'));
+  if (dirs.length) {
+    let closed = new Set();
+    try { closed = new Set(JSON.parse(sessionStorage.getItem('specsClosedDirs') || '[]')); }
+    catch (e) { /* unreadable: start with everything open */ }
+    for (const d of dirs) { if (closed.has(d.dataset.dir)) d.open = false; }
+    for (const d of dirs) {
+      d.addEventListener('toggle', () => {
+        if (d.open) closed.delete(d.dataset.dir); else closed.add(d.dataset.dir);
+        sessionStorage.setItem('specsClosedDirs', JSON.stringify(Array.from(closed)));
+      });
+    }
+  }
+
   function route() {
     const hash = (location.hash || '').replace(/^#/, '');
     const target = (hash && anchorToFile[hash]) || sections[0].id;
     for (const s of sections) { s.classList.toggle('active', s.id === target); }
     for (const nv of navFiles) {
-      nv.classList.toggle('active', nv.dataset.fileAnchor === target);
+      const on = nv.dataset.fileAnchor === target;
+      nv.classList.toggle('active', on);
+      if (on) {
+        for (let d = nv.closest('details'); d; d = d.parentElement.closest('details')) {
+          d.open = true;
+        }
+      }
     }
     if (hash && hash !== target) {
       const el = document.getElementById(hash);
@@ -829,37 +873,95 @@ def _broken_files(project: Project, problems: list[Problem]) -> list[str]:
     return sorted({p.file for p in problems if p.file.endswith(".md") and p.file not in parsed})
 
 
-def _spec_groups(project: Project) -> list[tuple[str, bool, list[SpecFile]]]:
-    """Navigation order shared by the sidebar and the section stream.
+@dataclass
+class _Node:
+    """One segment of the file tree: a folder, a file, or both.
 
-    Custom ``group:`` blocks come first — a group ranks by the highest
-    ``priority:`` among its specs (higher first, ties alphabetical) —
-    then untagged specs keep today's kind blocks in ``_KIND_ORDER``.
-    Within any block: priority desc, then name. The bool flags a
-    custom group (its rows need a kind pill; kind headers don't).
+    Both is not a corner case — ``compute.md`` beside ``compute.omega.md``
+    is an ordinary way to write an overview next to its parts, so a node
+    carries a spec *and* children and renders as a file row you can
+    open.
     """
-    custom: dict[str, list[SpecFile]] = {}
-    by_kind: dict[str, list[SpecFile]] = {}
+
+    label: str
+    spec: SpecFile | None = None
+    children: dict[str, _Node] = field(default_factory=dict)
+
+
+def _spec_tree(project: Project) -> _Node:
+    """The sidebar's shape, read straight off the file names (§11.2).
+
+    ``compute.omega.weights.md`` becomes ``compute › omega ›
+    weights.md``. Nothing is declared: the tree is a function of what is
+    on disk, so renaming a file moves it and no frontmatter can disagree
+    with where it lives. (``group:``/``priority:`` used to do this job
+    and were retired for exactly that reason — two organizing
+    principles, one of them invisible in the file listing.)
+    """
+    root = _Node("")
     for spec in project.specs:
-        if spec.group:
-            custom.setdefault(spec.group, []).append(spec)
-        else:
-            by_kind.setdefault(spec.kind, []).append(spec)
+        stem = spec.path.name.removesuffix(".md")
+        node = root
+        for segment in stem.split(".") or [stem]:
+            node = node.children.setdefault(segment, _Node(segment))
+        node.spec = spec
+    return root
 
-    def within(s: SpecFile) -> tuple[int, str]:
-        return (-s.priority, s.name)
 
-    ordered = [
-        (label, True, sorted(custom[label], key=within))
-        for label in sorted(
-            custom, key=lambda g: (-max(s.priority for s in custom[g]), g.lower())
+def _ordered(node: _Node) -> list[_Node]:
+    """Folders first, then files, each alphabetical — the file-explorer
+    convention, so the sidebar reads the way the directory does."""
+    return sorted(node.children.values(), key=lambda n: (not n.children, n.label.lower()))
+
+
+def _tree_specs(node: _Node) -> list[SpecFile]:
+    """Every spec in tree order — the section stream follows the sidebar,
+    so scrolling and clicking agree about what comes next."""
+    out: list[SpecFile] = []
+    for child in _ordered(node):
+        if child.spec is not None:
+            out.append(child.spec)
+        out.extend(_tree_specs(child))
+    return out
+
+
+@dataclass(frozen=True)
+class _Tally:
+    """What a row's pills count: entries, and the two queues over them."""
+
+    entries: int = 0
+    mind: int = 0
+    machine: int = 0
+
+    def __add__(self, other: _Tally) -> _Tally:
+        return _Tally(
+            self.entries + other.entries, self.mind + other.mind, self.machine + other.machine
         )
-    ]
-    ordered += [
-        (kind, False, sorted(by_kind[kind], key=within))
-        for kind in sorted(by_kind, key=lambda k: _KIND_ORDER.get(k, 9))
-    ]
-    return ordered
+
+
+def _spec_tally(spec: SpecFile, reports: dict[str, Report], keys: dict[str, list[str]]) -> _Tally:
+    """One file's counts, on the same predicates as ``specthis check``.
+
+    A template contributes its instances, not itself — the ledger claims
+    about instances, so counting anything else would make the sidebar
+    disagree with the queues it summarizes.
+    """
+    rs = [reports[k] for e in spec.entries for k in keys.get(e.name, [])]
+    return _Tally(
+        entries=len(rs),
+        mind=sum(1 for r in rs if r.certification is not Certification.CERTIFIED),
+        machine=sum(1 for r in rs if machine_repairable(r)),
+    )
+
+
+def _subtree_tally(
+    node: _Node, reports: dict[str, Report], keys: dict[str, list[str]]
+) -> _Tally:
+    """A folder answers for everything under it."""
+    total = _spec_tally(node.spec, reports, keys) if node.spec is not None else _Tally()
+    for child in node.children.values():
+        total = total + _subtree_tally(child, reports, keys)
+    return total
 
 
 def _pill(kind_class: str, label: str) -> str:
@@ -871,15 +973,114 @@ def _pill(kind_class: str, label: str) -> str:
     )
 
 
-def _nav_pills(spec: SpecFile, in_custom_group: bool) -> str:
-    """Right-aligned icon pills for one sidebar row: the kind (only where
-    the group header doesn't already say it) and the intensive tier."""
+def _count_pill(css: str, count: int, label: str) -> str:
+    return f'<span class="pill pill-num {css}" title="{_e(label)}">{count}</span>'
+
+
+def _tally_pills(tally: _Tally) -> list[str]:
+    """Counts for one row: how many entries, and what they are waiting on.
+
+    The total is always shown — it is how big a file is, and a file with
+    nothing wrong should still say so. The other two appear only when
+    non-zero, so an eye running down the sidebar lands on work.
+    """
     pills = []
-    if in_custom_group and spec.kind in ICONS:
+    if tally.entries:
+        pills.append(_count_pill("pill-entries", tally.entries, f"{tally.entries} entries"))
+    if tally.mind:
+        pills.append(_count_pill("pill-mind", tally.mind, f"{tally.mind} needing a mind"))
+    if tally.machine:
+        pills.append(
+            _count_pill("pill-machine", tally.machine, f"{tally.machine} needing a machine")
+        )
+    return pills
+
+
+def _nav_pills(spec: SpecFile, tally: _Tally) -> str:
+    """Right-aligned pills for one file row: counts, then what it is.
+
+    The kind pill is unconditional now — with kind headers gone from the
+    sidebar, this row is the only place that says a file is a report.
+    """
+    pills = _tally_pills(tally)
+    if spec.kind in ICONS:
         pills.append(_pill(f"kind-{_e(spec.kind)}", spec.kind))
     if spec.kind == "compute" and spec.tier == "intensive":
         pills.append(_pill("pill-tier", "intensive"))
     return f'<span class="pills">{"".join(pills)}</span>' if pills else ""
+
+
+def _file_row(
+    node: _Node,
+    reports: dict[str, Report],
+    problem_files: set[str],
+    keys: dict[str, list[str]],
+    tally: _Tally | None = None,
+) -> str:
+    """One file: status dot, the name as it is on disk, then its pills.
+
+    The label is the file's own segment — ``weights.md`` under
+    ``compute › omega`` — because the ancestors are already on screen.
+    The full name stays in the tooltip, and ``title:`` moved to the
+    section heading where a sentence has room to be one.
+
+    ``tally`` overrides the file's own counts, which is what a file that
+    is *also* a folder needs: any row you can collapse must answer for
+    what collapsing it hides.
+    """
+    spec = node.spec
+    assert spec is not None
+    anchor = _spec_anchor(spec.name)
+    dot = (
+        '<span class="dot dot-break"></span>'
+        if spec.path.name in problem_files
+        else _worst_dot(spec, reports)
+    )
+    skipped_cls = " skipped" if spec.skip else ""
+    return (
+        f'<div class="nav-file{skipped_cls}" data-file-anchor="{_e(anchor)}">'
+        f"{dot}"
+        f'<a href="#{_e(anchor)}" title="{_e(spec.path.name)}">{_e(node.label)}.md</a>'
+        f"{_nav_pills(spec, tally or _spec_tally(spec, reports, keys))}</div>"
+    )
+
+
+def _tree_rows(
+    node: _Node,
+    reports: dict[str, Report],
+    problem_files: set[str],
+    keys: dict[str, list[str]],
+    path: str = "",
+) -> list[str]:
+    """Render one level of the tree, recursing into folders.
+
+    Folders are ``<details>``: collapsing works with no JavaScript at
+    all, which is what keeps the static `specs.html` usable opened from
+    disk. The script only remembers which ones you closed.
+    """
+    rows: list[str] = []
+    for child in _ordered(node):
+        here = f"{path}.{child.label}" if path else child.label
+        if not child.children:
+            rows.append(_file_row(child, reports, problem_files, keys))
+            continue
+        total = _subtree_tally(child, reports, keys)
+        summary = (
+            _file_row(child, reports, problem_files, keys, total)
+            if child.spec is not None
+            else (
+                f'<span class="dir-name">{_e(child.label)}</span>'
+                f'<span class="pills">{"".join(_tally_pills(total))}</span>'
+            )
+        )
+        rows.append(
+            f'<details class="nav-dir" open data-dir="{_e(here)}">'
+            f'<summary><span class="caret"></span>{summary}</summary>'
+            f'<div class="nav-dir-body">'
+        )
+        rows.extend(_tree_rows(child, reports, problem_files, keys, here))
+        rows.append("</div></details>")
+    return rows
 
 
 def _sidebar(
@@ -917,27 +1118,9 @@ def _sidebar(
                 f'<a href="#{_e(anchor)}" title="{_e(filename)}">{_e(filename)}</a></div>'
             )
         parts.append("</div>")
-    for label, is_custom, specs in _spec_groups(project):
-        header_cls = "kind kind-custom" if is_custom else f"kind kind-{_e(label)}"
-        parts.append(
-            f'<div class="nav-group"><div class="nav-group-header">'
-            f'<span class="{header_cls}">{_e(label)}</span></div>'
-        )
-        for spec in specs:
-            anchor = _spec_anchor(spec.name)
-            dot = (
-                '<span class="dot dot-break"></span>'
-                if spec.path.name in problem_files
-                else _worst_dot(spec, reports)
-            )
-            skipped_cls = " skipped" if spec.skip else ""
-            parts.append(
-                f'<div class="nav-file{skipped_cls}" data-file-anchor="{_e(anchor)}">'
-                f"{dot}"
-                f'<a href="#{_e(anchor)}" title="{_e(spec.path.name)}">{_e(spec.title)}</a>'
-                f"{_nav_pills(spec, is_custom)}</div>"
-            )
-        parts.append("</div>")
+    parts.append('<div class="nav-group nav-tree">')
+    parts.extend(_tree_rows(_spec_tree(project), reports, problem_files, keys_for(reports)))
+    parts.append("</div>")
     if journal:
         parts.append(
             '<div class="nav-group nav-journal"><div class="nav-group-header">'
@@ -1255,15 +1438,12 @@ def _spec_section(
                 f"&#8596; {_e(other)}</a></span>"
             )
     tier = f"&middot; {_e(spec.tier)}" if spec.kind == "compute" else ""
-    group = (
-        f'&middot; <span class="kind kind-custom">{_e(spec.group)}</span> ' if spec.group else ""
-    )
     skipped_badge = (
         ' <span class="badge skipped">skipped — entries dormant</span>' if spec.skip else ""
     )
     meta = (
         f'<div class="spec-meta"><span class="kind kind-{_e(spec.kind)}">{_e(spec.kind)}</span> '
-        f"{tier} {group}<code>{_e(spec.path.name)}</code> {pair}{skipped_badge}</div>"
+        f"{tier} <code>{_e(spec.path.name)}</code> {pair}{skipped_badge}</div>"
     )
     deps = []
     if spec.consumes:
@@ -1440,8 +1620,7 @@ def render_html(
         ]
         + [
             _spec_section(spec, project, reports, journal_stems)
-            for _, _, specs in _spec_groups(project)
-            for spec in specs
+            for spec in _tree_specs(_spec_tree(project))
         ]
         + ([_journal_index_section(journal)] if journal else [])
         + [_journal_section(j, spec_names, journal_stems) for j in journal]

@@ -209,6 +209,14 @@ specthis dag       # the spec-level DAG on stdout (or --out FILE): a standalone
                    # list), or --format json — nodes + both layouts + edges
 ```
 
+The dashboard's sidebar is a **file tree**, read off the names in
+`specs/`: a dot is a folder, so `compute.omega.weights.md` sits at
+`compute › omega › weights.md`. Folders collapse (and stay collapsed
+across live reloads), and every row carries its counts — how many
+entries, how many need a mind, how many need a machine — with a folder
+answering for everything under it. Renaming a file moves it; there is
+no frontmatter that can disagree with where it lives.
+
 Readers are lenient, writers are strict: `check`, `lint`, and the
 dashboard load whatever parses and *surface* the grammar problems (in
 the page, in a red "does not parse" sidebar group with the broken

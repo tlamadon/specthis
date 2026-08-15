@@ -126,9 +126,12 @@ A **report** is not a type — it is a computable with several `produces`.
 
 A spec file is ordinary markdown. Five rules:
 
-1. **Frontmatter is display metadata only** — `title`, `group`,
-   `priority`. Nothing semantic. Excluded from every digest, so
-   retitling never invalidates a claim.
+1. **Frontmatter is display metadata only** — `title`. Nothing
+   semantic. Excluded from every digest, so retitling never
+   invalidates a claim. (`group`/`priority` were the same species and
+   are retired: the dashboard sidebar is a file tree, where a dot in
+   the name is a folder. A leftover line stays inert *and* stays out
+   of the digest.)
 2. **A heading whose section contains a `- key: value` field list
    declares an entry.** The heading text is the entry name: slug-like,
    unique repo-wide.
@@ -150,9 +153,12 @@ A spec file is ordinary markdown. Five rules:
 
 ### Example
 
+In `specs/data.wages.md` — the name is the organization: the dashboard
+reads that dot as a folder.
+
 ```markdown
 ---
-group: data
+title: Wage data
 ---
 
 # Wage data
@@ -280,9 +286,9 @@ currency table so specthis and the manager stay in agreement (§10.2 —
 managers key on the command too).
 
 ### 5.7 What never enters a specthis digest
-Display metadata (`title`, `group`, `priority`); **resources, executor,
-retries, hooks** and every other scheduling concern a step carries;
-timestamps and durations.
+Display metadata (`title`, and the retired `group`/`priority`);
+**resources, executor, retries, hooks** and every other scheduling
+concern a step carries; timestamps and durations.
 
 The rule: a digest covers what determines the *result*, never what
 determines the *scheduling*. Resizing a job must not expire a judgment

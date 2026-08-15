@@ -7,11 +7,11 @@ template):
   ``kind``, and the two edge lists: ``consumes:`` (entry names —
   artefact flow, enters signatures) and ``references:`` (spec files —
   vocabulary, ledger-invisible). Compute specs add
-  ``tier: intensive | quick``. Optional ``title:`` (display title),
-  ``group:`` (string) and ``priority:`` (int, default 0, higher first)
-  name and organize specs in the dashboard; they are display-only and
-  excluded from ``spec_sha``, so retitling/retagging never invalidates
-  vouches.
+  ``tier: intensive | quick``. Optional ``title:`` names the spec in the
+  dashboard; it is display-only and excluded from ``spec_sha``, so
+  retitling never invalidates a vouch. (The dashboard organizes specs by
+  **file name** — dots make folders — so there is nothing else to
+  declare.)
 - Executable kinds (``compute``, ``report``) carry a
   ``## Entry`` (single) or ``## Entries`` (multi) section whose
   ``### <entry-name>`` blocks each declare ``Output:`` (compute, one
@@ -55,6 +55,12 @@ _BACKTICKED = re.compile(r"`([^`]+)`")
 #: Display-only frontmatter lines carved out of ``spec_sha`` — they
 #: name and organize things in the dashboard, never the contract, so
 #: editing them must not invalidate vouches.
+#:
+#: ``group``/``priority`` are **retired** (the sidebar is a file tree
+#: now) but stay in this pattern deliberately: they were never in the
+#: digest, and dropping them would put a leftover line back *into* it,
+#: expiring every vouch on a file that still carries one. A stale line
+#: is inert; it must also stay invisible.
 _DISPLAY_LINE = re.compile(r"^(?:group|priority|title):[^\n]*(?:\n|$)", re.MULTILINE)
 
 
@@ -161,8 +167,6 @@ class SpecFile:
     body: str  # markdown after the frontmatter (the contract prose)
     title: str = ""  # frontmatter `title:` (display-only, outside spec_sha), else first heading, else name
     skip: bool = False  # commented out: entries dormant, body not grammar-checked
-    group: str | None = None  # sidebar group label; display-only, outside spec_sha
-    priority: int = 0  # sidebar rank, higher first; display-only, outside spec_sha
     #: `props:` — free variables making this file's entries templates
     #: (spec §15). Semantic, so inside spec_sha: adding a prop changes
     #: what the contract promises.
@@ -355,13 +359,6 @@ def parse_spec(path: Path) -> SpecFile:
     if not isinstance(skip, bool):
         raise SpecError(f"{path.name}: `skip: {skip}` must be true or false")
 
-    group = meta.get("group")
-    if group is not None and (not isinstance(group, str) or not group.strip()):
-        raise SpecError(f"{path.name}: `group: {group}` must be a non-empty string")
-    priority = meta.get("priority", 0)
-    if isinstance(priority, bool) or not isinstance(priority, int):
-        raise SpecError(f"{path.name}: `priority: {priority}` must be an integer")
-
     body = text[m.end() :]
     heading = re.search(r"^# +(.+?)\s*$", body, re.MULTILINE)
     spec = SpecFile(
@@ -376,8 +373,6 @@ def parse_spec(path: Path) -> SpecFile:
         body=body,
         title=str(meta.get("title") or (heading.group(1) if heading else name)),
         skip=skip,
-        group=group.strip() if group else None,
-        priority=priority,
     )
 
     if kind in ENTRY_KINDS:

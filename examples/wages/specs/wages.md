@@ -1,5 +1,5 @@
 ---
-group: wages
+title: Wages
 ---
 
 # Wages

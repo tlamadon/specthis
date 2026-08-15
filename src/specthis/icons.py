@@ -2,10 +2,16 @@
 
 Feather-style stroke icons on a 24px viewBox: terminal = compute job,
 bars = report, book = library, open book = definitions, layout =
-templates, info = meta, bolt = intensive tier. The sidebar pills
-(:mod:`specthis.export`) and the DAG views (:mod:`specthis.dag`) draw
-from the same dict so a kind always looks the same. Inline markup
-only — the exported page and standalone SVGs stay self-contained.
+templates, info = meta, cylinder = source dataset, bolt = intensive
+tier. The sidebar pills (:mod:`specthis.export`) and the DAG views
+(:mod:`specthis.dag`) draw from the same dict so a kind always looks
+the same. Inline markup only — the exported page and standalone SVGs
+stay self-contained.
+
+**Every entry kind needs one.** The DAG draws an icon per spec with no
+fallback, so a missing kind is not a blank badge — it is a `KeyError`
+that takes `export` and `dag` down with it. A test asserts the dict
+covers ``parse.KINDS``.
 """
 
 from __future__ import annotations
@@ -31,6 +37,11 @@ ICONS = {
     "meta": (
         '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/>'
         '<line x1="12" y1="8" x2="12.01" y2="8"/>'
+    ),
+    "source": (
+        '<ellipse cx="12" cy="5" rx="9" ry="3"/>'
+        '<path d="M21 5v14c0 1.66-4 3-9 3s-9-1.34-9-3V5"/>'
+        '<path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>'
     ),
     "intensive": '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
 }

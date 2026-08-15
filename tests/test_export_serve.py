@@ -211,7 +211,7 @@ def test_markdown_spec_links_are_hash_routed(root: Path) -> None:
 def test_sidebar_and_hash_routing(root: Path) -> None:
     project = load_project(root)
     page, _ = render(project)
-    # one nav entry per spec file, grouped by kind, plus the tree pages
+    # one nav entry per spec file, plus the tree pages
     assert '<nav class="sidebar">' in page
     assert 'data-file-anchor="vouch"' in page
     assert 'data-file-anchor="run"' in page
@@ -219,60 +219,138 @@ def test_sidebar_and_hash_routing(root: Path) -> None:
         assert f'data-file-anchor="{anchor}"' in page
         assert f'<section class="spec" id="{anchor}">' in page
     assert '<span class="kind kind-definitions">definitions</span>' in page
-    # spec titles come from the first heading
-    assert ">alpha fit</a>" in page
+    # the sidebar says the file name; the title heads the section
+    assert ">compute-alpha.md</a>" in page
+    assert "alpha fit" in page
     # the hash router and scroll-preserving reload ship inline
     assert "anchorToFile" in page
     assert "specsScrollY" in page
     assert "MathJax" in page
 
 
-def test_sidebar_frontmatter_groups_and_pills(root: Path) -> None:
-    # estimation (max priority 5) outranks figures (1); models stays
-    # untagged and keeps its kind block below the custom groups
-    for name, extra in (
-        ("compute-alpha", "\ngroup: estimation"),
-        ("compute-beta", "\ngroup: estimation\npriority: 5"),
-        ("report-beta", "\ngroup: figures\npriority: 1"),
-    ):
-        path = root / f"specs/{name}.md"
-        path.write_text(path.read_text().replace(f"name: {name}", f"name: {name}{extra}"))
+# ------------------------------------------------------- the file tree
+
+
+NOTE = """\
+---
+name: {name}
+kind: definitions
+---
+
+# {name}
+
+Vocabulary only.
+"""
+
+
+def with_files(root: Path, *names: str) -> Path:
+    """Add dot-named definition specs — the tree's raw material."""
+    for name in names:
+        write(root, f"specs/{name}.md", NOTE.format(name=name))
+    return root
+
+
+def sidebar_of(root: Path) -> str:
+    """The <nav> only — the stylesheet above it names every pill class."""
+    page, _ = render(load_project(root))
+    return page[page.index('<nav class="sidebar">') : page.index("</nav>")]
+
+
+def test_dots_in_a_file_name_are_folders(root: Path) -> None:
+    """The VS Code move: `compute.omega.weights.md` lives at
+    compute > omega > weights.md, and nothing declared it."""
+    sidebar = sidebar_of(with_files(root, "compute.omega.weights", "compute.psi"))
+    assert '<details class="nav-dir" open data-dir="compute">' in sidebar
+    assert '<details class="nav-dir" open data-dir="compute.omega">' in sidebar
+    assert '<span class="dir-name">omega</span>' in sidebar
+    # the leaf shows its own segment; the full name is the tooltip
+    assert 'title="compute.omega.weights.md">weights.md</a>' in sidebar
+    assert 'title="compute.psi.md">psi.md</a>' in sidebar
+
+
+def test_folders_come_before_files_each_alphabetical(root: Path) -> None:
+    sidebar = sidebar_of(with_files(root, "zeta", "alpha.one", "alpha.two"))
+    assert sidebar.index('data-dir="alpha"') < sidebar.index(">zeta.md</a>")
+    assert sidebar.index(">one.md</a>") < sidebar.index(">two.md</a>")
+
+
+def test_a_file_that_is_also_a_folder_is_both(root: Path) -> None:
+    """`compute.md` beside `compute.omega.md` is an overview next to its
+    parts — one row that both links and opens."""
+    sidebar = sidebar_of(with_files(root, "compute", "compute.omega"))
+    opener = sidebar.index('data-dir="compute"')
+    summary = sidebar[opener : sidebar.index("</summary>", opener)]
+    assert 'data-file-anchor="spec-compute"' in summary  # it links to its own section
+    assert ">compute.md</a>" in summary
+
+
+def test_rows_carry_counts_and_folders_aggregate_them(root: Path) -> None:
+    """Pills: how many entries, and what they are waiting on. A folder
+    answers for everything under it."""
+    sidebar = sidebar_of(root)
+    # compute-alpha declares one entry, unvouched and never run
+    assert '<span class="pill pill-num pill-entries" title="1 entries">1</span>' in sidebar
+    assert '<span class="pill pill-num pill-mind" title="1 needing a mind">1</span>' in sidebar
+    assert '<span class="pill pill-num pill-machine" title="1 needing a machine">1</span>' in sidebar
+
+    make_ready(root)  # vouched and run: the attention pills go quiet
+    quiet = sidebar_of(root)
+    assert "pill-entries" in quiet
+    assert "pill-mind" not in quiet
+    assert "pill-machine" not in quiet
+
+
+def test_a_folder_sums_its_subtree(root: Path) -> None:
+    for stem in ("compute-alpha", "compute-beta"):
+        old = root / f"specs/{stem}.md"
+        # `name:` must match the filename stem, so moving a file into a
+        # folder is a rename of both — which is the whole cost of the tree
+        write(root, f"specs/grp.{stem}.md", old.read_text().replace(
+            f"name: {stem}", f"name: grp.{stem}"
+        ))
+        old.unlink()
+    sidebar = sidebar_of(root)
+    summary = sidebar[sidebar.index('data-dir="grp"') :]
+    summary = summary[: summary.index("</summary>")]
+    assert 'title="2 entries">2</span>' in summary
+
+    # and when the folder is *also* a file, its row answers for the whole
+    # subtree — anything you can collapse must say what collapsing hides
+    write(root, "specs/grp.md", NOTE.format(name="grp"))
+    sidebar = sidebar_of(root)
+    summary = sidebar[sidebar.index('data-dir="grp"') :]
+    summary = summary[: summary.index("</summary>")]
+    assert ">grp.md</a>" in summary
+    assert 'title="2 entries">2</span>' in summary
+
+
+def test_kind_and_tier_pills_ride_every_row(root: Path) -> None:
     write(
         root,
         "specs/compute-beta.md",
         (root / "specs/compute-beta.md").read_text().replace("tier: quick", "tier: intensive"),
     )
-    page, index = render(load_project(root))
-
-    i_est = page.index('<span class="kind kind-custom">estimation</span>')
-    i_fig = page.index('<span class="kind kind-custom">figures</span>')
-    i_def = page.index('<span class="kind kind-definitions">definitions</span>')
-    assert i_est < i_fig < i_def
-
-    # within a group priority wins over the name: beta (5) before alpha (0)
-    sidebar = page[: page.index("</nav>")]
-    assert sidebar.index('data-file-anchor="spec-compute-beta"') < sidebar.index(
-        'data-file-anchor="spec-compute-alpha"'
-    )
-    # rows in custom groups carry a kind icon pill (tooltip names it);
-    # intensive compute adds a tier pill
+    sidebar = sidebar_of(root)
+    # with kind headers gone, the row is the only place that says report
     assert '<span class="pill kind-compute" title="compute">' in sidebar
     assert '<span class="pill kind-report" title="report">' in sidebar
     assert '<span class="pill pill-tier" title="intensive">' in sidebar
 
-    # the section stream follows the same order as the sidebar
-    body = page[page.index("</nav>") :]
-    assert (
-        body.index('id="spec-compute-beta"')
-        < body.index('id="spec-compute-alpha"')
-        < body.index('id="spec-report-beta"')
-        < body.index('id="spec-models"')
-    )
 
-    by_name = {s["name"]: s for s in index["specs"]}
-    assert by_name["compute-beta"]["group"] == "estimation"
-    assert by_name["compute-beta"]["priority"] == 5
-    assert by_name["models"]["group"] is None
+def test_the_section_stream_follows_the_sidebar(root: Path) -> None:
+    page, _ = render(load_project(with_files(root, "zeta", "alpha.one")))
+    body = page[page.index("</nav>") :]
+    assert body.index('id="spec-alpha.one"') < body.index('id="spec-zeta"')
+
+
+def test_retired_group_frontmatter_no_longer_organizes_anything(root: Path) -> None:
+    """It parses (nobody must edit a spec to upgrade) and does nothing."""
+    path = root / "specs/compute-alpha.md"
+    path.write_text(path.read_text().replace("name: compute-alpha", "name: compute-alpha\ngroup: estimation\npriority: 5"))
+    page, index = render(load_project(root))
+    assert "estimation" not in page
+    assert "group" not in index["specs"][0]
+    assert "priority" not in index["specs"][0]
 
 
 def test_export_view_is_pure_join(root: Path) -> None:
