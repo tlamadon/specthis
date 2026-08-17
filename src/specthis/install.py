@@ -8,6 +8,7 @@ from pathlib import Path
 AGENT_NAMES = ("spec-auditor", "spec-implementer", "experiment-runner", "spec-critic")
 COMMAND_NAMES = ("specthis-vouch", "specthis-run", "specthis-lint", "specthis-journal")
 SPEC_TEMPLATE_NAMES = ("README.md", "AGENTS.md")
+WORKFLOW_NAMES = ("badges",)
 
 
 def _read_template(subdir: str, filename: str) -> str:
@@ -65,6 +66,34 @@ def install_commands(
             skipped.append((name, "already exists; use --force"))
             continue
         body = _read_template("commands", f"{name}.md")
+        target.write_text(body, encoding="utf-8")
+        installed.append(name)
+    return installed, skipped
+
+
+def install_workflows(
+    project_path: Path,
+    force: bool = False,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Copy the CI workflow templates into ``<project_path>/.github/workflows/``.
+
+    Opt-in, unlike the agents: a workflow pushes a branch under the
+    repo's own token, which is not something a scaffolder should arrange
+    without being asked.
+
+    Returns ``(installed, skipped)`` like :func:`install_agents`.
+    """
+    target_dir = project_path / ".github" / "workflows"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    installed: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    for name in WORKFLOW_NAMES:
+        target = target_dir / f"{name}.yml"
+        if target.exists() and not force:
+            skipped.append((name, "already exists; use --force"))
+            continue
+        body = _read_template("workflows", f"{name}.yml")
         target.write_text(body, encoding="utf-8")
         installed.append(name)
     return installed, skipped

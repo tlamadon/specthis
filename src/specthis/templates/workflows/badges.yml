@@ -1,0 +1,69 @@
+# Publish the two tree badges to a `badges` branch, for the README.
+#
+# The job needs the repo and nothing else: both claims are computable
+# from git alone (a missing artifact leaves a realization `current` and
+# merely un-materialized; a consumer pins its upstream's *recorded*
+# digest, not the bytes). So no data, no credentials, no cluster.
+#
+# It force-pushes a single-commit orphan branch named `badges`. If that
+# name means something else in your repo, change it in both places
+# below and in the README badge URLs.
+name: badges
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: badges
+  cancel-in-progress: true
+
+jobs:
+  badges:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install specthis
+
+      # --no-data: this checkout has no data files. A `source` entry is
+      # the one claim whose subject *is* the bytes, so an absent-but-
+      # recorded dataset is a fetch away rather than a break; one that
+      # was never recorded still counts against the mind queue.
+      - run: specthis badge --out .badges --no-data
+
+      - name: Publish to the badges branch
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          cp .badges/mind.json .badges/machine.json "$work/"
+
+          # Nothing moved? Don't rewrite the branch.
+          if git fetch --depth=1 origin badges 2>/dev/null; then
+            git show origin/badges:mind.json    > "$work/was-mind.json"    2>/dev/null || true
+            git show origin/badges:machine.json > "$work/was-machine.json" 2>/dev/null || true
+            if cmp -s "$work/mind.json" "$work/was-mind.json" \
+               && cmp -s "$work/machine.json" "$work/was-machine.json"; then
+              echo "badges unchanged"
+              exit 0
+            fi
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # A fresh root commit holding exactly two files, so the branch
+          # never accumulates history and never carries a stale artifact.
+          git checkout --orphan badges-publish
+          git rm -rf --cached . > /dev/null
+          find . -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
+          cp "$work/mind.json" "$work/machine.json" .
+          git add mind.json machine.json
+          git commit -m "badges: ${GITHUB_SHA:0:7}"
+          git push --force origin badges-publish:badges

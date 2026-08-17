@@ -9,6 +9,7 @@ command) lives here and only here — everything below the CLI is pure.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,7 +42,7 @@ from .check import (
     verified,
 )
 from .correspond import correspondence_problems, correspondence_warnings
-from .install import init_specs_dir, install_agents, install_commands
+from .install import init_specs_dir, install_agents, install_commands, install_workflows
 from .instances import by_step as instances_by_step
 from .instances import resolve_key, template_problems
 from .ledger import (
@@ -764,6 +765,90 @@ def dag_cmd(fmt: str, view: str, orient: str, out: Path | None, project_path: Pa
         click.echo(text, nl=False)
 
 
+@main.command("badge")
+@click.option(
+    "--out",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Write mind.json + machine.json into this directory instead of stdout.",
+)
+@click.option(
+    "--no-data",
+    is_flag=True,
+    help="This checkout has no data files. Drops source entries whose bytes are "
+    "absent but recorded in a ledger — on those, absence is a fetch away, not a "
+    "break. Sources that were never recorded still count. Use it in CI.",
+)
+@click.option(
+    "--markdown",
+    "as_markdown",
+    is_flag=True,
+    help="Print the README snippet for the published badges and exit "
+    "(owner/repo read from `git remote origin` unless --repo says otherwise).",
+)
+@click.option("--repo", default=None, help="owner/repo for --markdown.")
+@click.option(
+    "--branch",
+    default="badges",
+    show_default=True,
+    help="Branch the workflow publishes the JSON to; used by --markdown.",
+)
+@_path_option
+def badge_cmd(
+    out: Path | None,
+    no_data: bool,
+    as_markdown: bool,
+    repo: str | None,
+    branch: str,
+    project_path: Path,
+) -> None:
+    """Emit one shields.io endpoint badge per tree: minds, machines.
+
+    A regenerated view like the dashboard and the DAG — it derives
+    nothing, it counts the two queues `check` reports and picks a
+    colour. Publish the JSON somewhere raw-servable (the shipped
+    workflow commits it to a `badges` branch) and point a static
+    markdown badge at it.
+
+    **Always exits 0**: a full queue is a fact about the project, not a
+    failure of the view. `check` is the verb that gates CI.
+    """
+    from . import badge as badges
+
+    project, problems = _load_lenient(project_path)
+    if as_markdown:
+        slug = repo or _origin_slug(project_path)
+        if not slug:
+            raise click.ClickException(
+                "no GitHub remote found — pass --repo owner/repo"
+            )
+        click.echo(badges.markdown(slug, branch))
+        return
+    bodies = badges.endpoints(project, check_project(project), problems, no_data)
+    if out is None:
+        click.echo(json.dumps(bodies, indent=2))
+        return
+    for path in badges.write(out, bodies):
+        click.echo(f"  wrote  {path}")
+
+
+def _origin_slug(project_path: Path) -> str | None:
+    """``owner/repo`` from the checkout's origin remote, if it is GitHub."""
+    from . import badge as badges
+
+    try:
+        url = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return badges.slug(url)
+
+
 @main.command("serve")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", type=int, default=8765, show_default=True)
@@ -886,7 +971,15 @@ def migrate_cmd(
     ),
     help="Install only the named agent(s), and no slash commands. Repeatable. Default: everything.",
 )
-def install_cmd(project_path: Path, force: bool, selected: tuple[str, ...]) -> None:
+@click.option(
+    "--workflows",
+    is_flag=True,
+    help="Also write .github/workflows/badges.yml — the job that publishes the "
+    "two tree badges. Opt-in: it pushes a `badges` branch under the repo's token.",
+)
+def install_cmd(
+    project_path: Path, force: bool, selected: tuple[str, ...], workflows: bool
+) -> None:
     """Copy the specthis subagents into <project>/.claude/agents/ and the
     slash commands (e.g. /specthis-vouch) into <project>/.claude/commands/."""
     installed, skipped = install_agents(
@@ -898,6 +991,10 @@ def install_cmd(project_path: Path, force: bool, selected: tuple[str, ...]) -> N
         cmd_installed, cmd_skipped = install_commands(project_path=project_path, force=force)
         installed += [f"/{name} (command)" for name in cmd_installed]
         skipped += cmd_skipped
+    if workflows:
+        wf_installed, wf_skipped = install_workflows(project_path=project_path, force=force)
+        installed += [f".github/workflows/{name}.yml" for name in wf_installed]
+        skipped += wf_skipped
     for name in installed:
         click.echo(f"  installed  {name}")
     for name, reason in skipped:

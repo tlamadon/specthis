@@ -1,5 +1,8 @@
 # specthis
 
+[![minds](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tlamadon/specthis/badges/mind.json)](https://github.com/tlamadon/specthis)
+[![machines](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tlamadon/specthis/badges/machine.json)](https://github.com/tlamadon/specthis)
+
 **A notary for a research pipeline.** It records who claimed what about
 your project, and tells you which of those claims the content still
 supports.
@@ -197,7 +200,7 @@ Boundaries are load-bearing: `check`/`status`/`lint` never write,
 `vouch` never touches `runs.toml`, and nothing but `vouch` touches
 `vouches.toml`.
 
-Three more render **views** — regenerated, never read back by the
+Four more render **views** — regenerated, never read back by the
 ledger:
 
 ```bash
@@ -207,6 +210,8 @@ specthis serve     # live dashboard at localhost:8765; re-renders on any
 specthis dag       # the spec-level DAG on stdout (or --out FILE): a standalone
                    # SVG figure (--view rails for the dashboard's git-log-style
                    # list), or --format json — nodes + both layouts + edges
+specthis badge     # one shields.io endpoint per tree, for a README
+                   # (see Badges) — always exits 0; `check` is the gate
 ```
 
 The dashboard's sidebar is a **file tree**, read off the names in
@@ -484,9 +489,14 @@ worth remembering, with links to the specs involved.
 ## Scaffold a project
 
 ```bash
-specthis install    # writes the Claude Code subagents into .claude/agents/
-specthis init       # creates specs/ with README.md + AGENTS.md templates
+specthis install               # writes the Claude Code subagents into .claude/agents/
+specthis install --workflows   # also .github/workflows/badges.yml (see Badges)
+specthis init                  # creates specs/ with README.md + AGENTS.md templates
 ```
+
+Workflows are opt-in: the badge job pushes a branch under the repo's
+own token, which is not something a scaffolder should arrange without
+being asked.
 
 Four Claude Code subagents and the slash commands cover the daily
 operations:
@@ -519,6 +529,50 @@ operations:
   entry into `journal/` from the current session (see
   [Journal](#journal)). No ledger is touched — the journal records
   the why, the ledgers record the what.
+
+## Badges
+
+The two queues, on the front page of the repo — one badge per tree, so
+a reader sees at a glance what the project is waiting on:
+
+```bash
+specthis badge                      # both endpoints, as JSON, on stdout
+specthis badge --out .badges        # mind.json + machine.json
+specthis badge --markdown           # the README snippet, owner/repo from git
+specthis install --workflows        # .github/workflows/badges.yml
+```
+
+The badge is a **view**, like the dashboard: it derives nothing, it
+counts the two queues `check` already reports and picks a colour —
+green on an empty queue, amber on a backlog, red for a rejection
+(a judge said no; that is a different fact, not a bigger number) and
+red for a tree that does not parse, because a green badge counting
+only the entries that survived a lenient load would be a lie. It
+always exits 0 — a full queue is a fact about the project, not a
+failure of the view, and `check` is the verb that gates CI.
+
+The shipped workflow runs on push, writes the JSON, and force-pushes a
+single-commit `badges` branch; the README points at it and never
+changes:
+
+```markdown
+![minds](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/OWNER/REPO/badges/mind.json)
+```
+
+**The job needs the repo and nothing else** — no data, no credentials,
+no cluster. That is the no-mtime doctrine paying out: an artifact
+absent from a bare clone leaves its realization *current* and merely
+un-materialized, and a consumer pins its upstream's **recorded** output
+digest rather than the bytes. So a runner with `git clone` and
+`pip install specthis` derives exactly the answer your laptop does.
+
+The exception is a `source` entry, whose subject *is* the bytes: with
+no data on disk it reads `unimplemented` on one axis and `stale` on the
+other — two breaks that neither a mind nor a machine can repair,
+because nothing is wrong. `--no-data` (which the workflow passes) drops
+exactly those, and only when a ledger row proves the digest was
+recorded once — a dataset nobody ever placed still counts against the
+mind queue.
 
 ## Migrating from the old `_lock.json`
 
