@@ -213,7 +213,11 @@ html.js-routed .nav-file.active { border-left-color: var(--accent);
 .nav-file.skipped a { color: var(--muted); font-weight: 400; font-style: italic; }
 section.spec.skipped .md, section.spec.skipped table { opacity: 0.65; }
 
-.content { max-width: 52rem; padding: 1.5rem 2rem 4rem; }
+/* The page is a dashboard, not an essay: the tree tables carry nine
+   columns and were being squeezed into a prose measure, which crushed
+   the metadata columns until even a date wrapped. Prose keeps its
+   measure (.md below); everything else gets the window. */
+.content { max-width: 78rem; padding: 1.5rem 2rem 4rem; }
 html.js-routed section.spec { display: none; }
 html.js-routed section.spec.active { display: block; }
 section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
@@ -250,6 +254,19 @@ section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
   border-left: 4px solid #b85a1e; border-radius: 8px; padding: 12px 16px;
   margin-bottom: 20px; font-size: 0.9rem; }
 .warnings.problems { border-left-color: #a40e26; }
+/* Atoms: a date and a name are single things, and the default line
+   breaker will happily split both — after every hyphen. That is why
+   `2026-08-13` came out on three lines and `spec-critic (for tlamadon)`
+   on five: auto table layout squeezes a column to its longest
+   unbreakable run, and hyphens made that run one character. Refusing
+   the break also gives the column a floor to hold. */
+.when, .name { white-space: nowrap; }
+td.stamp { white-space: nowrap; }
+
+/* When the floor still doesn't fit — a narrow window, nine columns —
+   the table scrolls inside its own box instead of shredding, and the
+   page never scrolls sideways. */
+.table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.9rem; }
 th { text-align: left; font-size: 0.72rem; text-transform: uppercase;
   letter-spacing: .04em; color: var(--muted); font-weight: 600;
@@ -309,7 +326,8 @@ tr.detail > td { padding: 2px 0 10px; }
 .dag .hit { fill: none; pointer-events: all; }
 .dag-caption { font-size: 0.78rem; color: var(--muted); margin: 0 0 16px; }
 
-.md { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
+.md { margin-top: 1.2rem; border-top: 1px solid var(--border); padding-top: 0.8rem;
+  max-width: 52rem; }
 .md h1 { font-size: 1.3rem; margin: 1rem 0 0.4rem; }
 .md h2 { font-size: 1.12rem; margin: 1rem 0 0.4rem; }
 .md h3 { font-size: 0.98rem; margin: 0.8rem 0 0.3rem; }
@@ -792,13 +810,16 @@ def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) ->
             title = f' title="{_e(r.vouch.note)}"' if r.vouch.note else ""
             vouch = (
                 f"<span{title}>{_e(r.vouch.verdict)} "
-                f'<span class="who">by {_e(r.vouch.attester)}, '
-                f"{_e(r.vouch.vouched[:10])}</span></span>"
+                f'<span class="who">by <span class="name">{_e(r.vouch.attester)}</span>, '
+                f'<span class="when">{_e(r.vouch.vouched[:10])}</span></span></span>'
             )
         else:
             vouch = '<span class="empty">—</span>'
         if r.run:
-            run = f'<span class="who">{_e(r.run.ran[:10])} via {_e(r.run.executor)}</span>'
+            run = (
+                f'<span class="who"><span class="when">{_e(r.run.ran[:10])}</span> '
+                f'via <span class="name">{_e(r.run.executor)}</span></span>'
+            )
         else:
             run = '<span class="empty">—</span>'
         outputs = "<br>".join(_output_chip(project.root, o) for o in entry.outputs) or (
@@ -820,8 +841,8 @@ def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) ->
     if not rows:
         return ""
     return (
-        "<table><tr><th>entry</th><th>status</th><th>outputs</th>"
-        "<th>vouched</th><th>last run</th></tr>" + "".join(rows) + "</table>"
+        '<div class="table-wrap"><table><tr><th>entry</th><th>status</th><th>outputs</th>'
+        "<th>vouched</th><th>last run</th></tr>" + "".join(rows) + "</table></div>"
     )
 
 
@@ -1224,13 +1245,22 @@ def _detail_row(
         lines.append(
             (
                 "vouch",
-                (f'{_e(r.vouch.verdict)} <span class="who">by {_e(r.vouch.attester)}, '
-                f"{_e(r.vouch.vouched[:10])}{_e(note)}</span>"),
+                (
+                    f'{_e(r.vouch.verdict)} <span class="who">by '
+                    f'<span class="name">{_e(r.vouch.attester)}</span>, '
+                    f'<span class="when">{_e(r.vouch.vouched[:10])}</span>{_e(note)}</span>'
+                ),
             )
         )
     if r.run:
         lines.append(
-            ("run", f'<span class="who">{_e(r.run.ran[:10])} via {_e(r.run.executor)}</span>')
+            (
+                "run",
+                (
+                    f'<span class="who"><span class="when">{_e(r.run.ran[:10])}</span> via '
+                    f'<span class="name">{_e(r.run.executor)}</span></span>'
+                ),
+            )
         )
     if entry.binding.scripts:
         lines.append(
@@ -1278,10 +1308,14 @@ def _chip_row(tallies: list[tuple[str, int]]) -> str:
 
 
 def _stamp_cell(iso: str | None) -> str:
-    """A date cell sorting by the full ISO stamp; em-dash without one."""
+    """A date cell sorting by the full ISO stamp; em-dash without one.
+
+    ``stamp`` keeps it on one line: a hyphenated date is three break
+    opportunities, and a squeezed column will take all of them.
+    """
     if not iso:
-        return f'<td data-sort="">{_EMPTY}</td>'
-    return f'<td data-sort="{_e(iso)}" title="{_e(iso)}">{_e(iso[:10])}</td>'
+        return f'<td class="stamp" data-sort="">{_EMPTY}</td>'
+    return f'<td class="stamp" data-sort="{_e(iso)}" title="{_e(iso)}">{_e(iso[:10])}</td>'
 
 
 def _took_cell(seconds: float | None) -> str:
@@ -1316,6 +1350,7 @@ def _vouch_section(
         expired = (
             f'<span class="who">{_e("; ".join(r.expired))}</span>' if r.expired else _EMPTY
         )
+        by = f'<span class="name">{_e(v.attester)}</span>' if v else _EMPTY
         rows.append(
             f'<tr class="entry-row" data-name="{_e(name)}" '
             f'data-consumes="{_e(" ".join(e.consumes))}">'
@@ -1326,7 +1361,7 @@ def _vouch_section(
             f'<td><a href="#{_e(_spec_anchor(e.spec.name))}">{_e(e.spec.name)}</a></td>'
             f"<td>{_kind_tier(e)}</td>"
             f'<td data-sort="{_CERT_RANK[r.certification]}">{_cert_badge(r)}</td>'
-            f"<td>{_e(v.attester) if v else _EMPTY}</td>"
+            f"<td>{by}</td>"
             f"{_stamp_cell(v.vouched if v else None)}"
             f"{_took_cell(v.duration_seconds if v else None)}"
             f"<td>{expired}</td></tr>"
@@ -1340,10 +1375,11 @@ def _vouch_section(
     )
     table = (
         focus_bar
-        + '<table class="sortable"><thead><tr><th class="no-sort"></th>'
+        + '<div class="table-wrap"><table class="sortable">'
+        '<thead><tr><th class="no-sort"></th>'
         "<th>entry</th><th>spec</th><th>kind/tier</th><th>vouch state</th><th>by</th>"
         "<th>vouched</th><th>took</th><th>moved since vouch</th></tr></thead>"
-        f'<tbody>{"".join(rows)}</tbody></table>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
         if rows
         else '<p class="empty">No entries yet.</p>'
     )
@@ -1390,6 +1426,7 @@ def _run_section(project: Project, reports: dict[str, Report]) -> str:
             continue
         run = r.run
         moved = f'<span class="who">{_e(", ".join(r.moved))}</span>' if r.moved else _EMPTY
+        via = f'<span class="name">{_e(run.executor)}</span>' if run else _EMPTY
         rows.append(
             f'<tr class="entry-row" data-name="{_e(name)}">'
             f'<td><a href="#{_e(_entry_anchor(name))}"><b>{_e(name)}</b></a></td>'
@@ -1397,17 +1434,17 @@ def _run_section(project: Project, reports: dict[str, Report]) -> str:
             f"<td>{_kind_tier(e)}</td>"
             f'<td data-sort="{_real_rank(r)}">{_real_badge(r)}{_bytes_badge(r)}</td>'
             f"{_stamp_cell(run.ran if run else None)}"
-            f"<td>{_e(run.executor) if run else _EMPTY}</td>"
+            f"<td>{via}</td>"
             f"{_took_cell(run.duration_seconds if run else None)}"
             f"{_cached_cell(r, e)}"
             f"<td>{moved}</td></tr>"
             + _detail_row(e, r, project, reports, consumed_by)
         )
     table = (
-        '<table class="sortable"><thead><tr>'
+        '<div class="table-wrap"><table class="sortable"><thead><tr>'
         "<th>entry</th><th>spec</th><th>kind/tier</th><th>run state</th><th>ran</th>"
         "<th>via</th><th>took</th><th>cached</th><th>moved</th></tr></thead>"
-        f'<tbody>{"".join(rows)}</tbody></table>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
         if rows
         else '<p class="empty">No runnable entries (libraries stop at code).</p>'
     )
@@ -1479,7 +1516,7 @@ def _spec_section(
 def _when_cell(iso: str, now: datetime) -> str:
     ago = fmt_ago(iso, now)
     return (
-        f'<td data-sort="{_e(iso)}" title="{_e(iso)}">{_e(ago)} '
+        f'<td class="stamp" data-sort="{_e(iso)}" title="{_e(iso)}">{_e(ago)} '
         f'<span class="who">{_e(iso[:10])}</span></td>'
     )
 
@@ -1538,9 +1575,9 @@ def _activity_section(
         )
     events.sort(key=lambda e: e[0], reverse=True)
     table = (
-        '<table class="sortable"><thead><tr><th>when</th><th>event</th>'
+        '<div class="table-wrap"><table class="sortable"><thead><tr><th>when</th><th>event</th>'
         "<th>what</th><th>by / via</th><th>took</th></tr></thead>"
-        f'<tbody>{"".join(row for _, row in events)}</tbody></table>'
+        f'<tbody>{"".join(row for _, row in events)}</tbody></table></div>'
         if events
         else '<p class="empty">Nothing recorded yet.</p>'
     )

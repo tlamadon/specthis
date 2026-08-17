@@ -113,7 +113,12 @@ def test_spec_page_vouch_note_is_tooltip_only(root: Path) -> None:
     rows = _entry_rows(spec, project, reports)
     assert 'title="All 11 &quot;symbols&quot; present — long rationale prose"' in rows
     assert f" — {note}" not in rows  # no inline wall of text
-    assert '<span class="who">by critic, 2026-01-01</span>' in rows
+    # the attester and the date are atoms: neither may break mid-token,
+    # which is how a squeezed column put a date on three lines
+    assert (
+        '<span class="who">by <span class="name">critic</span>, '
+        '<span class="when">2026-01-01</span></span>'
+    ) in rows
 
 
 def test_export_shows_frontier_and_escapes_html(root: Path) -> None:
