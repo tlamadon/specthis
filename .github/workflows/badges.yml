@@ -30,7 +30,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install specthis
+      # This repo is specthis, so it badges itself with the code in the
+      # commit, not with the last release. The shipped template installs
+      # from PyPI instead — keep the two in step when either changes.
+      - run: pip install -e .
 
       # --no-data: this checkout has no data files. A `source` entry is
       # the one claim whose subject *is* the bytes, so an absent-but-

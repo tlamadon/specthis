@@ -30,7 +30,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install specthis
+      # Floored, not pinned: `badge` arrived in 0.1.7, and a job that
+      # resolves to anything older fails on an unknown command.
+      - run: pip install "specthis>=0.1.7"
 
       # --no-data: this checkout has no data files. A `source` entry is
       # the one claim whose subject *is* the bytes, so an absent-but-

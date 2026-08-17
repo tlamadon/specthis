@@ -212,6 +212,8 @@ def test_install_workflows_writes_the_badge_job(tmp_path: Path) -> None:
     body = (tmp_path / ".github" / "workflows" / "badges.yml").read_text()
     assert "specthis badge --out .badges --no-data" in body
     assert "contents: write" in body
+    # a floor, or the job resolves to a specthis with no `badge` verb
+    assert 'pip install "specthis>=0.1.7"' in body
     # idempotent without force
     installed, skipped = install_workflows(project_path=tmp_path)
     assert installed == [] and len(skipped) == len(WORKFLOW_NAMES)
