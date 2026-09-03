@@ -261,8 +261,40 @@ def test_status_leads_with_two_coordinates_not_one_word(root: Path) -> None:
 
 def test_status_list_shows_both_axes(root: Path) -> None:
     make_ready(root)
+    out = run_cli("status", "-a", "--path", str(root)).output
+    row = next(line for line in out.splitlines() if "fit-alpha" in line)
+    assert "certified" in row and "current" in row
+
+
+def test_bare_status_is_two_lines_one_per_tree(root: Path) -> None:
+    """The glance: what holds on each tree, and what the rest waits for."""
     out = run_cli("status", "--path", str(root)).output
-    assert "certified · current" in out
+    assert out.splitlines() == [
+        "vouch tree  0/3 certified         3 unvouched",
+        "run tree    0/3 current           3 never-run",
+    ]
+    make_ready(root)
+    out = run_cli("status", "--path", str(root)).output
+    # a clean tree is the fraction alone — no row of noughts
+    assert out.splitlines() == ["vouch tree  3/3 certified", "run tree    3/3 current"]
+
+
+def test_status_all_keeps_the_summary_and_sorts_worst_first(root: Path) -> None:
+    make_ready(root)
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    out = run_cli("status", "-a", "--path", str(root)).output
+    assert out.startswith("vouch tree  2/3 certified")
+    rows = [line for line in out.splitlines() if line.startswith("  ")]
+    # the break comes first even though fit-alpha's dependents sort
+    # after it topologically; they are merely waiting on it
+    assert rows[0].split()[2] == "fit-alpha"
+    assert all("waiting on" in r for r in rows[1:])
+
+
+def test_status_all_rejects_an_entry_name(root: Path) -> None:
+    result = run_cli("status", "-a", "fit-alpha", "--path", str(root))
+    assert result.exit_code != 0
+    assert "drop the entry name" in result.output
 
 
 def test_downstream_says_which_tree_it_waits_on(root: Path) -> None:

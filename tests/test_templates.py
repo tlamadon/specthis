@@ -338,6 +338,6 @@ def test_check_and_status_render_instances(root: Path) -> None:
     templated(root)
     result = CliRunner().invoke(main, ["check", "--path", str(root)])
     assert "clean-wages[dataset=chile]" in result.output
-    result = CliRunner().invoke(main, ["status", "--path", str(root)])
+    result = CliRunner().invoke(main, ["status", "-a", "--path", str(root)])
     assert result.exit_code == 0, result.output
     assert "clean-wages[dataset=argentina]" in result.output

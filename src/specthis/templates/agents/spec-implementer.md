@@ -25,7 +25,7 @@ passed smoke-test — and a **proposed** vouch. You author the change, therefore
    read every spec in the file's `references:` list (typically the
    project's models / estimators vocabulary specs) — treat those as
    the contract too.
-2. Find the closest existing *ready* entry via `specthis status`
+2. Find the closest existing *ready* entry via `specthis status -a`
    ("closest" = same estimator family if possible, else same model
    family) and its script paths via `specs/bindings.toml`. Do NOT
    grep specs for status — specs do not carry it.

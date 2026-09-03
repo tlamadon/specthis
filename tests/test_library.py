@@ -182,8 +182,11 @@ def test_status_shows_library_shape(root: Path) -> None:
     result = run_cli("status", "estimator-core", "--path", str(root))
     assert result.exit_code == 0
     assert "chain stops at code" in result.output
-    result = run_cli("status", "--path", str(root))
+    result = run_cli("status", "-a", "--path", str(root))
     assert " library" in result.output and "library/quick" not in result.output
+    # a library has no realization, so it is a definition the run tree
+    # never counts: four entries on one tree, three on the other
+    assert "0/4 certified" in result.output and "0/3 current" in result.output
 
 
 def test_viewer_renders_library_kind(root: Path) -> None:

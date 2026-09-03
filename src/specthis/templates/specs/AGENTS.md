@@ -184,7 +184,7 @@ Only when explicitly asked:
 
 1. Re-read the entry's spec section and every spec in `references:`.
    Treat those as the contract.
-2. Find the closest *ready* entry (`specthis status`) and copy its
+2. Find the closest *ready* entry (`specthis status -a`) and copy its
    script as the starting point; edit only what the contract demands.
    Keep the declared output schema.
 3. Bind the entry in `specs/bindings.toml` (scripts + run command)

@@ -67,18 +67,24 @@ specthis build
 ```
 
 ```bash
-specthis status
+specthis status -a
 ```
 
 ```
-certified · current   raw-wages[country=argentina]     source
-certified · current   raw-wages[country=chile]         source
-certified · current   clean-wages[country=argentina]   compute/quick
-certified · current   clean-wages[country=chile]       compute/quick
-certified · current   wage-moments[country=argentina]  compute/quick
-certified · current   wage-moments[country=chile]      compute/quick
-certified · current   wage-comparison                  compute/quick
+vouch tree  7/7 certified
+run tree    7/7 current
+
+  certified     current     raw-wages[country=argentina]      source
+  certified     current     raw-wages[country=chile]          source
+  certified     current     clean-wages[country=argentina]    compute/quick
+  certified     current     clean-wages[country=chile]        compute/quick
+  certified     current     wage-moments[country=argentina]   compute/quick
+  certified     current     wage-moments[country=chile]       compute/quick
+  certified     current     wage-comparison                   compute/quick
 ```
+
+Bare `specthis status` is the first two lines alone; `-a` adds the
+inventory, worst break first and coloured by state.
 
 **Seven claims from four entries.** Instances are ordinary entries to
 everything downstream: they have their own ledger rows, their own

@@ -39,7 +39,9 @@ from .check import (
     queues,
     sibling_keys,
     step_digest,
+    tally,
     verified,
+    waiting_on,
 )
 from .correspond import correspondence_problems, correspondence_warnings
 from .install import init_specs_dir, install_agents, install_commands, install_workflows
@@ -250,22 +252,150 @@ def lint_cmd(project_path: Path) -> None:
 
 # ---------------------------------------------------------------- status
 
+#: One colour per state, shared by the summary and the list so a count
+#: and the rows it counts never disagree. Three tiers: green — the claim
+#: holds; yellow — somebody still has to do the work; red — there is
+#: nothing to work with (no code bound) or a mind said no.
+_STATE_COLOR = {
+    Certification.CERTIFIED: "green",
+    Certification.UNVOUCHED: "yellow",
+    Certification.UNIMPLEMENTED: "red",
+    Certification.REJECTED: "red",
+    Realization.CURRENT: "green",
+    Realization.STALE: "yellow",
+    Realization.NEVER_RUN: "yellow",
+}
+
+#: Row order for ``status -a``: worst break first, and a certification
+#: break outranks a realization one — the same precedence the flattened
+#: word uses, because a definition nobody trusts makes its bytes moot.
+#: Entries with no break of their own sort after these, blocked-upstream
+#: before done, and ties break on the topological order.
+_SEVERITY = (
+    Certification.REJECTED,
+    Certification.UNIMPLEMENTED,
+    Certification.UNVOUCHED,
+    Realization.STALE,
+    Realization.NEVER_RUN,
+)
+
+
+def _paint(text: str, color: str | None = None, **kw) -> str:
+    """Style, but leave the string alone when there is nothing to say.
+
+    ``click.echo`` drops the codes when stdout is not a terminal, so
+    every assertion in the tests — and every pipe into grep — still sees
+    the plain words.
+    """
+    return click.style(text, fg=color, **kw) if (color or kw) else text
+
+
+def _severity(r: Report) -> int:
+    """Sort rank: the worst of this entry's own two states, else whether
+    it is merely waiting on somebody upstream."""
+    ranks = [_SEVERITY.index(s) for s in (r.certification, r.realization) if s in _SEVERITY]
+    if ranks:
+        return min(ranks)
+    return len(_SEVERITY) if waiting_on(r) else len(_SEVERITY) + 1
+
+
+def _tree_line(label: str, counts: dict, good, skipped: int = 0) -> str:
+    """One tree, one line: how much of it holds, then what is left.
+
+    The fraction leads because it is the number you came for; the broken
+    states follow in worst-first order and only when non-zero, so a
+    clean tree is a single short phrase rather than a row of noughts.
+    """
+    total = sum(counts.values())
+    done = counts[good]
+    head = f"{done}/{total} {good.value}"
+    tail = [
+        _paint(f"{n} {state.value}", _STATE_COLOR[state])
+        for state, n in counts.items()
+        if state is not good and n
+    ]
+    if skipped:
+        tail.append(_paint(f"+{skipped} skipped", dim=True))
+    line = f"{label:<12}" + _paint(head, "green" if total and done == total else None, bold=True)
+    return (line + " " * max(3, 22 - len(head)) + "   ".join(tail)) if tail else line
+
+
+def _summary(project: Project, reports: dict[str, Report]) -> None:
+    """The two queues at a glance — one line per tree, and that is all.
+
+    ``skipped`` rides on the vouch line because a skip is a fact about a
+    definition (``skip: true`` in a spec's frontmatter). Without it the
+    totals here would quietly disagree with the number of specs on disk.
+    """
+    if not reports:
+        click.echo("no entries")
+        return
+    vouch, run = tally(reports)
+    skipped = len(project.skipped_entries)
+    click.echo(_tree_line("vouch tree", vouch, Certification.CERTIFIED, skipped))
+    click.echo(_tree_line("run tree", run, Realization.CURRENT))
+
+
+def _status_rows(project: Project, reports: dict[str, Report]) -> None:
+    """Every entry, worst break first — the inventory behind the summary.
+
+    Columns, not the fused ``a · b`` string, because the point of the
+    list is to scan one tree at a time: all the yellow in the second
+    column is the machine queue.
+    """
+    order = {name: i for i, name in enumerate(ordered_keys(project, reports))}
+    names = sorted(order, key=lambda n: (_severity(reports[n]), order[n]))
+    width = max(len(n) for n in names)
+    for name in names:
+        r = reports[name]
+        e = project.entries[r.instance_of or name]
+        kind = e.kind if e.kind in ("library", "source") else f"{e.kind}/{e.tier}"
+        cert = _paint(f"{r.certification.value:<14}", _STATE_COLOR[r.certification])
+        real = (
+            _paint(f"{r.realization.value:<12}", _STATE_COLOR[r.realization])
+            if r.realization is not None
+            else _paint(f"{'—':<12}", dim=True)  # a library is not on this tree
+        )
+        upstream = waiting_on(r)
+        notes = ([] if r.materialized else ["bytes remote"]) + (
+            [f"waiting on {' and '.join(upstream)}"] if upstream else []
+        )
+        note = _paint("   " + " · ".join(notes), dim=True) if notes else ""
+        click.echo(f"  {cert}{real}{name:<{width}}   {kind}{note}")
+
 
 @main.command("status")
 @click.argument("entry", required=False)
+@click.option(
+    "-a",
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Also list every entry, worst break first.",
+)
 @_path_option
-def status_cmd(entry: str | None, project_path: Path) -> None:
-    """Show every entry's derived status, or one entry in detail."""
+def status_cmd(entry: str | None, show_all: bool, project_path: Path) -> None:
+    """Both trees in two lines — or one entry in detail.
+
+    Bare, this is the glance: per tree, how much of the project holds
+    and what the rest is waiting for. `-a` keeps those two lines and
+    adds the inventory behind them, one row per entry, sorted worst
+    break first and coloured by state. Name an ENTRY instead for the
+    full record — digests, scripts, outputs, and which input moved.
+
+    Reads only, and never exits non-zero on a break: that is `check`'s
+    job. This verb reports, it does not judge.
+    """
     project = _load(project_path)
     reports = check_project(project)
     if entry is None:
-        for name in ordered_keys(project, reports):
-            r = reports[name]
-            e = project.entries[r.instance_of or name]
-            kind = e.kind if e.kind in ("library", "source") else f"{e.kind}/{e.tier}"
-            marker = "" if r.materialized else "   [bytes remote]"
-            click.echo(f"  {coordinates(r):<44} {name:<28} {kind}{marker}")
+        _summary(project, reports)
+        if show_all and reports:
+            click.echo()
+            _status_rows(project, reports)
         return
+    if show_all:
+        raise click.ClickException("`-a` lists every entry — drop the entry name")
     _require_active(project, entry)
     if entry not in reports:
         raise click.ClickException(

@@ -740,7 +740,21 @@ certified 11/16 · current 12/16
 Break attribution is always a **table diff**: `+path` added, `-path`
 removed, `~path` content moved. Never "something moved".
 
-`status <entry>` prints both tables side by side.
+`status` is the same two trees at a glance — one line each, the
+fraction that holds followed by the non-zero breaks, worst first:
+
+```
+vouch tree  11/16 certified        1 rejected   4 unvouched
+run tree    12/16 current          2 stale      2 never-run
+```
+
+The two totals differ where the project has libraries: a library is a
+definition with no call, so it is counted on the vouch tree only.
+
+`status -a` keeps those two lines and adds one row per entry — the two
+axes as separate columns, sorted worst break first (certification
+breaks outrank realization ones, ties by topological order) and
+coloured by state. `status <entry>` prints both tables side by side.
 
 The one question `check` cannot answer offline is **cost** — restore or
 real compute. That needs the manager's probe.
@@ -752,7 +766,7 @@ real compute. That needs the manager's probe.
 | Verb | Does | Writes |
 |---|---|---|
 | `check` | derive; two queues; non-zero on local breaks | nothing |
-| `status [entry]` | table / detail, both axes, both tables | nothing |
+| `status [-a] [entry]` | two-line summary / full list / detail, both axes | nothing |
 | `vouch <entry>` | file a mind-attestation | `ledger/mind.toml` |
 | `lint` | spec ↔ map ↔ pipeline correspondence (§13) | nothing |
 | `certify` | regenerate certificates, if `[package] globs` are used (§6) | `specs/certificates/` |

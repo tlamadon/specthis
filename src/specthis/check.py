@@ -62,6 +62,22 @@ class Realization(Enum):
     CURRENT = "current"
 
 
+#: Both trees' states, worst first. The one order every status surface
+#: counts, sorts and colours in — so a row's rank and a summary's column
+#: order can never disagree about which break is the urgent one.
+CERTIFICATION_ORDER = (
+    Certification.REJECTED,
+    Certification.UNIMPLEMENTED,
+    Certification.UNVOUCHED,
+    Certification.CERTIFIED,
+)
+REALIZATION_ORDER = (
+    Realization.STALE,
+    Realization.NEVER_RUN,
+    Realization.CURRENT,
+)
+
+
 class CheckError(Exception):
     pass
 
@@ -546,6 +562,24 @@ def _one(
     return report
 
 
+def waiting_on(r: Report) -> list[str]:
+    """The trees this entry waits on *upstream* — ``minds``, ``machines``,
+    both, or neither.
+
+    Empty when the entry's own claims are broken: an unvouched entry is
+    not "waiting", it is the thing being waited on, and saying both at
+    once buries the break the reader can actually repair. So this reads
+    the propagated pair only after the local pair is clean.
+    """
+    local = r.certification is not Certification.CERTIFIED or r.realization in (
+        Realization.NEVER_RUN,
+        Realization.STALE,
+    )
+    if local:
+        return []
+    return [tree for tree, ok in (("minds", r.computable), ("machines", r.realized)) if not ok]
+
+
 def coordinates(r: Report) -> str:
     """The two coordinates as one readable string — `certified · stale`.
 
@@ -559,18 +593,29 @@ def coordinates(r: Report) -> str:
         axes += f" · {r.realization.value}"
     if not r.materialized:
         axes += " · bytes remote"
-    if r.computable and r.realized:
-        return axes
-    waiting = [
-        tree
-        for tree, ok in (("minds", r.computable), ("machines", r.realized))
-        if not ok
-    ]
-    local = r.certification is not Certification.CERTIFIED or r.realization in (
-        Realization.NEVER_RUN,
-        Realization.STALE,
-    )
-    return axes if local else f"{axes} · waiting on {' and '.join(waiting)}"
+    waiting = waiting_on(r)
+    return axes if not waiting else f"{axes} · waiting on {' and '.join(waiting)}"
+
+
+def tally(reports: dict[str, Report]) -> tuple[dict[Certification, int], dict[Realization, int]]:
+    """Both trees' state counts, worst state first — the whole project in
+    two numbers-per-line.
+
+    Every state gets a key, including the zeros, so a caller can decide
+    for itself whether an empty state is worth a column.
+
+    The two totals differ on purpose. A library lives on the vouch tree
+    alone (no run, no output), so it is counted as a definition and not
+    as a call; folding libraries into the run total would put ``current``
+    permanently out of reach.
+    """
+    vouch = dict.fromkeys(CERTIFICATION_ORDER, 0)
+    run = dict.fromkeys(REALIZATION_ORDER, 0)
+    for r in reports.values():
+        vouch[r.certification] += 1
+        if r.realization is not None:
+            run[r.realization] += 1
+    return vouch, run
 
 
 def keys_for(reports: dict[str, Report]) -> dict[str, list[str]]:

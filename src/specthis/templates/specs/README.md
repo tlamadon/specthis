@@ -361,7 +361,8 @@ is split across two files — `compute-<name>.md` for the fit,
 specthis check                 # the two queues (mind: definitions, machine: realizations)
                                #   itemized, waiting summarized per tree; non-zero exit
                                #   while either queue is non-empty
-specthis status [entry]        # every entry's status + both axes / one entry in detail,
+specthis status [entry]        # both trees in two lines; -a adds every entry, worst
+                               #   break first; name an entry for the full record,
                                #   including WHICH input moved
 specthis build [entries…]      # hand the pipeline to a compute manager and adopt
                                #   what comes back; --force rebuilds an artefact
