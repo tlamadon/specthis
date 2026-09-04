@@ -783,15 +783,35 @@ duration of one command. It is told the path, the byte count and the
 elapsed time *after* the fact, it cannot change a digest, and no
 verdict depends on whether anyone is watching.
 
-**The package blob is hashed once per loaded project.** `code_sha` and
-`expected_inputs` both need it and both run per entry, so computing it
-at each call site read every file the globs match `2 × n_entries`
-times — on a 120-entry tree with a 400-file package, 96,285 reads of
-565 files, and half the wall clock. Memoising it is also the more
-honest reading of §10: one derivation is a claim about one *moment*,
-and two reads of the same file inside it disagreeing would be a torn
-read rather than a finding. The memo's lifetime is the `Project`, so
-it expires on the re-load `serve` performs whenever a file changes.
+### 11.2 One derivation reads each path once
+
+A derivation asks for the same digest from call sites that cannot see
+each other. An entry's script is *code* to `code_manifest` and a
+*dependency* to `expected_inputs`; a source entry's bytes are its code,
+its input table **and** its output; the `[package]` blob is wanted by
+every entry twice over. Left alone that is most of the wall clock — on
+one real project, 1,916 of 2,437 reads were repeats, 10.1 s of 15.3 s,
+and 25 GB of disk traffic for 521 files.
+
+Two memos fix it, and both are corollaries of §10 rather than
+concessions to speed. A derivation is a claim about one **moment**: two
+reads of the same path inside it disagreeing would be a torn read, not
+a finding, and acting on the difference would be acting on a race.
+
+- **Per path**, for the duration of one `check_project` — the first
+  answer is the answer. Scoped to the derivation and never to a whole
+  command: `build` hands work to a manager that *writes* outputs and
+  then re-derives, and a memo spanning that would answer the second
+  derivation with the first one's bytes. It lives in a `ContextVar`, so
+  two threads deriving at once cannot share one.
+- **Per `[package]` blob**, for the life of a loaded `Project` — this
+  one also skips re-walking the globs. It expires on the re-load
+  `serve` performs whenever a file changes.
+
+`--timing` reports memo hits separately from reads, and still counts
+any read of an already-read path: zero while the memos do their job,
+so a call site that escapes them shows up as a number rather than as
+noise.
 
 The one question `check` cannot answer offline is **cost** — restore or
 real compute. That needs the manager's probe.

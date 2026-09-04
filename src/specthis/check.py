@@ -487,14 +487,19 @@ def check_project(
     #: contributes its instances; everything else contributes itself.
     keys: dict[str, list[str]] = {}
 
-    order = topo_order(project)  # upstream first, so recursion is a lookup
-    for i, name in enumerate(order):
-        if observe is not None:
-            observe(name, i, len(order))
-        entry = project.entries[name]
-        for report in _reports_for(project, entry, vouches, runs, reports, keys):
-            reports[report.entry] = report
-            keys.setdefault(name, []).append(report.entry)
+    # One derivation, one moment: a path digested here has one answer
+    # for the whole pass. The memo is what makes that true rather than
+    # merely intended — a script is code to one call site and a
+    # dependency to another, and neither can see the other's read.
+    with hashing.memoizing():
+        order = topo_order(project)  # upstream first, so recursion is a lookup
+        for i, name in enumerate(order):
+            if observe is not None:
+                observe(name, i, len(order))
+            entry = project.entries[name]
+            for report in _reports_for(project, entry, vouches, runs, reports, keys):
+                reports[report.entry] = report
+                keys.setdefault(name, []).append(report.entry)
     return reports
 
 

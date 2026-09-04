@@ -67,22 +67,29 @@ class Meter:
     calls: int = 0
     seconds: float = 0.0
     nbytes: int = 0
+    #: Requests the derivation's memo answered without touching disk.
+    hits: int = 0
+    #: Reads of a path *already read* in this run. Zero while the memo
+    #: is doing its job, which is why it stays counted: a call site that
+    #: escapes the memo shows up here rather than in the noise.
     repeat_calls: int = 0
     repeat_seconds: float = 0.0
     _seen: set[str] = field(default_factory=set)
 
     @property
     def files(self) -> int:
-        """Distinct files digested — the number `calls` would be if
-        nothing were hashed twice."""
+        """Distinct files read from disk."""
         return len(self._seen)
 
     @property
     def elapsed(self) -> float:
         return sum(self.phases.values())
 
-    def digest(self, path: Path, nbytes: int, seconds: float) -> None:
+    def digest(self, path: Path, nbytes: int, seconds: float, cached: bool = False) -> None:
         """Record one file digest. Installed as the hashing observer."""
+        if cached:
+            self.hits += 1
+            return
         self.calls += 1
         self.nbytes += nbytes
         self.seconds += seconds
@@ -114,6 +121,11 @@ def report(meter: Meter) -> list[str]:
         lines.append(
             f"digests  {meter.calls:,} reads over {meter.files:,} files · "
             f"{_size(meter.nbytes)} · {_secs(meter.seconds)}"
+        )
+    if meter.hits:
+        lines.append(
+            f"         {meter.hits:,} further request(s) answered from the memo, "
+            "nothing re-read"
         )
     if meter.repeat_calls:
         share = f", {meter.repeat_seconds / meter.elapsed:.0%} of the run" if meter.elapsed else ""

@@ -30,30 +30,45 @@ class _Tty(io.StringIO):
 # ------------------------------------------------------------- metering
 
 
-def test_meter_counts_repeat_reads_apart(root: Path) -> None:
-    """The number that explains a slow project: how much of the hashing
-    was a file read for the second time."""
+def test_a_derivation_reads_every_file_exactly_once(root: Path) -> None:
+    """The memo's whole point. A script is code to `code_manifest` and a
+    dependency to `expected_inputs`; a source entry's bytes are its
+    code, its input table *and* its output. None of those call sites can
+    see the others, so only a memo can make one path one read."""
+    counts: Counter = Counter()
+    with hashing.observing(lambda p, n, s, cached: cached or counts.update([p.name])):
+        check_project(load_project(root))
+    assert counts, "nothing was hashed at all"
+    assert max(counts.values()) == 1, f"read twice: {[k for k, v in counts.items() if v > 1]}"
+
+
+def test_the_meter_separates_reads_from_memo_hits(root: Path) -> None:
     project = load_project(root)
     with progress.watch(io.StringIO()) as w:
         w.phase("deriving")
         check_project(project)
     m = w.meter
-    assert m.calls > 0 and m.files > 0
-    assert m.calls == m.files + m.repeat_calls
-    # a bound script is digested twice — once for the code manifest,
-    # once as a dependency in the input table
-    assert m.repeat_calls > 0
+    assert m.calls > 0 and m.files == m.calls, "a read that the memo should have served"
+    assert m.repeat_calls == 0
+    assert m.hits > 0, "the fixture digests some path from two call sites"
     assert m.nbytes > 0 and m.elapsed > 0
 
 
-def test_the_package_blob_is_hashed_once_not_once_per_entry(root: Path) -> None:
-    """`code_sha` and `expected_inputs` both need the blob and both run
-    per entry — the direct call re-read every package file `2 x n` times
-    and was half the wall clock of a big `check`."""
-    counts: Counter = Counter()
-    with hashing.observing(lambda p, n, s: counts.update([p.name])):
-        check_project(load_project(root))
-    assert counts["helpers.py"] == 1, "the package blob was rebuilt per entry"
+def test_the_memo_expires_with_the_derivation(root: Path) -> None:
+    """Scope is one `check_project`, never a whole command. `build` hands
+    work to a manager that writes outputs and then re-derives; a memo
+    spanning that would answer with the pre-build bytes."""
+    before = check_project(load_project(root))["fit-alpha"].code_sha
+    (root / "scripts/fit_alpha.py").write_text("# rewritten\n")
+    after = check_project(load_project(root))["fit-alpha"].code_sha
+    assert after != before
+
+
+def test_the_memo_is_not_installed_outside_a_derivation(root: Path) -> None:
+    path = root / "scripts/fit_alpha.py"
+    first = hashing.file_sha(path)
+    path.write_text("# rewritten\n")
+    assert hashing.file_sha(path) != first
 
 
 def test_one_derivation_is_one_moment_but_a_reload_re_hashes(root: Path) -> None:
@@ -68,7 +83,7 @@ def test_one_derivation_is_one_moment_but_a_reload_re_hashes(root: Path) -> None
 
 def test_observer_is_uninstalled_after_the_block(root: Path) -> None:
     seen: list = []
-    with hashing.observing(lambda p, n, s: seen.append(p)):
+    with hashing.observing(lambda p, n, s, cached: seen.append(p)):
         hashing.file_sha(root / "scripts/fit_alpha.py")
     assert len(seen) == 1
     hashing.file_sha(root / "scripts/fit_alpha.py")
@@ -77,7 +92,7 @@ def test_observer_is_uninstalled_after_the_block(root: Path) -> None:
 
 def test_observer_is_uninstalled_after_an_exception(root: Path) -> None:
     try:
-        with hashing.observing(lambda p, n, s: None):
+        with hashing.observing(lambda p, n, s, cached: None):
             raise RuntimeError("boom")
     except RuntimeError:
         pass
@@ -87,7 +102,7 @@ def test_observer_is_uninstalled_after_an_exception(root: Path) -> None:
 def test_digests_are_unchanged_while_observed(root: Path) -> None:
     path = root / "scripts/fit_alpha.py"
     plain = hashing.file_sha(path)
-    with hashing.observing(lambda p, n, s: None):
+    with hashing.observing(lambda p, n, s, cached: None):
         watched = hashing.file_sha(path)
     assert plain == watched
 
