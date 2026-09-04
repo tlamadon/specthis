@@ -13,6 +13,7 @@ an input to anything. Nothing here consults mtime or writes a byte.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from graphlib import CycleError, TopologicalSorter
@@ -138,6 +139,29 @@ def is_source(entry: Entry) -> bool:
     return entry.kind == "source"
 
 
+def package_blob(project: Project) -> str:
+    """The ``[package]`` blob digest, hashed once per loaded project.
+
+    Both :func:`code_manifest` and :func:`expected_inputs` need it, and
+    both run per entry, so the direct call re-reads and re-hashes every
+    file the globs match ``2 x n_entries`` times. On a 120-entry tree
+    with a 400-file package that was 96,000 reads of 565 files and half
+    the wall clock of `check`.
+
+    Caching it is not only faster, it is more honest. One derivation is
+    a claim about one moment (§10); two reads of the same file *inside*
+    it disagreeing would be a torn read, not a finding. The memo lives
+    on the ``Project``, so its lifetime is one load — which is why
+    `serve`, that re-loads on every file change, cannot serve a stale
+    blob.
+    """
+    if project.package_blob is None:
+        project.package_blob = hashing.package_sha(
+            project.root, project.package_globs, project.library_scripts
+        )
+    return project.package_blob
+
+
 def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
     """The per-file form of ``code_sha``: script -> digest, plus the
     package blob under the ``"package"`` key.
@@ -157,9 +181,7 @@ def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
         for s in entry.binding.scripts
     }
     if project.package_globs:
-        manifest["package"] = hashing.package_sha(
-            project.root, project.package_globs, project.library_scripts
-        )
+        manifest["package"] = package_blob(project)
     return manifest
 
 
@@ -224,9 +246,7 @@ def instance_inputs(
         project.root, [p for p in read if p not in upstream_paths]
     )
     if project.package_globs:
-        inputs["package"] = hashing.package_sha(
-            project.root, project.package_globs, project.library_scripts
-        )
+        inputs["package"] = package_blob(project)
     if step is not None:
         inputs[f"step:{inst.name}"] = hashing.step_sha(step.command, step.deps, step.outs)
     for up in entry.consumes:
@@ -265,9 +285,7 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
         project.root, [p for p in read if p not in upstream_paths]
     )
     if project.package_globs:
-        inputs["package"] = hashing.package_sha(
-            project.root, project.package_globs, project.library_scripts
-        )
+        inputs["package"] = package_blob(project)
     if (sd := step_digest(project, entry)) is not None:
         inputs[f"step:{entry.name}"] = sd
     for up in entry.consumes:
@@ -445,6 +463,7 @@ def check_project(
     project: Project,
     vouches: dict[str, Vouch] | None = None,
     runs: dict[str, Run] | None = None,
+    observe: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, Report]:
     """Derive every entry's two coordinates, then the flattened status.
 
@@ -453,6 +472,12 @@ def check_project(
     joint state is always known. ``status`` flattens the pair the way
     the old single-pass gate did (certification breaks win, then
     staleness, then composition), keeping every legacy surface intact.
+
+    ``observe`` is a liveness hook, called ``(entry, done, total)``
+    before each entry is derived. It exists because this function reads
+    and hashes every byte the project declares, which on a real tree is
+    seconds of silence; it is told what is happening and can decide
+    nothing, so no verdict here depends on whether anyone is watching.
     """
     vouches = read_vouches(project.specs_dir) if vouches is None else vouches
     runs = read_runs(project.specs_dir) if runs is None else runs
@@ -462,7 +487,10 @@ def check_project(
     #: contributes its instances; everything else contributes itself.
     keys: dict[str, list[str]] = {}
 
-    for name in topo_order(project):  # upstream first, so recursion is a lookup
+    order = topo_order(project)  # upstream first, so recursion is a lookup
+    for i, name in enumerate(order):
+        if observe is not None:
+            observe(name, i, len(order))
         entry = project.entries[name]
         for report in _reports_for(project, entry, vouches, runs, reports, keys):
             reports[report.entry] = report

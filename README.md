@@ -177,6 +177,7 @@ believes none of them without re-deriving the digests.
 specthis check                 # the two queues (minds, machines); non-zero on any local break
 specthis status                # both trees in two lines; -a lists every entry, worst first
 specthis status <entry>        # both axes for one entry, and WHICH input moved
+specthis status --timing       # where the derivation spent its time (stderr)
 specthis lint                  # every problem at once: spec, map, and pipeline correspondence
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
 specthis build [entries…]      # hand the pipeline to the manager, adopt what comes back

@@ -756,6 +756,43 @@ axes as separate columns, sorted worst break first (certification
 breaks outrank realization ones, ties by topological order) and
 coloured by state. `status <entry>` prints both tables side by side.
 
+### 11.1 Liveness and cost
+
+Derivation re-reads and re-hashes every byte the project declares
+(§10), so on a real tree it is seconds of silence. A verb that derives
+spins on **stderr** while it works — never stdout, so a pipe still sees
+exactly the rows — showing the phase and the entry in hand. It draws
+only to a terminal and only after a grace period, so a fast project
+never flickers and a CI log never collects half-erased frames.
+
+A derivation slower than a second says what it cost in one line, and
+`--timing` says so every time:
+
+```
+timing   reading specs 28 ms · deriving 2.7 s  —  2.7 s total
+digests  96,285 reads over 565 files · 161.4 MB · 1.4 s
+         95,720 of those re-read a file already hashed — 1.4 s, 50% of the run
+```
+
+The third line is the one that matters. Phases alone say only "it was
+slow in the part that does everything"; what explains a slow project is
+how much of the hashing was a file read for the second time.
+
+The counter is an observer installed around `hashing.file_sha` for the
+duration of one command. It is told the path, the byte count and the
+elapsed time *after* the fact, it cannot change a digest, and no
+verdict depends on whether anyone is watching.
+
+**The package blob is hashed once per loaded project.** `code_sha` and
+`expected_inputs` both need it and both run per entry, so computing it
+at each call site read every file the globs match `2 × n_entries`
+times — on a 120-entry tree with a 400-file package, 96,285 reads of
+565 files, and half the wall clock. Memoising it is also the more
+honest reading of §10: one derivation is a claim about one *moment*,
+and two reads of the same file inside it disagreeing would be a torn
+read rather than a finding. The memo's lifetime is the `Project`, so
+it expires on the re-load `serve` performs whenever a file changes.
+
 The one question `check` cannot answer offline is **cost** — restore or
 real compute. That needs the manager's probe.
 
@@ -766,7 +803,7 @@ real compute. That needs the manager's probe.
 | Verb | Does | Writes |
 |---|---|---|
 | `check` | derive; two queues; non-zero on local breaks | nothing |
-| `status [-a] [entry]` | two-line summary / full list / detail, both axes | nothing |
+| `status [-a] [--timing] [entry]` | two-line summary / full list / detail, both axes (§11.1) | nothing |
 | `vouch <entry>` | file a mind-attestation | `ledger/mind.toml` |
 | `lint` | spec ↔ map ↔ pipeline correspondence (§13) | nothing |
 | `certify` | regenerate certificates, if `[package] globs` are used (§6) | `specs/certificates/` |

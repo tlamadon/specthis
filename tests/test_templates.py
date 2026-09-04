@@ -341,3 +341,30 @@ def test_check_and_status_render_instances(root: Path) -> None:
     result = CliRunner().invoke(main, ["status", "-a", "--path", str(root)])
     assert result.exit_code == 0, result.output
     assert "clean-wages[dataset=argentina]" in result.output
+
+
+def test_status_detail_accepts_an_instance_key(root: Path) -> None:
+    """The key every surface prints is the key a user types back. A
+    template has no report of its own, so naming one is the *only* way
+    to ask about a templated entry in detail."""
+    from click.testing import CliRunner
+
+    from specthis.cli import main
+
+    templated(root)
+    result = CliRunner().invoke(
+        main, ["status", "clean-wages[dataset=chile]", "--path", str(root)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "entry:     clean-wages[dataset=chile]" in result.output
+    assert "state:" in result.output
+
+    unknown = CliRunner().invoke(
+        main, ["status", "clean-wages[dataset=peru]", "--path", str(root)]
+    )
+    assert unknown.exit_code != 0
+    assert "unknown entry" in unknown.output
+
+    template = CliRunner().invoke(main, ["status", "clean-wages", "--path", str(root)])
+    assert template.exit_code != 0
+    assert "it is a template; name one of its instances" in template.output

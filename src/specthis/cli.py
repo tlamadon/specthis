@@ -16,7 +16,7 @@ from pathlib import Path
 
 import click
 
-from . import __version__, hashing, seam
+from . import __version__, hashing, progress, seam
 from .adopt import AdoptError, adopt_manifest, publish, step_of
 from .backends import FAILED, BackendError
 from .backends import resolve as resolve_backend
@@ -87,14 +87,29 @@ def _echo_problems(problems: list[Problem]) -> None:
 
 
 def _require_active(project: Project, entry: str) -> None:
-    """Reject verbs aimed at unknown or skipped entries, with the right hint."""
-    if entry in project.skipped_entries:
+    """Reject verbs aimed at unknown or skipped entries, with the right hint.
+
+    An **instance key** is a name here too. ``clean-wages`` is a
+    template and has no report of its own; the thing every other
+    surface prints, and the thing a user therefore types back, is
+    ``clean-wages[country=chile]``. Membership in ``project.entries``
+    alone cannot see one, which is why naming an instance used to come
+    back "unknown entry" for a key the tool had just printed.
+
+    Both facts are read through the template: a skip lives in a spec's
+    frontmatter, so it is a property of the definition and every
+    instance of it inherits the flag.
+    """
+    template = entry.partition("[")[0] or entry
+    if template in project.skipped_entries:
         raise click.ClickException(
-            f"`{entry}` is skipped ({project.skipped_entries[entry]} has "
+            f"`{entry}` is skipped ({project.skipped_entries[template]} has "
             "skip: true) — remove the flag to work on it"
         )
-    if entry not in project.entries:
-        raise click.ClickException(f"unknown entry `{entry}`")
+    try:
+        resolve_key(project, entry)
+    except KeyError:
+        raise click.ClickException(f"unknown entry `{entry}`") from None
 
 
 def _path_option(f):
@@ -364,6 +379,21 @@ def _status_rows(project: Project, reports: dict[str, Report]) -> None:
         click.echo(f"  {cert}{real}{name:<{width}}   {kind}{note}")
 
 
+def _timing(meter: progress.Meter, explicit: bool) -> None:
+    """Say what the derivation cost — always on `--timing`, otherwise
+    only when it was slow enough that you noticed.
+
+    On stderr, so it never lands in a pipe. A verb that comments on its
+    own speed after every fast run is noise; one that stays silent
+    through five seconds of hashing leaves you guessing.
+    """
+    if explicit:
+        for line in progress.report(meter):
+            click.echo(_paint(line, dim=True), err=True)
+    elif meter.elapsed >= progress.CHATTY:
+        click.echo(_paint(progress.summary(meter), dim=True), err=True)
+
+
 @main.command("status")
 @click.argument("entry", required=False)
 @click.option(
@@ -373,8 +403,13 @@ def _status_rows(project: Project, reports: dict[str, Report]) -> None:
     is_flag=True,
     help="Also list every entry, worst break first.",
 )
+@click.option(
+    "--timing",
+    is_flag=True,
+    help="Report where the derivation spent its time, on stderr.",
+)
 @_path_option
-def status_cmd(entry: str | None, show_all: bool, project_path: Path) -> None:
+def status_cmd(entry: str | None, show_all: bool, timing: bool, project_path: Path) -> None:
     """Both trees in two lines — or one entry in detail.
 
     Bare, this is the glance: per tree, how much of the project holds
@@ -383,20 +418,33 @@ def status_cmd(entry: str | None, show_all: bool, project_path: Path) -> None:
     break first and coloured by state. Name an ENTRY instead for the
     full record — digests, scripts, outputs, and which input moved.
 
+    Deriving means re-hashing every byte the project declares, so a big
+    tree spins on stderr while it works and says what that cost when it
+    was slow; `--timing` says so every time.
+
     Reads only, and never exits non-zero on a break: that is `check`'s
     job. This verb reports, it does not judge.
     """
-    project = _load(project_path)
-    reports = check_project(project)
+    with progress.watch() as watcher:
+        watcher.phase("reading specs")
+        project = _load(project_path)
+        watcher.phase("deriving")
+        reports = check_project(project, observe=watcher.tick)
     if entry is None:
         _summary(project, reports)
         if show_all and reports:
             click.echo()
             _status_rows(project, reports)
-        return
-    if show_all:
-        raise click.ClickException("`-a` lists every entry — drop the entry name")
-    _require_active(project, entry)
+    else:
+        if show_all:
+            raise click.ClickException("`-a` lists every entry — drop the entry name")
+        _require_active(project, entry)
+        _status_detail(project, reports, entry)
+    _timing(watcher.meter, timing)
+
+
+def _status_detail(project: Project, reports: dict[str, Report], entry: str) -> None:
+    """One entry's full record: both axes, both digests, and what moved."""
     if entry not in reports:
         raise click.ClickException(
             f"no claim for `{entry}`"

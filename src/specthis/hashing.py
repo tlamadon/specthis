@@ -8,13 +8,43 @@ the same answer on a fresh clone on another machine.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 #: Placeholder digest recorded when an expected input file is absent.
 #: It can never equal a real SHA-256, so a missing file always breaks
 #: the signature match instead of being silently skipped.
 MISSING = "missing"
+
+#: Installed by :func:`observing`. ``None`` — the default, and the only
+#: state a library caller ever sees — leaves :func:`file_sha` exactly
+#: what it always was.
+_observer: Callable[[Path, int, float], None] | None = None
+
+
+@contextmanager
+def observing(observe: Callable[[Path, int, float], None]) -> Iterator[None]:
+    """Report every file digest taken inside the block, then restore.
+
+    Digests are where a derivation spends its time, and they are taken
+    from a dozen call sites across two modules; threading a counter
+    through all of them would put an accounting concern into every
+    signature for the sake of one CLI flag.
+
+    An observer is told the path, the byte count and the elapsed time
+    *after* the fact. It cannot change a digest, nothing reads it back,
+    and the prior observer is restored even on an exception — so an
+    interrupted run cannot leave the hook installed for the next caller
+    in the same process.
+    """
+    global _observer
+    prior, _observer = _observer, observe
+    try:
+        yield
+    finally:
+        _observer = prior
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -29,7 +59,13 @@ def file_sha(path: Path) -> str | None:
     """SHA-256 of a file's bytes, or ``None`` if it does not exist."""
     if not path.is_file():
         return None
-    return sha256_bytes(path.read_bytes())
+    if _observer is None:  # the ordinary path, unmeasured and unbranched
+        return sha256_bytes(path.read_bytes())
+    started = time.perf_counter()
+    data = path.read_bytes()
+    digest = sha256_bytes(data)
+    _observer(path, len(data), time.perf_counter() - started)
+    return digest
 
 
 def manifest_sha(pairs: Iterable[tuple[str, str]]) -> str:

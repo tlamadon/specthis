@@ -196,6 +196,12 @@ class Project:
     #: Empty otherwise, and then no claim carries a ``step:`` row — a
     #: project without a pipeline behaves exactly as before it existed.
     steps: dict[str, Step] = field(default_factory=dict)
+    #: Memo for the package blob — see :func:`check.package_blob`, which
+    #: is the only thing that should read or write it. Its lifetime is
+    #: this loaded project, so it expires on the re-load `serve` already
+    #: does whenever a file changes. Never compared, never printed: it
+    #: is derived from the fields above and carries no new information.
+    package_blob: str | None = field(default=None, repr=False, compare=False)
 
 
 def _field_paths(block: str, label: str) -> list[str]:

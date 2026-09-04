@@ -363,7 +363,8 @@ specthis check                 # the two queues (mind: definitions, machine: rea
                                #   while either queue is non-empty
 specthis status [entry]        # both trees in two lines; -a adds every entry, worst
                                #   break first; name an entry for the full record,
-                               #   including WHICH input moved
+                               #   including WHICH input moved. A slow derivation
+                               #   spins on stderr; --timing says where it went
 specthis build [entries…]      # hand the pipeline to a compute manager and adopt
                                #   what comes back; --force rebuilds an artefact
                                #   edited on disk
