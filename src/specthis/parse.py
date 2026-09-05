@@ -42,6 +42,7 @@ else:  # pragma: no cover
     import tomli as tomllib
 
 from .hashing import sha256_text
+from .ledger import LOCALITIES
 from .pipeline import PipelineError, Step, load_pipeline
 from .preview import CONTENT_TYPES
 
@@ -196,6 +197,10 @@ class Project:
     #: Empty otherwise, and then no claim carries a ``step:`` row — a
     #: project without a pipeline behaves exactly as before it existed.
     steps: dict[str, Step] = field(default_factory=dict)
+    #: ``[executors]`` — executor label -> "local"/"remote", for reading
+    #: run rows that never declared where they happened. Config, not a
+    #: claim: it enters no digest and never overrides a row that says.
+    localities: dict[str, str] = field(default_factory=dict)
     #: Memo for the package blob — see :func:`check.package_blob`, which
     #: is the only thing that should read or write it. Its lifetime is
     #: this loaded project, so it expires on the re-load `serve` already
@@ -464,12 +469,35 @@ def _parse_previews(data: dict) -> dict[str, PreviewRecipe]:
     return previews
 
 
+def _parse_localities(data: dict) -> dict[str, str]:
+    """The ``[executors]`` table: executor label -> ``local``/``remote``.
+
+    A run row records where it happened only if whoever recorded it
+    said so, and nothing infers it (`ledger.Run.where`). That leaves
+    every row written before the field existed unclassifiable, which
+    would make "how much of this ran off my machine" unanswerable for
+    exactly the projects with enough history to ask.
+
+    So a project may declare, once, what its own executor names mean.
+    Config, not a claim: it enters no digest, it never overrides a row
+    that states its own locality, and an unlisted executor stays
+    honestly unknown rather than being assumed local.
+    """
+    out: dict[str, str] = {}
+    for label, raw in data.get("executors", {}).items():
+        where = f'bindings.toml: [executors] "{label}"'
+        if raw not in LOCALITIES:
+            raise SpecError(f"{where}: must be one of {', '.join(LOCALITIES)}, got {raw!r}")
+        out[label] = raw
+    return out
+
+
 def _load_bindings(
     specs_dir: Path,
-) -> tuple[dict[str, Binding], list[str], dict[str, PreviewRecipe], str | None]:
+) -> tuple[dict[str, Binding], list[str], dict[str, PreviewRecipe], str | None, dict[str, str]]:
     path = specs_dir / "bindings.toml"
     if not path.is_file():
-        return {}, [], {}, None
+        return {}, [], {}, None, {}
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -482,7 +510,7 @@ def _load_bindings(
             scripts=_str_list(table.get("scripts"), "bindings.toml", "scripts"),
             produces=_produces_map(entry_name, table.get("produces")),
         )
-    return bindings, globs, _parse_previews(data), backend_class
+    return bindings, globs, _parse_previews(data), backend_class, _parse_localities(data)
 
 
 def _produces_map(entry_name: str, raw: object) -> dict[str, str]:
@@ -525,10 +553,12 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             problems.append(Problem(path.name, str(exc)))
 
     try:
-        bindings, package_globs, previews, backend_class = _load_bindings(specs_dir)
+        bindings, package_globs, previews, backend_class, localities = _load_bindings(
+            specs_dir
+        )
     except SpecError as exc:
         problems.append(Problem("bindings.toml", str(exc)))
-        bindings, package_globs, previews, backend_class = {}, [], {}, None
+        bindings, package_globs, previews, backend_class, localities = {}, [], {}, None, {}
 
     steps: dict[str, Step] = {}
     pipeline_file = root / "pipeline.toml"
@@ -684,6 +714,7 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         previews=previews,
         steps=steps,
         backend_class=backend_class,
+        localities=localities,
     )
     return project, problems
 

@@ -178,6 +178,7 @@ specthis check                 # the two queues (minds, machines); non-zero on a
 specthis status                # both trees in two lines; -a lists every entry, worst first
 specthis status <entry>        # both axes for one entry, and WHICH input moved
 specthis status --timing       # where the derivation spent its time (stderr)
+specthis record <entry> --where remote --cpu 7200   # pin bytes, and what they cost
 specthis lint                  # every problem at once: spec, map, and pipeline correspondence
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
 specthis build [entries…]      # hand the pipeline to the manager, adopt what comes back

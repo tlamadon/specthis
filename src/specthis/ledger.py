@@ -24,6 +24,12 @@ else:  # pragma: no cover
 VOUCHES_FILE = "vouches.toml"
 RUNS_FILE = "runs.toml"
 
+#: The only two places work can have happened, as far as a reader of
+#: the ledger is concerned. A closed vocabulary on purpose: one word
+#: per manager would make "how much of this ran off my machine"
+#: unanswerable, which is the one question the field exists to answer.
+LOCALITIES = ("local", "remote")
+
 
 class LedgerError(Exception):
     """A write would violate a ledger rule."""
@@ -74,6 +80,20 @@ class Run:
     #: from the TOML row) for rows that predate the field or were
     #: adopted from a remote manifest that did not record one.
     duration_seconds: float | None = None
+    #: CPU seconds the work consumed, user + system, over the whole
+    #: process tree. Wall time says how long you waited; this says what
+    #: it cost, and on anything parallel those are different numbers by
+    #: a factor nobody can guess. Claim metadata like the duration:
+    #: no signature, no digest. ``None`` when nobody measured it.
+    cpu_seconds: float | None = None
+    #: Where the work happened — ``"local"``, ``"remote"``, or ``None``
+    #: when nobody said. **Declared, never inferred.** An executor is a
+    #: name, not a place: specthis cannot know whether `scripthut`
+    #: submitted to a cluster or forked on this laptop, and guessing
+    #: would put a fact in the ledger that nobody attested. The bundled
+    #: runner may declare ``local`` because it forks the process itself
+    #: — that it knows. Everything else says so in its manifest.
+    where: str | None = None
 
 
 @contextmanager

@@ -103,8 +103,8 @@ or just patience while upstream heals.
 | File | Holds | Written by |
 |---|---|---|
 | `specs/vouches.toml` | attested claims: `(spec_sha, code_sha, verdict, attester, when, note)` per entry, plus the decomposed digests (`spec_block_sha`, `code_manifest`) so an expired vouch can say *what* moved, and wall-clock `duration_seconds` when vouched with `--took` | `specthis vouch` — only |
-| `specs/runs.toml` | derived claims: input table, per-output digests, executor, wall-clock `duration_seconds` per entry | `specthis build` / `adopt` / `record` — only |
-| `specs/bindings.toml` | the map: `scripts` (which deps are judged code) and `produces` (which file is which logical product); plus `[package]` globs and `[preview]` recipes | you, by hand |
+| `specs/runs.toml` | derived claims: input table, per-output digests, executor, and what the work cost — wall-clock `duration_seconds`, `cpu_seconds`, and `where` it ran (`local`/`remote`) | `specthis build` / `adopt` / `record` — only |
+| `specs/bindings.toml` | the map: `scripts` (which deps are judged code) and `produces` (which file is which logical product); plus `[package]` globs, `[preview]` recipes and the `[executors]` locality table | you, by hand |
 | `pipeline.toml` | the production sheet: one step per entry — command, deps, outs | you, by hand |
 
 One more file is **derived**, so it is not in that table and belongs in
@@ -132,7 +132,17 @@ scripts   = ["scripts/fit_alpha.py"]
 run       = "python scripts/fit_alpha.py"
 workflows = ["hut.fit-alpha.json"]   # scripthut config: signature input, not judged code
 executor  = "scripthut:slurm"        # omit for local execution
+
+[executors]                          # what your executor names mean, for cost reporting
+specthis-runner = "local"
+"scripthut:slurm" = "remote"
 ```
+
+`[executors]` is read only to answer *how much of this ran off my
+machine*. A run row that states its own `where` is believed over the
+table, and an executor nobody listed stays honestly `unknown` — the
+table classifies rows written before locality was recorded, it never
+overrules one that says.
 
 ### Previews (dashboard-only)
 
@@ -364,7 +374,9 @@ specthis check                 # the two queues (mind: definitions, machine: rea
 specthis status [entry]        # both trees in two lines; -a adds every entry, worst
                                #   break first; name an entry for the full record,
                                #   including WHICH input moved. A slow derivation
-                               #   spins on stderr; --timing says where it went
+                               #   spins on stderr; --timing says where it went.
+                               #   A third line reports machine cost, split
+                               #   local/remote, when there is any to report
 specthis build [entries…]      # hand the pipeline to a compute manager and adopt
                                #   what comes back; --force rebuilds an artefact
                                #   edited on disk

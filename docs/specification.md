@@ -756,6 +756,45 @@ axes as separate columns, sorted worst break first (certification
 breaks outrank realization ones, ties by topological order) and
 coloured by state. `status <entry>` prints both tables side by side.
 
+### 11.0 What the machines cost
+
+A run row carries two pieces of **claim metadata**: `cpu_seconds` and
+`where`. Neither enters a signature or moves a digest — they say what
+the work cost, not what it produced — and `status` adds a third line
+when there is a cost worth reporting:
+
+```
+vouch tree  158/158 certified     +2 skipped
+run tree    120/148 current       28 stale
+machines    3h 20m wall · 41h 12m cpu over 148 runs   remote 39h 30m cpu   local 1h 42m cpu
+```
+
+The line is omitted entirely when nothing rounds to a second, so the
+glance stays two lines for a project without this data.
+
+**CPU is not wall time**, and neither stands in for the other. On
+anything parallel they differ by a factor specthis cannot know, so a
+place with no measured CPU reports wall time *labelled as wall time*,
+and `cpu` stays absent rather than being filled in.
+
+**Locality is declared, never inferred.** An executor is a name, not a
+place: specthis cannot tell whether `scripthut` submitted to a cluster
+or forked on a laptop, and guessing would put a fact in the ledger that
+nobody attested. Three sources, in order:
+
+1. the row's own `where` — the bundled runner writes `local` because it
+   forked the process itself; anything else says so in its manifest
+   (`where: "local" | "remote"`, alongside `cpu_seconds`);
+2. failing that, the project's `[executors]` table in `bindings.toml`,
+   mapping executor label to locality. Config, not a claim: it enters no
+   digest and never overrides a row that states its own. This is what
+   lets a ledger written before these fields existed still answer *how
+   much of this ran off my machine*;
+3. failing both, `unknown` — which is reported as such.
+
+`specthis record --where remote --cpu 7200` is the manual path, for
+bytes that arrived from somewhere no manifest describes.
+
 ### 11.1 Liveness and cost
 
 Derivation re-reads and re-hashes every byte the project declares

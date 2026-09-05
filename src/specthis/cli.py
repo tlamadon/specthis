@@ -25,6 +25,7 @@ from .check import (
     Certification,
     Realization,
     Report,
+    Spend,
     check_project,
     code_manifest,
     code_sha,
@@ -34,10 +35,12 @@ from .check import (
     is_library,
     is_source,
     keys_for,
+    locality_of,
     machine_repairable,
     ordered_keys,
     queues,
     sibling_keys,
+    spending,
     step_digest,
     tally,
     verified,
@@ -48,6 +51,7 @@ from .install import init_specs_dir, install_agents, install_commands, install_w
 from .instances import by_step as instances_by_step
 from .instances import resolve_key, template_problems
 from .ledger import (
+    LOCALITIES,
     RUNS_FILE,
     LedgerError,
     Run,
@@ -281,6 +285,11 @@ _STATE_COLOR = {
     Realization.NEVER_RUN: "yellow",
 }
 
+#: Where the work happened. Remote is the colour that means "somebody
+#: else's machine, and probably somebody's budget"; unknown is dim
+#: because it is an absence, not a place.
+_PLACE_COLOR = {"remote": "cyan", "local": "green", "unknown": None}
+
 #: Row order for ``status -a``: worst break first, and a certification
 #: break outranks a realization one — the same precedence the flattened
 #: word uses, because a definition nobody trusts makes its bytes moot.
@@ -335,6 +344,55 @@ def _tree_line(label: str, counts: dict, good, skipped: int = 0) -> str:
     return (line + " " * max(3, 22 - len(head)) + "   ".join(tail)) if tail else line
 
 
+#: Locality order in the machines line: the expensive place first,
+#: then the cheap one, then what nobody classified.
+_PLACES = ("remote", "local", "unknown")
+
+
+def _spend(s: Spend) -> str:
+    """One place's cost: CPU when somebody measured it, wall otherwise.
+
+    Never both — three places on one line has no room, and CPU is the
+    number that was asked for. Wall time is the honest stand-in while a
+    manager reports no CPU, and it is labelled so nobody adds the two
+    kinds together by eye.
+    """
+    return f"{_fmt_duration(s.cpu)} cpu" if s.cpu is not None else _fmt_duration(s.wall)
+
+
+def _machines_line(project: Project, reports: dict[str, Report]) -> str:
+    """What the standing claims cost, split by where the work happened.
+
+    Printed only when there is a cost worth a second of anybody's time.
+    A project that has never run anything, whose manager reports no
+    timings, or whose whole pipeline takes under a second is told
+    nothing rather than shown a row of noughts — which is also what
+    keeps the glance two lines for everyone who does not have this data.
+    """
+    spend = spending(project, reports)
+    wall = sum(s.wall for s in spend.values())
+    cpu = sum(s.cpu for s in spend.values() if s.cpu is not None)
+    if not round(wall) and not round(cpu):
+        return ""
+    runs = sum(s.runs for s in spend.values())
+    head = " · ".join(
+        part
+        for part in (
+            f"{_fmt_duration(wall)} wall" if wall else "",
+            f"{_fmt_duration(cpu)} cpu" if cpu else "",
+        )
+        if part
+    ) + f" over {runs} runs"
+    split = "   ".join(
+        _paint(f"{place} {_spend(spend[place])}", _PLACE_COLOR[place])
+        for place in _PLACES
+        if place in spend and (spend[place].wall or spend[place].cpu is not None)
+    )
+    untimed = sum(s.untimed for s in spend.values())
+    tail = _paint(f"   ({untimed} untimed)", dim=True) if untimed else ""
+    return f"{'machines':<12}{_paint(head, bold=True)}{' ' * max(3, 22 - len(head))}{split}{tail}"
+
+
 def _summary(project: Project, reports: dict[str, Report]) -> None:
     """The two queues at a glance — one line per tree, and that is all.
 
@@ -349,6 +407,8 @@ def _summary(project: Project, reports: dict[str, Report]) -> None:
     skipped = len(project.skipped_entries)
     click.echo(_tree_line("vouch tree", vouch, Certification.CERTIFIED, skipped))
     click.echo(_tree_line("run tree", run, Realization.CURRENT))
+    if machines := _machines_line(project, reports):
+        click.echo(machines)
 
 
 def _status_rows(project: Project, reports: dict[str, Report]) -> None:
@@ -477,12 +537,20 @@ def _status_detail(project: Project, reports: dict[str, Report], entry: str) -> 
     else:
         click.echo("vouch:     (none)")
     if r.run:
-        took = (
-            f" (took {_fmt_duration(r.run.duration_seconds)})"
-            if r.run.duration_seconds is not None
-            else ""
+        cost = " · ".join(
+            part
+            for part in (
+                f"took {_fmt_duration(r.run.duration_seconds)}"
+                if r.run.duration_seconds is not None
+                else "",
+                f"{_fmt_duration(r.run.cpu_seconds)} cpu"
+                if r.run.cpu_seconds is not None
+                else "",
+                locality_of(project, r.run),
+            )
+            if part
         )
-        click.echo(f"run:       {r.run.ran} via {r.run.executor}{took}")
+        click.echo(f"run:       {r.run.ran} via {r.run.executor} ({cost})")
     else:
         click.echo("run:       (none)")
     if not r.materialized:
@@ -541,8 +609,27 @@ def adopt_cmd(entry: str, manifest_file: Path, project_path: Path) -> None:
     "--as", "executor", default="hand", show_default=True,
     help="Who or what put these bytes here — a person, a one-off script, a vendor.",
 )
+@click.option(
+    "--where",
+    type=click.Choice(LOCALITIES),
+    default=None,
+    help="Where the work behind these bytes happened. Unset when you would be guessing.",
+)
+@click.option(
+    "--cpu",
+    "cpu_seconds",
+    type=float,
+    default=None,
+    help="CPU seconds it cost, if you know. Claim metadata: it enters no digest.",
+)
 @_path_option
-def record_cmd(entry: str, executor: str, project_path: Path) -> None:
+def record_cmd(
+    entry: str,
+    executor: str,
+    where: str | None,
+    cpu_seconds: float | None,
+    project_path: Path,
+) -> None:
     """Pin the bytes already on disk for ENTRY, without running anything.
 
     The way content that no pipeline produced enters the ledger: a
@@ -589,6 +676,8 @@ def record_cmd(entry: str, executor: str, project_path: Path) -> None:
             executor=executor,
             inputs=inputs,
             outputs=hashing.files_manifest(project.root, outs),
+            where=where,
+            cpu_seconds=cpu_seconds,
         ),
     )
     moved = "" if prior is None else (

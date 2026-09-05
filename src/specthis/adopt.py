@@ -36,7 +36,7 @@ from .check import (
     sibling_keys,
 )
 from .instances import resolve_key
-from .ledger import Run, read_runs, record_run
+from .ledger import LOCALITIES, Run, read_runs, record_run
 from .parse import Project
 from .pipeline import producers
 
@@ -55,6 +55,11 @@ class Adopted:
 def _require(cond: bool, msg: str) -> None:
     if not cond:
         raise AdoptError(msg)
+
+
+def _locality(raw: object) -> str | None:
+    """A manifest's ``where``, if it is one of the two words we keep."""
+    return str(raw) if raw in LOCALITIES else None
 
 
 def verify(project: Project, entry_name: str, manifest: dict) -> None:
@@ -120,6 +125,12 @@ def adopt_manifest(project: Project, entry_name: str, manifest: dict) -> Adopted
         inputs=inputs,
         outputs=outputs,
         duration_seconds=manifest.get("duration_seconds"),
+        # Cost and locality come from the manager or not at all. Nothing
+        # here infers them: only the thing that scheduled the work knows
+        # what it spent and where it ran, and an invented answer would
+        # be a fact in the ledger that nobody attested.
+        cpu_seconds=manifest.get("cpu_seconds"),
+        where=_locality(manifest.get("where")),
     )
     record_run(project.specs_dir, entry_name, run)
     return Adopted(entry_name, run, prior is not None and prior.output_sha == out_sha)

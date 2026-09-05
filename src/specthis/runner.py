@@ -41,6 +41,11 @@ from pathlib import Path
 from .pipeline import Step, load_pipeline, predecessors, topo_order
 from .seam import read_adopted, satisfies
 
+try:
+    import resource
+except ImportError:  # pragma: no cover — Windows has no rusage
+    resource = None  # type: ignore[assignment]
+
 MISSING = "MISSING"
 STATE_DIR = ".specthis/runner"
 MANIFEST_VERSION = 1
@@ -118,8 +123,32 @@ def _accounted_for(
     )
 
 
-def _manifest(step: Step, inputs: dict, outputs: dict, code: int, t0: float, t1: float) -> dict:
-    return {
+def _cpu_clock() -> float | None:
+    """Cumulative CPU seconds of every child this process has reaped.
+
+    Differenced around one step, this is that step's CPU cost — the
+    whole tree it forked, user plus system. Exact here only because the
+    runner executes steps one at a time; a parallel executor would have
+    to take the figure from its own scheduler instead of from a
+    process-wide counter. ``None`` where the platform has no `resource`
+    (Windows), which is a duration the ledger simply omits.
+    """
+    if resource is None:  # pragma: no cover — Windows
+        return None
+    used = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return used.ru_utime + used.ru_stime
+
+
+def _manifest(
+    step: Step,
+    inputs: dict,
+    outputs: dict,
+    code: int,
+    t0: float,
+    t1: float,
+    cpu: float | None = None,
+) -> dict:
+    manifest = {
         "manifest_version": MANIFEST_VERSION,
         "step": step.id,
         "command": step.command,
@@ -130,7 +159,13 @@ def _manifest(step: Step, inputs: dict, outputs: dict, code: int, t0: float, t1:
         "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(t1)),
         "duration_seconds": round(t1 - t0, 3),
         "executor": "specthis-runner",
+        # This runner forked the process itself, so locality is a fact
+        # it owns rather than a guess about somebody else's scheduler.
+        "where": "local",
     }
+    if cpu is not None:
+        manifest["cpu_seconds"] = round(cpu, 3)
+    return manifest
 
 
 def run_pipeline(
@@ -190,18 +225,19 @@ def run_pipeline(
             )
             continue
 
-        t0 = time.time()
+        t0, c0 = time.time(), _cpu_clock()
         # check=False: a non-zero exit is data — it blocks dependents and
         # writes a failed manifest (§14 MUST 4), never an exception.
         proc = subprocess.run(step.command, shell=True, cwd=root, check=False)
-        t1 = time.time()
+        t1, c1 = time.time(), _cpu_clock()
+        cpu = None if c0 is None or c1 is None else c1 - c0
 
         if proc.returncode != 0:
             blocked.add(sid)
             results.append(
                 StepResult(
                     sid, "failed",
-                    _manifest(step, inputs, {}, proc.returncode, t0, t1),
+                    _manifest(step, inputs, {}, proc.returncode, t0, t1, cpu),
                     inputs, {}, proc.returncode,
                 )
             )
@@ -213,7 +249,7 @@ def run_pipeline(
             results.append(
                 StepResult(
                     sid, "failed",
-                    _manifest(step, inputs, outputs, 0, t0, t1),
+                    _manifest(step, inputs, outputs, 0, t0, t1, cpu),
                     inputs, outputs, 0,
                 )
             )
@@ -224,7 +260,9 @@ def run_pipeline(
         lock[sid] = {"command": step.command, "deps": inputs, "outs": outputs}
         _write_lock(state, lock)  # after each step: an interrupt loses no work
         results.append(
-            StepResult(sid, "ran", _manifest(step, inputs, outputs, 0, t0, t1), inputs, outputs, 0)
+            StepResult(
+                sid, "ran", _manifest(step, inputs, outputs, 0, t0, t1, cpu), inputs, outputs, 0
+            )
         )
 
     _write_manifests(state, results)

@@ -630,6 +630,57 @@ def coordinates(r: Report) -> str:
     return axes if not waiting else f"{axes} · waiting on {' and '.join(waiting)}"
 
 
+@dataclass
+class Spend:
+    """What one place cost: wall and CPU seconds over ``runs`` rows.
+
+    ``cpu`` is ``None`` until something records it, and stays ``None``
+    rather than falling back to wall time — on anything parallel the two
+    differ by a factor nobody here can know, and a number that might be
+    either is worse than an absent one.
+    """
+
+    runs: int = 0
+    wall: float = 0.0
+    cpu: float | None = None
+    #: Rows with no duration at all, so a total is never quietly short.
+    untimed: int = 0
+
+
+def locality_of(project: Project, run: Run) -> str:
+    """Where a run happened: ``local``, ``remote`` or ``unknown``.
+
+    The row's own word wins, because that is the one somebody attested.
+    Failing that, the project may have said what its executor names mean
+    (``[executors]`` in bindings) — which is what lets a ledger written
+    before the field existed still answer the question. An executor
+    nobody classified stays ``unknown``: guessing would invent a fact.
+    """
+    return run.where or project.localities.get(run.executor) or "unknown"
+
+
+def spending(project: Project, reports: dict[str, Report]) -> dict[str, Spend]:
+    """Machine cost per locality, over every recorded run.
+
+    Keyed by ``local`` / ``remote`` / ``unknown``, and only for places
+    that actually have rows — a project that never ran anything remotely
+    should not have to read a zero.
+    """
+    out: dict[str, Spend] = {}
+    for r in reports.values():
+        if r.run is None:
+            continue
+        spend = out.setdefault(locality_of(project, r.run), Spend())
+        spend.runs += 1
+        if r.run.duration_seconds is None:
+            spend.untimed += 1
+        else:
+            spend.wall += r.run.duration_seconds
+        if r.run.cpu_seconds is not None:
+            spend.cpu = (spend.cpu or 0.0) + r.run.cpu_seconds
+    return out
+
+
 def tally(reports: dict[str, Report]) -> tuple[dict[Certification, int], dict[Realization, int]]:
     """Both trees' state counts, worst state first — the whole project in
     two numbers-per-line.
