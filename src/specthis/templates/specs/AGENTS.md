@@ -133,6 +133,8 @@ Start mechanical, end judgmental:
    it names exactly which input moved). This replaces every
    existence / freshness / hash check you would otherwise do by hand.
    Never re-derive status yourself; never infer it from mtimes.
+   `specthis check --json` is the same derivation as data when you are
+   driving a loop rather than reading a report.
 2. The check output is already split by repair kind:
    - the **machine queue** (stale / never-run) — compute. Report it;
      `specthis build` (or the user) clears it, including
@@ -177,6 +179,22 @@ After (or as part of) an audit:
 
 Express proposals as "I could now implement X" or "the next thing to
 run is Y" — not as actions taken. Wait for explicit confirmation.
+
+**The one exception: `/specthis-yolo`.** Running that command *is* the
+confirmation, for one bounded run: the waiting rules above are suspended
+and you act instead of proposing. A Stop hook holds the loop closed and
+decides when it ends, so you do not have to — and because a queue grows
+as you drain it (a rebuilt output makes its consumers stale; a repaired
+definition expires its own vouch), you must re-check after every step
+rather than treating one pass as done.
+
+**The one rule is not suspended, and neither is anything else that
+protects the ledger.** Under yolo you still never hold the pen: judgment
+goes to fresh `spec-critic` sessions exactly as it does otherwise. A
+doubt is answered by fixing what the critic named and handing the entry
+to a *new* critic — never by vouching it yourself because the loop wants
+to finish. `check` reporting *ready* is the whole point of the tool; a
+self-stamped vouch makes it say so while meaning nothing.
 
 ### 3. Implement a spec (author + propose)
 

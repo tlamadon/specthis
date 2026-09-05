@@ -47,7 +47,13 @@ from .check import (
     waiting_on,
 )
 from .correspond import correspondence_problems, correspondence_warnings
-from .install import init_specs_dir, install_agents, install_commands, install_workflows
+from .install import (
+    init_specs_dir,
+    install_agents,
+    install_commands,
+    install_hooks,
+    install_workflows,
+)
 from .instances import by_step as instances_by_step
 from .instances import resolve_key, template_problems
 from .ledger import (
@@ -176,19 +182,126 @@ def main() -> None:
 # ---------------------------------------------------------------- check
 
 
+def _axes_digest(r: Report) -> str:
+    """One entry's contribution to the fingerprint.
+
+    Both axes, plus the two digests a repair moves — so an edit that has
+    not yet changed either axis (code rewritten, still unvouched) still
+    reads as progress rather than as a stalled loop.
+    """
+    realization = r.realization.value if r.realization else "-"
+    return f"{r.certification.value}|{realization}|{r.spec_sha}|{r.code_sha or '-'}"
+
+
+def _queue_state(
+    project: Project, reports: dict[str, Report], problems: list[Problem]
+) -> dict:
+    """The two queues as data — what a driver needs to decide what next.
+
+    Derived from the same ``queues()`` over the same reports as the
+    printed form, so the porcelain and the text can never disagree.
+    Two fields exist only for a driver and have no printed counterpart:
+
+    ``verdict`` answers whether looping can still make progress at all,
+    and ``fingerprint`` answers whether the last loop actually made
+    any — a digest over every entry's two axes plus its spec and code
+    digests, in the project's own canonical encoding. Unchanged across
+    iterations means nothing moved, which is a fact a driver can act on
+    without having to judge it.
+
+    ``blocked`` is advisory, not terminal: a rejection stands only at
+    the pair it was filed against, so it clears the moment the spec or
+    the code actually moves.
+    """
+    mind, machine = queues(reports)
+    blocked = [r for r in mind if r.certification is Certification.REJECTED]
+    open_mind = [r for r in mind if r.certification is not Certification.REJECTED]
+
+    # Build order, not alphabetical. The printed form sorts by name
+    # because a reader is scanning for one; a driver is *executing* the
+    # list, and a consumer built before the thing it consumes fails on a
+    # missing input. Same order the manager would choose, so following
+    # this list and handing over the whole pipeline agree.
+    rank = {key: i for i, key in enumerate(ordered_keys(project, reports))}
+
+    def in_build_order(rs: list[Report]) -> list[Report]:
+        return sorted(rs, key=lambda r: (rank.get(r.entry, len(rank)), r.entry))
+
+    return {
+        "verdict": (
+            "work" if (problems or machine or open_mind) else "blocked" if blocked else "done"
+        ),
+        "mind": [
+            {
+                "entry": r.entry,
+                "certification": r.certification.value,
+                "hint": _mind_hint(r, project),
+            }
+            for r in in_build_order(mind)
+        ],
+        "machine": [
+            {
+                "entry": r.entry,
+                "realization": r.realization.value if r.realization else None,
+                "hint": _machine_hint(r),
+                "unvouched": r.certification is not Certification.CERTIFIED,
+            }
+            for r in in_build_order(machine)
+        ],
+        "blocked": [
+            {"entry": r.entry, "why": _mind_hint(r, project)}
+            for r in in_build_order(blocked)
+        ],
+        "lint": {"problems": len(problems), "messages": [p.message for p in problems]},
+        # Neither is a break, and both are traps for a loop: waiting heals
+        # itself upstream, and absent bytes are a locality fact. Named here
+        # so a driver can see them and leave them alone.
+        "waiting_on_upstream": sum(
+            1
+            for r in reports.values()
+            if r.certification is Certification.CERTIFIED
+            and not machine_repairable(r)
+            and not (r.computable and r.realized)
+        ),
+        "bytes_not_local": sorted(r.entry for r in reports.values() if not r.materialized),
+        "ready": f"{sum(1 for r in reports.values() if verified(r))}/{len(reports)}",
+        "fingerprint": hashing.manifest_sha(
+            [
+                (r.entry, _axes_digest(r))
+                for r in reports.values()
+            ]
+            + [("\x00lint", str(len(problems)))]
+        ),
+    }
+
+
 @main.command("check")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit the two queues as JSON for a driver (see `specthis check --help`).",
+)
 @_path_option
-def check_cmd(project_path: Path) -> None:
+def check_cmd(project_path: Path, as_json: bool) -> None:
     """Report the two queues: definitions needing a mind, realizations
     needing a machine. An entry can sit in both (the mind audits while
     the machine reruns). Downstream waiting is summarized per tree.
 
     Exits non-zero if either queue is non-empty or the spec directory
-    has grammar problems (see `specthis lint`).
+    has grammar problems (see `specthis lint`) — with or without
+    `--json`, since the exit code reports the project, not the
+    formatting. A driver should read `verdict`, which separates the
+    three situations the single exit code cannot.
     """
     project, problems = _load_lenient(project_path)
-    _echo_problems(problems)
     reports = check_project(project)
+    if as_json:
+        click.echo(json.dumps(_queue_state(project, reports, problems), indent=2))
+        if problems or any(queues(reports)):
+            sys.exit(1)
+        return
+    _echo_problems(problems)
     mind, machine = queues(reports)
     if mind:
         click.echo("vouch tree — definitions needing a mind:")
@@ -1247,8 +1360,11 @@ def migrate_cmd(
 def install_cmd(
     project_path: Path, force: bool, selected: tuple[str, ...], workflows: bool
 ) -> None:
-    """Copy the specthis subagents into <project>/.claude/agents/ and the
-    slash commands (e.g. /specthis-vouch) into <project>/.claude/commands/."""
+    """Copy the specthis subagents into <project>/.claude/agents/, the
+    slash commands (e.g. /specthis-vouch) into <project>/.claude/commands/,
+    and the /specthis-yolo Stop hook into <project>/.claude/hooks/ —
+    registering it in settings.json without disturbing what is there.
+    That hook stays inert until /specthis-yolo arms it."""
     installed, skipped = install_agents(
         project_path=project_path,
         force=force,
@@ -1258,6 +1374,12 @@ def install_cmd(
         cmd_installed, cmd_skipped = install_commands(project_path=project_path, force=force)
         installed += [f"/{name} (command)" for name in cmd_installed]
         skipped += cmd_skipped
+        # The Stop hook that /specthis-yolo arms. Inert without it.
+        hook_installed, hook_skipped = install_hooks(project_path=project_path, force=force)
+        installed += [
+            n if n.endswith(")") else f".claude/hooks/{n}.py" for n in hook_installed
+        ]
+        skipped += hook_skipped
     if workflows:
         wf_installed, wf_skipped = install_workflows(project_path=project_path, force=force)
         installed += [f".github/workflows/{name}.yml" for name in wf_installed]

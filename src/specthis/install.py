@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+import json
 from importlib import resources
 from pathlib import Path
 
 AGENT_NAMES = ("spec-auditor", "spec-implementer", "experiment-runner", "spec-critic")
-COMMAND_NAMES = ("specthis-vouch", "specthis-run", "specthis-lint", "specthis-journal")
+COMMAND_NAMES = (
+    "specthis-vouch",
+    "specthis-run",
+    "specthis-lint",
+    "specthis-journal",
+    "specthis-yolo",
+)
 SPEC_TEMPLATE_NAMES = ("README.md", "AGENTS.md")
 WORKFLOW_NAMES = ("badges",)
+HOOK_NAMES = ("yolo_stop",)
+
+#: How Claude Code is told to run the hook. ``$CLAUDE_PROJECT_DIR`` is
+#: expanded by the harness, so the entry survives being run from a
+#: subdirectory — and doubles as the key for "is it already installed",
+#: since matching on the command is what makes a re-install idempotent.
+HOOK_COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/yolo_stop.py"'
 
 
 def _read_template(subdir: str, filename: str) -> str:
@@ -68,6 +82,72 @@ def install_commands(
         body = _read_template("commands", f"{name}.md")
         target.write_text(body, encoding="utf-8")
         installed.append(name)
+    return installed, skipped
+
+
+def install_hooks(
+    project_path: Path,
+    force: bool = False,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Install the Stop hook `/specthis-yolo` needs, and register it.
+
+    Two writes, not one: the script into ``.claude/hooks/``, and an entry
+    in ``.claude/settings.json`` pointing at it. The second is the part
+    that needs care — settings.json is the user's file, may already carry
+    unrelated hooks from other tools, and merges with their global
+    settings rather than replacing them. So this reads what is there,
+    appends one entry, and rewrites; it never authors the file wholesale.
+
+    The hook is inert until `/specthis-yolo` arms it: with no
+    ``.specthis/auto.json`` it allows every stop, so installing it
+    changes nothing about a normal session.
+
+    Returns ``(installed, skipped)`` like :func:`install_agents`.
+    """
+    target_dir = project_path / ".claude" / "hooks"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    installed: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    for name in HOOK_NAMES:
+        target = target_dir / f"{name}.py"
+        if target.exists() and not force:
+            skipped.append((name, "already exists; use --force"))
+            continue
+        body = _read_template("hooks", f"{name}.py")
+        target.write_text(body, encoding="utf-8")
+        target.chmod(0o755)
+        installed.append(name)
+
+    settings_path = project_path / ".claude" / "settings.json"
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        settings = {}
+    except (OSError, ValueError):
+        settings = None
+    if not isinstance(settings, dict):
+        # Unreadable, or not an object. Refuse rather than overwrite: the
+        # command still works without registration, and a clobbered
+        # settings file is not so easily undone.
+        skipped.append(("settings.json", "unreadable — add the Stop hook by hand"))
+        return installed, skipped
+
+    hooks = settings.setdefault("hooks", {})
+    stop = hooks.setdefault("Stop", [])
+    already = any(
+        h.get("command") == HOOK_COMMAND
+        for group in stop
+        if isinstance(group, dict)
+        for h in group.get("hooks", [])
+        if isinstance(h, dict)
+    )
+    if already:
+        skipped.append(("settings.json", "Stop hook already registered"))
+    else:
+        stop.append({"hooks": [{"type": "command", "command": HOOK_COMMAND}]})
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+        installed.append("settings.json (Stop hook)")
     return installed, skipped
 
 

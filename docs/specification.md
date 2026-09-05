@@ -740,6 +740,25 @@ certified 11/16 · current 12/16
 Break attribution is always a **table diff**: `+path` added, `-path`
 removed, `~path` content moved. Never "something moved".
 
+`check --json` is the same derivation for a **driver** rather than a
+reader. Same queues from the same `queues()` call, so the two forms
+cannot disagree, with three differences that follow from who is reading:
+
+- Both queues come out in **build order**, not alphabetical. A reader is
+  scanning for one entry; a driver is executing the list, and a consumer
+  built before its input fails.
+- `verdict` — `work` / `blocked` / `done`. The exit code cannot separate
+  "a queue has members" from "the specs do not parse", and a loop has to.
+- `fingerprint` — a `manifest_sha` over each entry's two axes plus its
+  `spec_sha` and `code_sha`. Equal fingerprints across two iterations
+  means nothing moved. Including the digests is deliberate: code
+  rewritten but not yet re-judged has not changed either axis, and is
+  still progress.
+
+`waiting_on_upstream` and `bytes_not_local` are reported there too.
+Neither is a break, and a driver that treats either as one rebuilds
+entries that were never stale.
+
 `status` is the same two trees at a glance — one line each, the
 fraction that holds followed by the non-zero breaks, worst first:
 
@@ -861,7 +880,7 @@ real compute. That needs the manager's probe.
 
 | Verb | Does | Writes |
 |---|---|---|
-| `check` | derive; two queues; non-zero on local breaks | nothing |
+| `check [--json]` | derive; two queues; non-zero on local breaks. `--json`: the same, in build order, for a driver (§11) | nothing |
 | `status [-a] [--timing] [entry]` | two-line summary / full list / detail, both axes (§11.1) | nothing |
 | `vouch <entry>` | file a mind-attestation | `ledger/mind.toml` |
 | `lint` | spec ↔ map ↔ pipeline correspondence (§13) | nothing |

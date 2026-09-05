@@ -175,6 +175,7 @@ believes none of them without re-deriving the digests.
 
 ```bash
 specthis check                 # the two queues (minds, machines); non-zero on any local break
+specthis check --json          # the same two queues as data, for a driver (see below)
 specthis status                # both trees in two lines; -a lists every entry, worst first
 specthis status <entry>        # both axes for one entry, and WHICH input moved
 specthis status --timing       # where the derivation spent its time (stderr)
@@ -188,6 +189,15 @@ specthis adopt <entry> FILE    # countersign a manifest from a manager specthis 
 specthis adopted               # publish the steps your manager can skip (.specthis/adopted.json)
 specthis certify               # code-identity certificates, if you use [package] globs
 ```
+
+`check --json` is the same derivation as the printed form, plus the two
+things a driver needs and a reader does not: `verdict` (`work` /
+`blocked` / `done`), which separates the situations the single exit code
+cannot, and `fingerprint`, a digest over every entry's two axes and its
+spec and code digests. Equal fingerprints across two iterations means
+nothing moved — so "am I making progress" is computed rather than
+judged. `waiting_on_upstream` and `bytes_not_local` are named there too,
+because both look like breaks to a loop and neither is one.
 
 `adopted` is the answer back across the seam. When results are made
 elsewhere — a cluster, a collaborator — `adopt` records that their bytes
@@ -492,14 +502,19 @@ worth remembering, with links to the specs involved.
 ## Scaffold a project
 
 ```bash
-specthis install               # writes the Claude Code subagents into .claude/agents/
+specthis install               # subagents into .claude/agents/, commands into
+                               # .claude/commands/, the yolo Stop hook into
+                               # .claude/hooks/ (registered in settings.json)
 specthis install --workflows   # also .github/workflows/badges.yml (see Badges)
 specthis init                  # creates specs/ with README.md + AGENTS.md templates
 ```
 
 Workflows are opt-in: the badge job pushes a branch under the repo's
 own token, which is not something a scaffolder should arrange without
-being asked.
+being asked. The Stop hook is not opt-in but is inert — with no
+`.specthis/auto.json` it allows every stop, and only `/specthis-yolo`
+writes that file. Registration merges into `.claude/settings.json`
+without disturbing what is already there.
 
 Four Claude Code subagents and the slash commands cover the daily
 operations:
@@ -532,6 +547,20 @@ operations:
   entry into `journal/` from the current session (see
   [Journal](#journal)). No ledger is touched — the journal records
   the why, the ledgers record the what.
+- **`/specthis-yolo [budget]`** — the unattended driver. Everything
+  above stops to ask, by design; this is the one bounded grant that
+  says don't. It drives both queues to a **fixed point** — which takes
+  a loop, not two passes, because building an entry makes its consumers
+  stale and repairing a definition expires its own vouch, so each queue
+  grows as you drain it. A `Stop` hook re-reads `specthis check --json`
+  after every turn and refuses to end the session while work remains;
+  it disarms itself when the queues drain, the budget or deadline runs
+  out, or three rounds pass with nothing moving. Long compute goes to
+  the manager and is watched in the background, so a finished job wakes
+  the session instead of waiting to be noticed. **The pen is not part
+  of the grant**: judgment still goes to fresh `spec-critic` sessions,
+  and a doubt is answered by fixing the code and asking a *new* critic —
+  never by the driver vouching for itself.
 
 ## Badges
 
