@@ -135,3 +135,77 @@ def test_export_outputs_inline_form(root: Path) -> None:
         "reports/fig_beta.tex",
         "reports/fig_beta.dat",
     ]
+
+
+# ------------------------------------------------------- contract_sha
+
+TWO_ENTRIES = """\
+---
+name: pair
+kind: compute
+---
+
+# pair
+
+## Script
+
+Shared contract prose.
+
+## Entries
+
+### fit-one
+
+First contract text.
+
+Output: `results/one.json`
+
+### fit-two
+
+Second contract text.
+
+Output: `results/two.json`
+"""
+
+
+def _pair(root: Path, text: str):
+    write(root, "specs/pair.md", text)
+    return parse_spec(root / "specs/pair.md")
+
+
+def test_shared_prose_moves_every_entrys_contract(tmp_path: Path) -> None:
+    before = _pair(tmp_path, TWO_ENTRIES)
+    after = _pair(tmp_path, TWO_ENTRIES.replace("Shared contract prose.", "Rewritten."))
+    for i in (0, 1):
+        assert before.entries[i].block_sha == after.entries[i].block_sha
+        assert before.entries[i].contract_sha != after.entries[i].contract_sha
+
+
+def test_block_edit_moves_only_its_own_contract(tmp_path: Path) -> None:
+    before = _pair(tmp_path, TWO_ENTRIES)
+    after = _pair(tmp_path, TWO_ENTRIES.replace("First contract text.", "Sharpened."))
+    assert before.entries[0].contract_sha != after.entries[0].contract_sha
+    assert before.entries[1].contract_sha == after.entries[1].contract_sha
+
+
+def test_semantic_frontmatter_is_shared_contract(tmp_path: Path) -> None:
+    before = _pair(tmp_path, TWO_ENTRIES)
+    after = _pair(tmp_path, TWO_ENTRIES.replace("kind: compute", "kind: compute\nprops: [x]"))
+    assert before.entries[0].contract_sha != after.entries[0].contract_sha
+
+
+def test_display_and_dormancy_frontmatter_are_not(tmp_path: Path) -> None:
+    before = _pair(tmp_path, TWO_ENTRIES)
+    retitled = _pair(tmp_path, TWO_ENTRIES.replace("kind: compute", "kind: compute\ntitle: T"))
+    skipped = _pair(tmp_path, TWO_ENTRIES.replace("kind: compute", "kind: compute\nskip: true"))
+    assert before.entries[0].contract_sha == retitled.entries[0].contract_sha
+    assert before.entries[0].contract_sha == skipped.entries[0].contract_sha
+
+
+def test_trailing_prose_after_last_entry_is_that_entrys_block(tmp_path: Path) -> None:
+    # the \Z quirk: with no closing ## heading, trailing prose lives
+    # inside the last block — the complement must not double-count it
+    text = TWO_ENTRIES + "\nTrailing note.\n"
+    before = _pair(tmp_path, text)
+    after = _pair(tmp_path, text.replace("Trailing note.", "Different note."))
+    assert before.entries[0].contract_sha == after.entries[0].contract_sha
+    assert before.entries[1].contract_sha != after.entries[1].contract_sha

@@ -102,7 +102,7 @@ or just patience while upstream heals.
 
 | File | Holds | Written by |
 |---|---|---|
-| `specs/vouches.toml` | attested claims: `(spec_sha, code_sha, verdict, attester, when, note)` per entry, plus the decomposed digests (`spec_block_sha`, `code_manifest`) so an expired vouch can say *what* moved, and wall-clock `duration_seconds` when vouched with `--took` | `specthis vouch` — only |
+| `specs/vouches.toml` | attested claims: `(spec_sha, code_sha, verdict, attester, when, note)` per entry, plus the decomposed digests (`spec_contract_sha` — the entry's block plus the file's shared prose, the tier that decides expiry — then `spec_block_sha` and `code_manifest`, so an expired vouch can say *what* moved), and wall-clock `duration_seconds` when vouched with `--took` | `specthis vouch` — only |
 | `specs/runs.toml` | derived claims: input table, per-output digests, executor, and what the work cost — wall-clock `duration_seconds`, `cpu_seconds`, and `where` it ran (`local`/`remote`) | `specthis build` / `adopt` / `record` — only |
 | `specs/bindings.toml` | the map: `scripts` (which deps are judged code) and `produces` (which file is which logical product); plus `[package]` globs, `[preview]` recipes and the `[executors]` locality table | you, by hand |
 | `pipeline.toml` | the production sheet: one step per entry — command, deps, outs | you, by hand |

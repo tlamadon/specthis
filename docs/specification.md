@@ -137,7 +137,13 @@ A spec file is ordinary markdown. Five rules:
    unique repo-wide.
 3. **An entry's block runs from its heading to the next heading of any
    level.** Everything inside is hashed into `block_sha`. Prose outside
-   any entry is unsigned narrative.
+   any entry is **shared contract text**: it is signed by every entry's
+   `contract_sha` (§5.2b), so a `## Script` edit expires every vouch in
+   the file, while a sibling *entry block* edit expires nobody else's.
+   Only display/dormancy frontmatter lines are unsigned narrative.
+   *(Implementation note: the parser currently closes a block only at
+   `##`/`###` headings, not `#` — a divergence from "any level",
+   recorded, not yet resolved.)*
 4. **Recognized fields:** `consumes`, `produces`, `code`, `props`.
    Unknown keys are lint **errors**.
 5. **Type is inferred** from the fields present (§2).
@@ -257,6 +263,23 @@ sentinel `MISSING`.
 ### 5.2 Block digest
 `block_sha(entry)` = sha256 of the entry's block text (§3 rule 3), UTF-8,
 newlines normalised to `\n`, with frontmatter excluded.
+
+### 5.2b Contract digest
+`contract_sha(entry)` = sha256 of
+
+```
+block_text + "\0" + semantic_frontmatter + "\0" + body_complement
+```
+
+where `body_complement` is the spec body with every entry-block span
+removed (the exact complement of the block matches, so the boundary
+quirks can neither double-count nor drop a byte — identical for every
+entry in one file), and `semantic_frontmatter` is the frontmatter with
+the display and dormancy lines (`title`, `group`, `priority`, `skip`,
+`draft`) carved out. This is **what a vouch pins**: judgment expiry
+(`check.spec_moved`) and rejection identity (`ledger.same_subject`)
+decide on the finest recorded tier — contract, then block, then the
+file digest for rows written before the finer fields existed.
 
 ### 5.3 Table
 A **table** is `{path: sha}`, keys sorted bytewise.

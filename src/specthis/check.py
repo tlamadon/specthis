@@ -342,11 +342,18 @@ def step_moved(project: Project, entry: Entry, v: Vouch) -> bool:
 def spec_moved(entry: Entry, v: Vouch) -> bool:
     """Has the *judged text* moved since this vouch?
 
-    A vouch's subject is the entry's own block, never the whole file:
-    editing a sibling entry must not expire this one. Rows written
-    before ``spec_block_sha`` existed fall back to the file digest —
-    coarser, so they over-expire rather than under-expire.
+    A vouch's subject is the entry's contract: its own block plus the
+    file's shared prose — a ``## Script`` section is part of what every
+    entry in the file promises, so editing it expires them all, while a
+    sibling *entry block* edit still expires nobody else. Decided on
+    the finest tier the row carries: rows written before
+    ``spec_contract_sha`` existed fall back to the block digest
+    (under-expires on shared prose), then the file digest (coarser, so
+    it over-expires rather than under-expires). Mirrors
+    ``ledger.same_subject``.
     """
+    if v.spec_contract_sha:
+        return v.spec_contract_sha != entry.contract_sha
     if v.spec_block_sha:
         return v.spec_block_sha != entry.block_sha
     return v.spec_sha != entry.spec.spec_sha
@@ -387,7 +394,15 @@ def expired_since_vouch(
     out: list[str] = []
     if spec_moved(entry, v):
         fname = entry.spec.path.name
-        if v.spec_block_sha:
+        if v.spec_contract_sha:
+            # Attribution is diagnosis: name every movement, not the
+            # first one. Block unmoved but contract moved -> the shared
+            # prose (or semantic frontmatter) is what changed.
+            if v.spec_block_sha and v.spec_block_sha != entry.block_sha:
+                out.append(f"spec: this entry's block in {fname} moved")
+            if not v.spec_block_sha or v.spec_block_sha == entry.block_sha:
+                out.append(f"spec: shared prose in {fname} moved")
+        elif v.spec_block_sha:
             out.append(f"spec: this entry's block in {fname} moved")
         else:
             out.append(f"spec: {fname} moved")

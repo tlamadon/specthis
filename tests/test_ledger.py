@@ -124,25 +124,66 @@ def test_rejection_expires_on_digest_movement(tmp_path: Path) -> None:
     assert read_vouches(tmp_path)["e"].verdict == "ok"
 
 
-def _blocked(verdict: str, spec_sha: str, block_sha: str) -> Vouch:
+def _subject(
+    verdict: str,
+    spec_sha: str = "file1",
+    block_sha: str = "",
+    contract_sha: str = "",
+    step_sha: str = "",
+) -> Vouch:
     v = _vouch(verdict, spec_sha=spec_sha)
     v.spec_block_sha = block_sha
+    v.spec_contract_sha = contract_sha
+    v.step_sha = step_sha
     return v
 
 
 def test_rejection_binds_to_the_block_not_the_file(tmp_path: Path) -> None:
     """A sibling entry's edit moves the file digest but must not lift a
-    standing rejection — the mirror of `check.spec_moved`."""
-    record_vouch(tmp_path, "e", _blocked("rejected", "file1", "block1"))
+    standing rejection — the mirror of `check.spec_moved`. Legacy rows
+    without a contract digest still bind at the block tier."""
+    record_vouch(tmp_path, "e", _subject("rejected", "file1", "block1"))
     with pytest.raises(LedgerError, match="standing rejection"):
-        record_vouch(tmp_path, "e", _blocked("ok", "file2", "block1"))
+        record_vouch(tmp_path, "e", _subject("ok", "file2", "block1"))
     assert read_vouches(tmp_path)["e"].verdict == "rejected"
 
 
 def test_rejection_lifts_when_the_block_itself_moves(tmp_path: Path) -> None:
-    record_vouch(tmp_path, "e", _blocked("rejected", "file1", "block1"))
-    record_vouch(tmp_path, "e", _blocked("ok", "file1", "block2"))
+    record_vouch(tmp_path, "e", _subject("rejected", "file1", "block1"))
+    record_vouch(tmp_path, "e", _subject("ok", "file1", "block2"))
     assert read_vouches(tmp_path)["e"].verdict == "ok"
+
+
+def test_rejection_binds_to_the_contract_not_the_file(tmp_path: Path) -> None:
+    record_vouch(tmp_path, "e", _subject("rejected", "file1", "block1", "contract1"))
+    with pytest.raises(LedgerError, match="standing rejection"):
+        record_vouch(tmp_path, "e", _subject("ok", "file2", "block1", "contract1"))
+
+
+def test_shared_prose_edit_lifts_a_standing_rejection(tmp_path: Path) -> None:
+    """The deadlock this fixes: a critic rejects over a contradiction in
+    the ## Script prose, the author repairs that prose — the block is
+    unchanged, but the contract moved, so the ok must be accepted."""
+    record_vouch(tmp_path, "e", _subject("rejected", "file1", "block1", "contract1"))
+    record_vouch(tmp_path, "e", _subject("ok", "file1", "block1", "contract2"))
+    assert read_vouches(tmp_path)["e"].verdict == "ok"
+
+
+def test_step_rewire_lifts_a_standing_rejection(tmp_path: Path) -> None:
+    """`check.step_moved` expires a vouch on a rewire; `same_subject`
+    must agree that the subject moved, or the rejection outlives its
+    own expiry."""
+    record_vouch(tmp_path, "e", _subject("rejected", "file1", "block1", "contract1", "step1"))
+    record_vouch(tmp_path, "e", _subject("ok", "file1", "block1", "contract1", "step2"))
+    assert read_vouches(tmp_path)["e"].verdict == "ok"
+
+
+def test_legacy_rejection_without_step_sha_still_binds(tmp_path: Path) -> None:
+    """The both-present rule: a project that gained a pipeline after the
+    rejection has nothing to compare, so the rejection stands."""
+    record_vouch(tmp_path, "e", _subject("rejected", "file1", "block1", "contract1", ""))
+    with pytest.raises(LedgerError, match="standing rejection"):
+        record_vouch(tmp_path, "e", _subject("ok", "file1", "block1", "contract1", "step1"))
 
 
 def test_vouch_requires_attester_and_valid_verdict(tmp_path: Path) -> None:

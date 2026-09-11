@@ -1038,8 +1038,10 @@ def vouch_cmd(
         attester=attester,
         vouched=_now(),
         note=note,
-        # Decomposed digests: when this vouch later expires, check/status
-        # can say WHAT moved instead of only that something did.
+        # Decomposed digests: the contract tier decides expiry and
+        # rejection identity; the block tier lets check/status say WHAT
+        # moved instead of only that something did.
+        spec_contract_sha=e.contract_sha,
         spec_block_sha=e.block_sha,
         # The wiring is part of what was judged: realizing a spec means
         # writing code *and* feeding it the right inputs (spec §1).

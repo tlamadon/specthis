@@ -63,6 +63,14 @@ _BACKTICKED = re.compile(r"`([^`]+)`")
 #: expiring every vouch on a file that still carries one. A stale line
 #: is inert; it must also stay invisible.
 _DISPLAY_LINE = re.compile(r"^(?:group|priority|title):[^\n]*(?:\n|$)", re.MULTILINE)
+#: Frontmatter lines carved out of ``contract_sha``'s shared text: the
+#: display keys above, plus the dormancy flags — ``skip``/``draft`` say
+#: *when* the contract is worked, not *what* it promises, so toggling
+#: them must never expire judgment. Everything else in the frontmatter
+#: (props, consumes, references, kind, tier) is semantic and signed.
+_NONCONTRACT_LINE = re.compile(
+    r"^(?:group|priority|title|skip|draft):[^\n]*(?:\n|$)", re.MULTILINE
+)
 
 
 class SpecError(Exception):
@@ -121,10 +129,17 @@ class Entry:
     spec: SpecFile
     outputs: list[str]
     binding: Binding
-    #: sha256 of this entry's ``###`` block text — **what a vouch pins**
-    #: (``check.spec_moved``). The claim unit is the entry, not the
-    #: file: editing a sibling entry is somebody else's business.
+    #: sha256 of this entry's ``###`` block text. The claim unit is the
+    #: entry, not the file: editing a sibling entry is somebody else's
+    #: business. Legacy expiry tier — ``contract_sha`` decides first.
     block_sha: str = ""
+    #: sha256 of the block **plus the file's shared text** (prose outside
+    #: every entry block, and the semantic frontmatter) — what a vouch
+    #: pins first (``check.spec_moved``, ``ledger.same_subject``). The
+    #: ``## Script`` section is part of every entry's contract, so a
+    #: shared-prose edit moves every entry in the file; a sibling block
+    #: edit still moves nobody else.
+    contract_sha: str = ""
     #: Per-entry edges and props, from the target format's field list
     #: (§3). ``None`` means this entry uses the legacy file-level
     #: frontmatter, and the properties below fall back to it.
@@ -407,9 +422,11 @@ def parse_spec(path: Path) -> SpecFile:
 
     if kind in ENTRY_KINDS or draft:
         label = "Output" if kind in ("compute", "source") else "Export outputs"
+        spans: list[tuple[int, int]] = []
         for block_match in re.finditer(
             r"^### +(.+?)\s*$\n(.*?)(?=^### |^## |\Z)", body, re.MULTILINE | re.DOTALL
         ):
+            spans.append(block_match.span())
             entry_name = block_match.group(1).strip()
             if spec.draft:
                 # Unchecked prose: keep the heading names (for views and
@@ -473,6 +490,25 @@ def parse_spec(path: Path) -> SpecFile:
                     own_kind=own_kind,
                 )
             )
+        if spec.entries:
+            # The shared text is the exact complement of the block spans
+            # (same matches, so the boundary quirks — trailing prose
+            # absorbed by \Z, an h1 not closing a block — can never
+            # double-count or drop a byte), plus the semantic
+            # frontmatter. Identical for every entry in the file.
+            pos, gaps = 0, []
+            for a, b in spans:
+                gaps.append(body[pos:a])
+                pos = b
+            gaps.append(body[pos:])
+            # `+ "\n"` before the sub: the frontmatter group has no
+            # trailing newline, so a carved-out line in last position
+            # would otherwise leave a different remainder than one in
+            # the middle — and adding `title:` at the end would move
+            # every contract in the file.
+            shared = _NONCONTRACT_LINE.sub("", m.group(1) + "\n") + "\0" + "".join(gaps)
+            for entry, (a, b) in zip(spec.entries, spans):
+                entry.contract_sha = sha256_text(body[a:b] + "\0" + shared)
     return spec
 
 

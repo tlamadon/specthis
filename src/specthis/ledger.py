@@ -43,11 +43,15 @@ class Vouch:
     attester: str
     vouched: str  # ISO8601 UTC
     note: str = ""
-    #: Decomposable forms of the two digests, recorded so an expired
-    #: vouch can be attributed (which script, the package blob, or
-    #: where in the spec file the movement happened). Diagnostic only:
-    #: expiry itself is still judged on the composed pair above.
-    #: Empty on rows written before these fields existed.
+    #: Decomposed forms of the spec digest, finest first. These are not
+    #: diagnostic: since Phase 1.1 the finest recorded tier *decides*
+    #: expiry and rejection identity (``check.spec_moved``,
+    #: ``same_subject``), with ``spec_sha`` as the last-resort fallback
+    #: for rows written before the finer fields existed.
+    #: ``spec_contract_sha`` = the entry's block plus the file's shared
+    #: prose and semantic frontmatter; ``spec_block_sha`` = the block
+    #: alone (legacy tier). ``code_manifest`` attributes code movement.
+    spec_contract_sha: str = ""
     spec_block_sha: str = ""
     code_manifest: dict[str, str] = field(default_factory=dict)
     #: The pipeline step's semantic digest at judgment time (spec §5.6):
@@ -156,13 +160,22 @@ def read_runs(specs_dir: Path, _shared_lock: bool = True) -> dict[str, Run]:
 def same_subject(a: Vouch, b: Vouch) -> bool:
     """Do two vouches pin the same judged subject?
 
-    The subject is the entry's own block plus its code — never the whole
-    spec file, so a sibling entry's edit neither expires a vouch
-    (``check.spec_moved``) nor lifts a standing rejection. Rows written
-    before ``spec_block_sha`` existed fall back to the file digest.
+    The subject is the entry's contract (its block plus the file's
+    shared prose — a ``## Script`` repair moves it), its code, and its
+    step wiring — never the whole spec file, so a sibling entry's edit
+    neither expires a vouch (``check.spec_moved``) nor lifts a standing
+    rejection. The spec side compares on the finest tier both rows
+    carry: contract, then block, then the file digest for rows written
+    before the finer fields existed. The step tier mirrors
+    ``check.step_moved``'s both-present rule — a project that gained a
+    pipeline after the vouch has nothing to compare.
     """
     if a.code_sha != b.code_sha:
         return False
+    if a.step_sha and b.step_sha and a.step_sha != b.step_sha:
+        return False
+    if a.spec_contract_sha and b.spec_contract_sha:
+        return a.spec_contract_sha == b.spec_contract_sha
     if a.spec_block_sha and b.spec_block_sha:
         return a.spec_block_sha == b.spec_block_sha
     return a.spec_sha == b.spec_sha
@@ -196,8 +209,8 @@ def record_vouch(specs_dir: Path, entry: str, vouch: Vouch) -> None:
                 "(spec, code) pair — change the spec or the code before vouching ok"
             )
         vouches[entry] = vouch
-        # TOML has no null: optional fields (note, spec_block_sha,
-        # code_manifest) are omitted when empty.
+        # TOML has no null: optional fields (note, spec_contract_sha,
+        # spec_block_sha, code_manifest) are omitted when empty.
         rows = {
             n: {k: val for k, val in asdict(v).items() if val not in (None, "", {})}
             for n, v in sorted(vouches.items())

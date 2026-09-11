@@ -51,6 +51,21 @@ while expiring anyway).
 as identity, so a sibling edit would have *lifted* a standing rejection.
 `ledger.same_subject` now mirrors the predicate.
 
+### 1.1b `contract_sha` widens the subject — **done** (2026-09-11)
+
+Block-only deciding created 1.1's dual: a `## Script` edit or a
+semantic-frontmatter change moved no subject, so a vouch survived a
+contract change and a standing rejection over shared-prose text could
+not be lifted by repairing that text (the deadlock that burned critic
+rounds in the field). New tier: `Entry.contract_sha` /
+`Vouch.spec_contract_sha` = the block plus the file's shared prose and
+semantic frontmatter (spec §5.2b). Both predicates decide on the
+finest recorded tier — contract → block → file — so legacy rows keep
+standing until their next re-vouch (quiet migration, no wholesale
+expiry). `same_subject` also gained the `step_sha` tier it was missing:
+a step rewire now lifts a standing rejection, mirroring
+`check.step_moved`'s both-present rule.
+
 ### 1.2 Tables authoritative — **done** (`d98d989`)
 
 `_certify` and `_realize` decide on composed digests with the tables

@@ -162,8 +162,11 @@ def test_check_attributes_a_file_removed_from_the_binding(root: Path) -> None:
     assert "-scripts/fit_beta.py" in result.output or "unimplemented" in result.output
 
 
-def test_spec_prose_outside_the_block_does_not_expire_the_vouch(root: Path) -> None:
-    """A vouch's subject is the entry's own block, never the whole file."""
+def test_shared_prose_edit_expires_the_vouch(root: Path) -> None:
+    """The ## Script prose is part of every entry's contract: repairing
+    it must expire the vouch and re-queue judgment — otherwise a
+    contradiction fixed in shared prose leaves a stale certification
+    (and, worse, a standing rejection nothing can lift)."""
     run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
     outside = COMPUTE_ALPHA.replace(
         "Fit the alpha model per models.md.",
@@ -171,8 +174,56 @@ def test_spec_prose_outside_the_block_does_not_expire_the_vouch(root: Path) -> N
     )
     write(root, "specs/compute-alpha.md", outside)
     result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "unvouched" in result.output
+    assert "spec: shared prose in compute-alpha.md moved" in result.output
+
+
+def test_semantic_frontmatter_edit_expires_the_vouch(root: Path) -> None:
+    """`references:` (like props/consumes) is semantic — part of the
+    shared contract text — while `title:` is display-only."""
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA.replace(
+        "references:\n  - models.md", "references:\n  - models.md\n  - report-beta.md"
+    ))
+    result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "spec: shared prose in compute-alpha.md moved" in result.output
+
+
+def test_display_frontmatter_edit_does_not_expire_the_vouch(root: Path) -> None:
+    run_cli("vouch", "fit-alpha", "--as", "reviewer", "--path", str(root))
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA.replace(
+        "kind: compute", "title: The alpha fit\nkind: compute"
+    ))
+    result = run_cli("status", "fit-alpha", "--path", str(root))
     assert "certified" in result.output
     assert "moved since last vouch:" not in result.output
+
+
+def test_legacy_block_vouch_ignores_shared_prose(root: Path) -> None:
+    """Quiet migration: a row carrying spec_block_sha but no
+    spec_contract_sha keeps standing across a shared-prose edit until
+    its next re-vouch — the upgrade expires nobody wholesale."""
+    from specthis.check import code_manifest, code_sha
+    from specthis.ledger import Vouch, record_vouch
+    from specthis.parse import load_project
+
+    project = load_project(root)
+    e = project.entries["fit-alpha"]
+    record_vouch(project.specs_dir, "fit-alpha", Vouch(
+        spec_sha=e.spec.spec_sha,
+        code_sha=code_sha(project, e) or "",
+        verdict="ok",
+        attester="reviewer",
+        vouched="2026-01-01T00:00:00+00:00",
+        spec_block_sha=e.block_sha,
+        code_manifest=code_manifest(project, e),
+    ))
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA.replace(
+        "Fit the alpha model per models.md.",
+        "Fit the alpha model per models.md. Now with more prose.",
+    ))
+    result = run_cli("status", "fit-alpha", "--path", str(root))
+    assert "certified" in result.output
 
 
 def test_status_attributes_spec_movement_inside_the_block(root: Path) -> None:
@@ -185,6 +236,7 @@ def test_status_attributes_spec_movement_inside_the_block(root: Path) -> None:
     result = run_cli("status", "fit-alpha", "--path", str(root))
     assert "moved since last vouch:" in result.output
     assert "this entry's block in compute-alpha.md moved" in result.output
+    assert "shared prose" not in result.output  # the shared text is innocent
 
 
 def test_sibling_entry_edit_does_not_expire_this_entrys_vouch(root: Path) -> None:

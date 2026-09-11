@@ -353,6 +353,17 @@ at claim time is gone, and recovering it costs a re-attestation — a
 mind or a GPU. Recording is bytes; re-attesting is the expensive thing
 in this system. Record generously.
 
+**Axis 1 cuts both ways.** Phase 1.1 fixed the *over*-expiry (file-level
+`spec_sha` deciding, so a sibling's edit expired everyone), but deciding
+on the block alone created the dual *under*-expiry: a spec's `## Script`
+prose and semantic frontmatter are part of every entry's contract, yet
+editing them moved no subject — a vouch survived a contract change, and
+a standing rejection over a shared-prose contradiction could not be
+lifted by repairing that prose. `contract_sha` (spec §5.2b) closes it:
+the subject is the entry's block plus the file's shared text, so a
+shared edit expires every entry in the file (correct — it is their
+shared contract) while a sibling block edit still expires nobody else.
+
 ---
 
 ## 12. Findings against the current code
@@ -369,6 +380,8 @@ Ordered by value, highest first.
    removes the whole class, and matches
    `design-notes-from-cakm.md` §4 rule 3. The field is already in the
    ledger; this is the smallest correctness win available.
+   *(Done — and its residual dual, block-only deciding under-expiring
+   on shared prose, is closed by `contract_sha`; see §11.)*
 2. **Outputs never got the table treatment.** `Run.output` is a
    comma-joined path string and `output_sha` a single composed digest
    (`ledger.py:56`), so a multi-output entry cannot say which output
