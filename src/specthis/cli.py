@@ -35,6 +35,7 @@ from .check import (
     instance_inputs,
     is_library,
     is_source,
+    judging,
     keys_for,
     locality_of,
     machine_repairable,
@@ -530,6 +531,24 @@ def _machines_line(project: Project, reports: dict[str, Report]) -> str:
     return f"{'machines':<12}{_paint(head, bold=True)}{' ' * max(3, 22 - len(head))}{split}{tail}"
 
 
+def _minds_line(reports: dict[str, Report]) -> str:
+    """What the standing judgments cost — the machines line's dual.
+
+    Printed only when at least one vouch carries a `--took` duration:
+    a project whose critics never timed themselves is told nothing
+    rather than shown a nought. Same one-row-per-claim honesty as the
+    machines line: re-vouching replaces the row, so this is the cost
+    behind the vouches that stand today, not every judgment ever spent
+    — a doubt loop's earlier rounds are not in this number.
+    """
+    j = judging(reports)
+    if not round(j.wall):
+        return ""
+    head = f"{_fmt_duration(j.wall)} over {j.runs} vouches"
+    tail = _paint(f"   ({j.untimed} untimed)", dim=True) if j.untimed else ""
+    return f"{'minds':<12}{_paint(head, bold=True)}{tail}"
+
+
 def _summary(project: Project, reports: dict[str, Report]) -> None:
     """The two queues at a glance — one line per tree, and that is all.
 
@@ -547,6 +566,8 @@ def _summary(project: Project, reports: dict[str, Report]) -> None:
     click.echo(_tree_line("run tree", run, Realization.CURRENT))
     if machines := _machines_line(project, reports):
         click.echo(machines)
+    if minds := _minds_line(reports):
+        click.echo(minds)
 
 
 def _status_rows(project: Project, reports: dict[str, Report]) -> None:

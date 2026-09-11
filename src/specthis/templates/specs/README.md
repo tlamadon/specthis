@@ -389,7 +389,8 @@ specthis status [entry]        # both trees in two lines; -a adds every entry, w
                                #   including WHICH input moved. A slow derivation
                                #   spins on stderr; --timing says where it went.
                                #   A third line reports machine cost, split
-                               #   local/remote, when there is any to report
+                               #   local/remote, and a fourth reports mind cost
+                               #   (vouch --took totals), when there is any to report
 specthis build [entries…]      # hand the pipeline to a compute manager and adopt
                                #   what comes back; --force rebuilds an artefact
                                #   edited on disk

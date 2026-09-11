@@ -696,6 +696,34 @@ def spending(project: Project, reports: dict[str, Report]) -> dict[str, Spend]:
     return out
 
 
+def judging(reports: dict[str, Report]) -> Spend:
+    """Mind cost over every standing vouch — the dual of :func:`spending`.
+
+    ``Spend.runs`` counts vouch rows here, and ``cpu`` stays ``None``
+    (a mind's time is wall time; nothing else is measured). One vouch
+    may certify many instances — a template's row is shared — so rows
+    are counted once per attested vouch, not once per report. Same
+    one-row-per-entry honesty as the machines side: re-vouching
+    replaces the row, so this is the cost behind the judgments that
+    stand today, not every judgment ever spent.
+    """
+    seen: set[str] = set()
+    out = Spend()
+    for key, r in reports.items():
+        if r.vouch is None:
+            continue
+        name = r.instance_of or key
+        if name in seen:
+            continue
+        seen.add(name)
+        out.runs += 1
+        if r.vouch.duration_seconds is None:
+            out.untimed += 1
+        else:
+            out.wall += r.vouch.duration_seconds
+    return out
+
+
 def tally(reports: dict[str, Report]) -> tuple[dict[Certification, int], dict[Realization, int]]:
     """Both trees' state counts, worst state first — the whole project in
     two numbers-per-line.

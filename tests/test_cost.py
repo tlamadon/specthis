@@ -1,4 +1,4 @@
-"""Machine cost: CPU seconds and where the work happened.
+"""Machine and mind cost: seconds spent, and where the work happened.
 
 Both are **claim metadata** — they enter no signature and move no
 digest — and both are *declared*, never inferred. These tests pin that
@@ -11,12 +11,13 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from specthis.check import check_project, locality_of, spending
+from specthis.check import check_project, judging, locality_of, spending
 from specthis.cli import main
 from specthis.ledger import Run, read_runs, record_run
 from specthis.parse import load_project
 
 from .conftest import make_ready, write
+from .test_templates import templated
 
 
 def run_cli(*args: str):
@@ -133,6 +134,29 @@ def test_cpu_stays_none_rather_than_falling_back_to_wall(root: Path) -> None:
     assert spending(project, check_project(project))["local"].cpu is None
 
 
+def test_judging_sums_vouch_time_and_counts_the_untimed(root: Path) -> None:
+    make_ready(root)  # three vouches, none timed
+    run_cli("vouch", "fit-alpha", "--as", "critic", "--took", "300", "--path", str(root))
+    run_cli("vouch", "fit-beta", "--as", "critic", "--took", "120", "--path", str(root))
+    j = judging(check_project(load_project(root)))
+    assert j.runs == 3
+    assert j.wall == 420.0
+    assert j.untimed == 1, "a total must never be quietly short"
+    assert j.cpu is None  # a mind's time is wall time; nothing else is measured
+
+
+def test_a_template_vouch_is_one_act_however_many_instances(root: Path) -> None:
+    """The vouch row is the template's, shared by every instance —
+    summing it once per instance would inflate the minds total."""
+    templated(root)
+    run_cli("vouch", "clean-wages", "--as", "critic", "--took", "240", "--path", str(root))
+    reports = check_project(load_project(root))
+    instances = [k for k, r in reports.items() if r.instance_of == "clean-wages"]
+    assert len(instances) > 1, "the fixture must actually fan out"
+    j = judging(reports)
+    assert j.wall == 240.0, "one judgment, counted once"
+
+
 # ------------------------------------------------------------------- cli
 
 
@@ -147,8 +171,19 @@ def test_status_reports_machine_cost_split_by_place(root: Path) -> None:
 
 
 def test_a_project_with_no_recorded_cost_stays_two_lines(root: Path) -> None:
+    # make_ready vouches without --took, so the minds line stays hidden too
     make_ready(root)
     assert len(run_cli("status", "--path", str(root)).output.splitlines()) == 2
+
+
+def test_status_reports_mind_cost(root: Path) -> None:
+    make_ready(root)
+    run_cli("vouch", "fit-alpha", "--as", "critic", "--took", "300", "--path", str(root))
+    run_cli("vouch", "fit-beta", "--as", "critic", "--took", "312", "--path", str(root))
+    out = run_cli("status", "--path", str(root)).output
+    minds = next(line for line in out.splitlines() if line.startswith("minds"))
+    assert "10m 12s over 3 vouches" in minds
+    assert "(1 untimed)" in minds  # fig-beta's vouch carries no duration
 
 
 def test_status_detail_names_the_cost_and_the_place(root: Path) -> None:
