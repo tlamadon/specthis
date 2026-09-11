@@ -344,9 +344,9 @@ def test_progress_resets_the_stall_counter(root: Path, specthis_bin: str) -> Non
 def test_a_set_aside_entry_stops_counting_as_work(root: Path, specthis_bin: str) -> None:
     """Otherwise a doubt the loop cannot answer holds the session open.
 
-    The contract moves, not the code: a spec edit expires the vouch
-    without entering the run signature, so this is a mind-only break —
-    which is the only axis a critic's doubt can leave behind.
+    The mind-axis case: the contract moves, not the code — a spec edit
+    expires the vouch without entering the run signature, which is the
+    break a critic's doubt leaves behind.
     """
     converge(root)
     write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + "\nA contract the critic doubts.\n")
@@ -355,6 +355,39 @@ def test_a_set_aside_entry_stops_counting_as_work(root: Path, specthis_bin: str)
     out = run_hook(root, specthis_bin)
     assert decision(out) is None
     assert "set aside" in out["systemMessage"]
+
+
+def test_a_set_aside_machine_entry_stops_counting_as_work(
+    root: Path, specthis_bin: str
+) -> None:
+    """The machine-axis case the manual mandates (a step that failed
+    twice, a source with no bytes): set-aside must silence it, or the
+    hook grinds the loop against a repair it already gave up on.
+    """
+    converge(root)
+    # an artefact edited on disk: STALE while still CERTIFIED — machine-only
+    write(root, "results/alpha/fit.json", '{"loss": 999.0}')
+    state = check_json(root)
+    assert [m["entry"] for m in state["machine"]] == ["fit-alpha"]
+    assert all(m["entry"] != "fit-alpha" for m in state["mind"])
+    arm(root, set_aside=[{"entry": "fit-alpha", "why": "no verb helps"}])
+    out = run_hook(root, specthis_bin)
+    assert decision(out) is None
+    assert "set aside" in out["systemMessage"]
+    assert sentinel_of(root)["active"] is False
+
+
+def test_a_set_aside_entry_is_ignored_on_both_axes(root: Path, specthis_bin: str) -> None:
+    converge(root)
+    # a code edit hits both queues at once
+    write(root, "scripts/fit_alpha.py", FIT_ALPHA_PY.replace('"loss": 1.0', '"loss": 3.0'))
+    state = check_json(root)
+    assert any(m["entry"] == "fit-alpha" for m in state["mind"])
+    assert any(m["entry"] == "fit-alpha" for m in state["machine"])
+    arm(root, set_aside=[{"entry": "fit-alpha", "why": "gave up"}])
+    out = run_hook(root, specthis_bin)
+    assert decision(out) is None
+    assert sentinel_of(root)["active"] is False
 
 
 def test_the_loop_converges(root: Path, specthis_bin: str) -> None:

@@ -48,7 +48,8 @@ vouch under the human's name.
 
    ```json
    { "active": true, "deadline": "<the above, or the argument>",
-     "iterations_left": 40, "watching": [], "set_aside": [] }
+     "iterations_left": 40, "watching": [], "set_aside": [],
+     "critic_rounds": {} }
    ```
 
    The Stop hook reads this file after every turn and refuses to let the
@@ -57,6 +58,9 @@ vouch under the human's name.
    rounds go by with nothing moving, it disarms itself. You do not need
    to decide when to stop — but if the user interrupts, or you must
    abandon the run, set `"active": false` so the next session starts clean.
+   One sizing note: a run stuck in `watching` consumes no iterations and
+   trips no stall counter — it is bounded by the deadline alone, so size
+   the deadline for the cluster, not the chat.
 
 4. Tell the user, in two lines, what you are about to drive: the two
    queue depths and the budget. Then go quiet until it is over.
@@ -70,11 +74,26 @@ own vouch. A single pass is never enough; that is the entire reason this
 command exists.
 
 1. **Specs must parse first.** If `lint.problems` is non-zero, run
-   `specthis lint` and fix them. Your pen covers `specs/*.md` and
-   `specs/bindings.toml` and nothing else. Nothing below is trustworthy
-   until this is clean.
+   `specthis lint` and fix them. Act on the warnings too — an
+   unmentioned reference or a dangling link is the cheap, mechanical
+   form of exactly what burns critic budgets when it survives. Your
+   pen covers `specs/*.md` and `specs/bindings.toml` and nothing else.
+   Nothing below is trustworthy until this is clean.
 
-2. **Machine queue** — `specthis build`, or `specthis build <entry>
+2. **Read the specs before judging them.** Commission a `spec-reader`
+   subagent over `specs/` (one agent for the whole directory; one per
+   folder on a large project). It reads the text and nothing else and
+   returns a fix list of internal contradictions — claims that
+   disagree within or across files, counts that do not match their
+   lists, notation against a fixed convention. Fix everything it
+   names; spec edits are mind-only and always safe, even while builds
+   are in flight. Re-commission only over files that changed since its
+   last pass, not every round. **Do not send an entry to a critic
+   while the reader has an open finding against its file** — a critic
+   judging a self-contradictory contract can only return doubt, at
+   many times the price.
+
+3. **Machine queue** — `specthis build`, or `specthis build <entry>
    --force` for the one repair case (an artefact edited on disk). Hand
    over the whole pipeline; specthis never selects steps, because only
    the manager knows what its cache already holds.
@@ -110,10 +129,24 @@ command exists.
    you are told, instead of having to remember to look. Never poll in a
    loop, and never sit in the foreground waiting.
 
-   While it runs, **keep working the mind queue.** The two trees are
-   independent; certification does not gate compute and compute does not
-   gate judgment. Only when nothing else is actionable does the hook let
-   the turn end, and the backgrounded watch then wakes you.
+   While it runs, **keep working the mind queue — knowing where the
+   axes actually couple.** They are not independent, and pretending
+   they are is how a loop loses builds:
+   - Certification does not gate compute **except rejection** — a
+     machine must never realize a definition a mind refused.
+   - A **spec edit is mind-only**: it expires the vouch and enters no
+     run signature. Safe at any time, including mid-build.
+   - A **code edit hits both queues and kills in-flight adoptions**:
+     adoption re-verifies every path the returning manifest names
+     against the bytes on disk, so a script edited after submission no
+     longer hashes to its manifest and the adopt correctly refuses.
+     While an entry is in `watching`, defer its code repairs until the
+     run lands — or make the edit knowing you have chosen a resubmit.
+     Never treat the resulting refusal as a ledger problem to route
+     around.
+
+   Only when nothing else is actionable does the hook let the turn
+   end, and the backgrounded watch then wakes you.
 
    On completion: `scripthut run manifest $RUN_ID <task_id>` → save it →
    `specthis adopt <entry> <file>` → remove the entry from `watching`.
@@ -125,21 +158,26 @@ command exists.
    failed one. If the same step fails twice for the same reason, stop
    retrying it, move it to `set_aside`, and carry on elsewhere.
 
-3. **Mind queue** — spawn a fresh `spec-critic` subagent **per entry, in
+4. **Mind queue** — spawn a fresh `spec-critic` subagent **per entry, in
    parallel** (batch them in one message, ~4 in flight), each given the
    commissioning human's name, its single entry, and the project root.
    Do not summarize the code for them; they re-read from disk. Do not
    judge anything yourself.
 
-4. **A doubt is not a stopping point.** When a critic reports a doubt,
+5. **A doubt is not a stopping point.** When a critic reports a doubt,
    or an entry carries a standing rejection, read the reason and fix
    what it names — edit the spec if the contract is wrong, the code if
-   the code is. Then hand it to a **new** critic. Do this at most twice
-   per entry; if it still doubts, append it to `set_aside` with the
-   reason and move on. The hook stops counting set-aside entries as
-   work, so the loop converges instead of grinding.
+   the code is (checking `watching` first: a code edit kills that
+   entry's in-flight run, see step 3). Then hand it to a **new**
+   critic. Record the attempt in `.specthis/auto.json` first:
+   `critic_rounds["<entry>"] = {"doubts": N, "last_reason": "..."}` —
+   the count lives in the file, not in your head, so it survives a
+   context compaction. At two doubts, append the entry to `set_aside`
+   with the reason and move on. The hook stops counting set-aside
+   entries as work on either axis, so the loop converges instead of
+   grinding.
 
-5. **Two things that look like breaks and are not.** Entries listed in
+6. **Two things that look like breaks and are not.** Entries listed in
    `bytes_not_local` are `current` — the claim stands and the bytes live
    in the manager's store. Never rebuild one to fetch them. Entries under
    `waiting_on_upstream` need nothing: they heal when their upstream

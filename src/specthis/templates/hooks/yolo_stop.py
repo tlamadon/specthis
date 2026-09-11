@@ -180,6 +180,10 @@ def main() -> None:
     # What the loop is already waiting on, and what it has given up on.
     # Both are the loop's own bookkeeping, which is why the intersection
     # with the project's queues is computed here and not by `check`.
+    # `set_aside` applies to BOTH axes: the manual tells the loop to set
+    # aside mind entries (a critic doubted twice) and machine entries (a
+    # step failed twice, a source with no bytes) alike, and an entry set
+    # aside must stop counting as work on whichever axis it sits.
     watching = sentinel.get("watching") or []
     watched = {e for w in watching if isinstance(w, dict) for e in (w.get("entries") or [])}
     set_aside = {
@@ -195,7 +199,11 @@ def main() -> None:
         for m in state.get("mind", [])
         if m.get("certification") != "rejected" and m.get("entry") not in set_aside
     ]
-    machine = [m for m in state.get("machine", []) if m.get("entry") not in watched]
+    machine = [
+        m
+        for m in state.get("machine", [])
+        if m.get("entry") not in watched and m.get("entry") not in set_aside
+    ]
 
     if not (problems or mind or machine):
         if watching:
@@ -203,6 +211,10 @@ def main() -> None:
             # the backgrounded `scripthut run watch` re-invokes the session
             # when the run goes terminal, and the loop picks up from there.
             # Blocking here would spin the model against a cluster.
+            # Deliberately BEFORE the sentinel write below: an in-flight
+            # wait consumes no iteration and moves no stall fingerprint —
+            # an allow ends the turn, so there is nothing to charge for.
+            # A watch that never returns is bounded by the deadline alone.
             allow(f"specthis-yolo: waiting on {len(watching)} run(s) in flight")
         parts = [f"ready {state.get('ready', '?')}"]
         if state.get("blocked"):
@@ -249,7 +261,10 @@ def main() -> None:
         steps.append(
             f"mind queue ({len(mind)}): {summarize(mind)} — spawn a fresh spec-critic "
             "subagent per entry, batched, ~4 in flight. You must not run "
-            "`specthis vouch` yourself, even for entries you did not write."
+            "`specthis vouch` yourself, even for entries you did not write. "
+            "If spec text changed since the last spec-reader pass, commission "
+            "spec-reader over specs/ BEFORE the critics — a text contradiction "
+            "is cheaper to fix than for critics to rediscover per entry."
         )
     if watching:
         steps.append(f"{len(watching)} run(s) already in flight — do not resubmit them.")
