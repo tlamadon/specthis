@@ -167,7 +167,10 @@ class SpecFile:
     spec_sha: str  # sha256 of the FULL file text, frontmatter included
     body: str  # markdown after the frontmatter (the contract prose)
     title: str = ""  # frontmatter `title:` (display-only, outside spec_sha), else first heading, else name
-    skip: bool = False  # commented out: entries dormant, body not grammar-checked
+    skip: bool = False  # dormant: entries out of both queues, body still checked
+    #: unchecked prose: body not grammar-checked, edges not validated.
+    #: Implies ``skip`` — a draft is necessarily dormant.
+    draft: bool = False
     #: `props:` — free variables making this file's entries templates
     #: (spec §15). Semantic, so inside spec_sha: adding a prop changes
     #: what the contract promises.
@@ -186,7 +189,11 @@ class Project:
     #: so a module edit flags only its own entry and its consumers.
     library_scripts: frozenset[str] = frozenset()
     #: entry name -> spec filename, for entries dormant under `skip: true`.
+    #: Includes draft entries — a draft is necessarily dormant.
     skipped_entries: dict[str, str] = field(default_factory=dict)
+    #: entry name -> spec filename, for entries under `draft: true` —
+    #: unchecked prose. Always a subset of ``skipped_entries``.
+    draft_entries: dict[str, str] = field(default_factory=dict)
     #: output suffix (".tex") -> preview recipe, from [preview] in bindings.
     previews: dict[str, PreviewRecipe] = field(default_factory=dict)
     #: ``[backend] class`` — a dotted path to the project's own adapter
@@ -343,12 +350,27 @@ def parse_spec(path: Path) -> SpecFile:
             f"{path.name}: `depends_on:` is retired — split it into "
             "`consumes:` (upstream entry names) and `references:` (vocabulary specs)"
         )
+    skip = meta.get("skip", False)
+    if not isinstance(skip, bool):
+        raise SpecError(f"{path.name}: `skip: {skip}` must be true or false")
+    draft = meta.get("draft", False)
+    if not isinstance(draft, bool):
+        raise SpecError(f"{path.name}: `draft: {draft}` must be true or false")
+    skip = skip or draft  # a draft is necessarily dormant
+
     kind = meta.get("kind")
     if kind is None:
         # Target format (§2): type is inferred from the fields entries
         # declare, so `kind:` is optional. Files whose entries carry no
-        # field list default to prose-only.
-        kind = _infer_file_kind(text[m.end() :])
+        # field list default to prose-only. A draft's half-written field
+        # lists must not decide anything, least of all fatally.
+        if draft:
+            try:
+                kind = _infer_file_kind(text[m.end() :])
+            except SpecError:
+                kind = "definitions"
+        else:
+            kind = _infer_file_kind(text[m.end() :])
     if kind not in KINDS:
         raise SpecError(f"{path.name}: `kind: {kind}` is not one of {sorted(KINDS)}")
     name = meta.get("name")
@@ -366,10 +388,6 @@ def parse_spec(path: Path) -> SpecFile:
     if tier not in TIERS:
         raise SpecError(f"{path.name}: `tier: {tier}` is not one of {sorted(TIERS)}")
 
-    skip = meta.get("skip", False)
-    if not isinstance(skip, bool):
-        raise SpecError(f"{path.name}: `skip: {skip}` must be true or false")
-
     body = text[m.end() :]
     heading = re.search(r"^# +(.+?)\s*$", body, re.MULTILINE)
     spec = SpecFile(
@@ -384,24 +402,39 @@ def parse_spec(path: Path) -> SpecFile:
         body=body,
         title=str(meta.get("title") or (heading.group(1) if heading else name)),
         skip=skip,
+        draft=draft,
     )
 
-    if kind in ENTRY_KINDS:
+    if kind in ENTRY_KINDS or draft:
         label = "Output" if kind in ("compute", "source") else "Export outputs"
         for block_match in re.finditer(
             r"^### +(.+?)\s*$\n(.*?)(?=^### |^## |\Z)", body, re.MULTILINE | re.DOTALL
         ):
             entry_name = block_match.group(1).strip()
+            if spec.draft:
+                # Unchecked prose: keep the heading names (for views and
+                # for "consumes draft entry" diagnostics) but validate
+                # nothing — a half-written body is the point of drafting.
+                # `skip` no longer gets this pass: a dormant contract is
+                # still a contract, and its grammar is checked below.
+                outputs = _field_paths(block_match.group(2), "Output") or _field_paths(
+                    block_match.group(2), "Export outputs"
+                )
+                spec.entries.append(
+                    Entry(
+                        name=entry_name,
+                        spec=spec,
+                        outputs=outputs,
+                        binding=None,  # type: ignore[arg-type]
+                        block_sha=sha256_text(block_match.group(0)),
+                    )
+                )
+                continue
             if not _ENTRY_NAME.match(entry_name):
                 raise SpecError(f"{path.name}: bad entry name `{entry_name}`")
             fields = entry_fields(block_match.group(2), f"{path.name}: `{entry_name}`")
             own_kind = infer_kind(fields, []) if fields else None
-            if spec.skip:
-                # Commented out: keep the entry names (for views and for
-                # "consumes skipped entry" diagnostics) but grammar-check
-                # nothing — a half-written body is the point of skipping.
-                outputs = _field_paths(block_match.group(2), label) if kind != "library" else []
-            elif kind == "library":
+            if kind == "library":
                 # A library entry is judged code with no artifact: the
                 # chain stops at code, so an Output: is a contradiction.
                 if _field_paths(block_match.group(2), "Output") or _field_paths(
@@ -570,12 +603,29 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
 
     entries: dict[str, Entry] = {}
     skipped_entries: dict[str, str] = {}
+    draft_entries: dict[str, str] = {}
+    # One namespace across live and skipped entries: a dormant contract
+    # is still a contract, and two specs must not both claim its name.
+    # Binding VALIDATION stays live-only (grammar + edges are what skip
+    # keeps; the map is checked when the entry wakes).
+    claimed: dict[str, str] = {}
     for spec in specs:
+        if spec.draft:
+            continue  # second pass below: draft headings never claim names
         if spec.skip:
-            # Dormant: entries stay out of the DAG, bindings are
-            # best-effort for the views, and nothing is validated —
-            # skipping is how you silence a spec mid-development.
-            for entry in spec.entries:
+            # Dormant: entries stay out of the DAG and both queues;
+            # bindings are best-effort for the views.
+            for entry in list(spec.entries):
+                if entry.name in claimed:
+                    problems.append(
+                        Problem(
+                            spec.path.name,
+                            f"duplicate entry name `{entry.name}` "
+                            f"({claimed[entry.name]} and {spec.path.name})",
+                        )
+                    )
+                    spec.entries.remove(entry)
+                    continue
                 entry.binding = bindings.get(entry.name) or (
                     # no convention fallback for library modules: an
                     # invented path must not be carved out of the blob
@@ -583,15 +633,16 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                     if spec.kind == "library"
                     else _default_binding(entry.name)
                 )
-                skipped_entries.setdefault(entry.name, spec.path.name)
+                skipped_entries[entry.name] = spec.path.name
+                claimed[entry.name] = spec.path.name
             continue
         for entry in list(spec.entries):
-            if entry.name in entries:
+            if entry.name in claimed:
                 problems.append(
                     Problem(
                         spec.path.name,
                         f"duplicate entry name `{entry.name}` "
-                        f"({entries[entry.name].spec.path.name} and {spec.path.name})",
+                        f"({claimed[entry.name]} and {spec.path.name})",
                     )
                 )
                 spec.entries.remove(entry)
@@ -633,6 +684,23 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                     entry.binding.produces.get(p, p) for p in entry.outputs
                 ]
             entries[entry.name] = entry
+            claimed[entry.name] = spec.path.name
+
+    for spec in specs:
+        if not spec.draft:
+            continue
+        # Unchecked prose: heading names are best-effort for the views.
+        # A draft heading never claims a name — it cannot shadow a live
+        # entry or raise a duplicate, because nothing checked it.
+        for entry in spec.entries:
+            entry.binding = bindings.get(entry.name) or (
+                Binding(scripts=[])
+                if spec.kind == "library"
+                else _default_binding(entry.name)
+            )
+            if entry.name not in claimed:
+                skipped_entries.setdefault(entry.name, spec.path.name)
+                draft_entries.setdefault(entry.name, spec.path.name)
 
     # A `consumes` target may name a logical product rather than the
     # entry producing it (§3): naming the product is more precise when
@@ -650,20 +718,35 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
 
     spec_names = {s.name for s in specs}
     for spec in specs:
-        if spec.skip:
-            continue  # dormant edges are nobody's problem
+        if spec.draft:
+            continue  # unchecked prose: draft edges are nobody's problem
         for up in list(spec.consumes):
             if up in entries:
                 continue
             if up in skipped_entries:
-                problems.append(
-                    Problem(
-                        spec.path.name,
-                        f"{spec.path.name}: consumes skipped entry `{up}` "
-                        f"({skipped_entries[up]} has skip: true) — skip this spec "
-                        "too, or unwire the edge",
+                if spec.skip:
+                    # Dormant -> dormant stays wired; a dormant edge into
+                    # a draft is a lint warning (draft_warnings), never a
+                    # problem — nothing live can break on it.
+                    continue
+                if up in draft_entries:
+                    problems.append(
+                        Problem(
+                            spec.path.name,
+                            f"{spec.path.name}: consumes draft entry `{up}` "
+                            f"({draft_entries[up]} has draft: true) — the contract is "
+                            "unchecked prose; finish it or unwire the edge",
+                        )
                     )
-                )
+                else:
+                    problems.append(
+                        Problem(
+                            spec.path.name,
+                            f"{spec.path.name}: consumes skipped entry `{up}` "
+                            f"({skipped_entries[up]} has skip: true) — skip this spec "
+                            "too, or unwire the edge",
+                        )
+                    )
             else:
                 problems.append(
                     Problem(spec.path.name, f"{spec.path.name}: consumes unknown entry `{up}`")
@@ -678,15 +761,16 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             for up in list(entry.own_consumes):
                 if up in entries:
                     continue
+                if up in skipped_entries and spec.skip:
+                    continue  # dormant -> dormant, as above
                 where = f"{spec.path.name}: `{entry.name}`"
-                problems.append(
-                    Problem(
-                        spec.path.name,
-                        f"{where} consumes skipped entry `{up}`"
-                        if up in skipped_entries
-                        else f"{where} consumes unknown entry `{up}`",
-                    )
-                )
+                if up in draft_entries:
+                    message = f"{where} consumes draft entry `{up}`"
+                elif up in skipped_entries:
+                    message = f"{where} consumes skipped entry `{up}`"
+                else:
+                    message = f"{where} consumes unknown entry `{up}`"
+                problems.append(Problem(spec.path.name, message))
                 entry.own_consumes.remove(up)
         for ref in spec.references:
             if Path(ref).stem not in spec_names:
@@ -711,6 +795,7 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             for s in e.binding.scripts
         ),
         skipped_entries=skipped_entries,
+        draft_entries=draft_entries,
         previews=previews,
         steps=steps,
         backend_class=backend_class,
@@ -731,3 +816,52 @@ def load_project(root: Path) -> Project:
     if problems:
         raise SpecError("\n".join(p.message for p in problems))
     return project
+
+
+def draft_warnings(project: Project) -> list[Problem]:
+    """Advisory findings about ``draft: true`` specs — loud, never fatal.
+
+    A draft is unchecked prose, so every lint run names it, along with
+    every dormant edge and reference that leans on it. Warnings, not
+    problems: a draft gates nothing live, so nothing can break — but
+    the flag must never become invisible, or dormant text rots again.
+    """
+    out: list[Problem] = []
+    draft_specs = {s.name for s in project.specs if s.draft}
+    if not draft_specs:
+        return out
+    for spec in project.specs:
+        if spec.draft:
+            out.append(
+                Problem(
+                    spec.path.name,
+                    f"{spec.path.name} is draft: unchecked prose — "
+                    "entries out of every queue, body not validated",
+                )
+            )
+    drafts = project.draft_entries
+    for spec in project.specs:
+        if spec.draft:
+            continue
+        if spec.skip:
+            edges = list(spec.consumes) + [
+                up for e in spec.entries for up in (e.own_consumes or ())
+            ]
+            for up in edges:
+                if up in drafts:
+                    out.append(
+                        Problem(
+                            spec.path.name,
+                            f"{spec.path.name}: consumes draft entry `{up}` "
+                            f"({drafts[up]} has draft: true)",
+                        )
+                    )
+        for ref in spec.references:
+            if Path(ref).stem in draft_specs:
+                out.append(
+                    Problem(
+                        spec.path.name,
+                        f"{spec.path.name}: references draft spec `{ref}` — unchecked prose",
+                    )
+                )
+    return out

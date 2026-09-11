@@ -142,6 +142,13 @@ A spec file is ordinary markdown. Five rules:
    Unknown keys are lint **errors**.
 5. **Type is inferred** from the fields present (§2).
 
+> **Divergence note.** The current format carries three frontmatter
+> keys this target format has not absorbed: `skip:` (dormant — entries
+> out of both queues, text still checked), `draft:` (unchecked prose,
+> implies skip), and `references:` (vocabulary edges between files).
+> Whether they survive as frontmatter, become fields, or dissolve is
+> an open §3 question — recorded here so the divergence is deliberate.
+
 ### Fields
 
 | Field | Form | Notes |

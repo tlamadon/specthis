@@ -66,7 +66,14 @@ from .ledger import (
     record_run,
     record_vouch,
 )
-from .parse import Problem, Project, SpecError, load_project, load_project_lenient
+from .parse import (
+    Problem,
+    Project,
+    SpecError,
+    draft_warnings,
+    load_project,
+    load_project_lenient,
+)
 from .pipeline import PipelineError
 from .timefmt import fmt_duration as _fmt_duration
 
@@ -111,6 +118,11 @@ def _require_active(project: Project, entry: str) -> None:
     instance of it inherits the flag.
     """
     template = entry.partition("[")[0] or entry
+    if template in project.draft_entries:
+        raise click.ClickException(
+            f"`{entry}` is draft ({project.draft_entries[template]} has "
+            "draft: true) — the contract is unchecked prose; finish it and drop the flag"
+        )
     if template in project.skipped_entries:
         raise click.ClickException(
             f"`{entry}` is skipped ({project.skipped_entries[template]} has "
@@ -339,7 +351,10 @@ def check_cmd(project_path: Path, as_json: bool) -> None:
             f"{', '.join(remote)}"
         )
     ready = sum(1 for r in reports.values() if r.computable and r.realized)
-    skipped = f" (+{len(project.skipped_entries)} skipped)" if project.skipped_entries else ""
+    skipped = ""
+    if project.skipped_entries:
+        drafts = f", {len(project.draft_entries)} draft" if project.draft_entries else ""
+        skipped = f" (+{len(project.skipped_entries)} skipped{drafts})"
     click.echo(f"ready: {ready}/{len(reports)}{skipped}")
 
     if mind or machine or problems:
@@ -369,7 +384,7 @@ def lint_cmd(project_path: Path) -> None:
         + [Problem('specs', m) for m in template_problems(project)]
         + correspondence_problems(project)
     )
-    warnings = correspondence_warnings(project)
+    warnings = correspondence_warnings(project) + draft_warnings(project)
     for p in problems:
         click.echo(f"  {p.message}")
     for w in warnings:
@@ -436,7 +451,7 @@ def _severity(r: Report) -> int:
     return len(_SEVERITY) if waiting_on(r) else len(_SEVERITY) + 1
 
 
-def _tree_line(label: str, counts: dict, good, skipped: int = 0) -> str:
+def _tree_line(label: str, counts: dict, good, skipped: int = 0, drafts: int = 0) -> str:
     """One tree, one line: how much of it holds, then what is left.
 
     The fraction leads because it is the number you came for; the broken
@@ -452,7 +467,8 @@ def _tree_line(label: str, counts: dict, good, skipped: int = 0) -> str:
         if state is not good and n
     ]
     if skipped:
-        tail.append(_paint(f"+{skipped} skipped", dim=True))
+        note = f" ({drafts} draft)" if drafts else ""
+        tail.append(_paint(f"+{skipped} skipped{note}", dim=True))
     line = f"{label:<12}" + _paint(head, "green" if total and done == total else None, bold=True)
     return (line + " " * max(3, 22 - len(head)) + "   ".join(tail)) if tail else line
 
@@ -518,7 +534,8 @@ def _summary(project: Project, reports: dict[str, Report]) -> None:
         return
     vouch, run = tally(reports)
     skipped = len(project.skipped_entries)
-    click.echo(_tree_line("vouch tree", vouch, Certification.CERTIFIED, skipped))
+    drafts = len(project.draft_entries)
+    click.echo(_tree_line("vouch tree", vouch, Certification.CERTIFIED, skipped, drafts))
     click.echo(_tree_line("run tree", run, Realization.CURRENT))
     if machines := _machines_line(project, reports):
         click.echo(machines)

@@ -632,13 +632,17 @@ vouch-tree landing and a run-tree page plus an activity log, a
 spec-level DAG with status rails, a layered figure and layout JSON via
 `specthis dag`, stdlib only); the journal; and output previews.
 
-Also done: **`skip: true` in frontmatter** — comment a spec out while
-developing. Skipped entries leave every count and every queue; writers
-refuse them; their ledger rows stay dormant; the body is not
-grammar-checked; consuming a skipped entry is a lint problem; the
-dashboard renders the spec greyed. Honesty is content-addressed: a spec
-edited while skipped comes back as unvouched, while a pure skip/un-skip
-round-trip restores the exact vouched bytes and trust returns with them.
+Also done: **`skip: true` and `draft: true` in frontmatter** — two
+flags for two facts. `skip` makes a spec dormant: entries leave every
+count and every queue, writers refuse them, ledger rows stay dormant,
+the dashboard renders the spec greyed — but the text is still checked
+(grammar and edges), because a dormant contract is still a contract.
+`draft` is the rare, loud flag for a half-written body: nothing in it
+is validated, it implies `skip`, lint names it on every run, and a
+live spec consuming a draft entry is a problem. Honesty is
+content-addressed: a spec edited while skipped comes back as unvouched,
+while a pure skip/un-skip round-trip restores the exact vouched bytes
+and trust returns with them.
 
 **Deliberately not built.**
 

@@ -84,6 +84,7 @@ _STANDALONE_STYLE = (
     " .box { fill: #fff; stroke: #d8d4cc; stroke-width: 1.2; }"
     " .skipped { opacity: 0.55; }"
     " .skipped .box { stroke-dasharray: 4 3; }"
+    " .draft .box { stroke-dasharray: 2 3; stroke: #a04100; }"
     " .edge { fill: none; stroke: #b9b3a7; stroke-width: 1.3; }"
     " .rail { fill: none; stroke-width: 2; stroke-linecap: round; opacity: 0.45; }"
     " .hit { fill: none; }"
@@ -527,6 +528,7 @@ def dag_json(
                 "title": p.spec.title,
                 "kind": p.spec.kind,
                 "skip": p.spec.skip,
+                "draft": p.spec.draft,
                 "layer": p.layer,
                 "row": p.row,
                 "x": p.x,
@@ -588,7 +590,7 @@ def _render_layered(
         spec = p.spec
         groups = _dot_groups(spec, reports, axis)
         node = (
-            f'<g class="dag-node{" skipped" if spec.skip else ""}" '
+            f'<g class="dag-node{" skipped" if spec.skip else ""}{" draft" if spec.draft else ""}" '
             f'transform="translate({p.x},{p.y})" data-spec="{escape(spec.name)}">'
             f"<title>{_summary(spec, groups, reports)}</title>"
             f'<rect class="box" width="{p.width}" height="{_NODE_H}" rx="6"/>'
@@ -686,7 +688,7 @@ def _render_rails(
             else ""
         )
         node = (
-            f'<g class="dag-node{" skipped" if spec.skip else ""}" '
+            f'<g class="dag-node{" skipped" if spec.skip else ""}{" draft" if spec.draft else ""}" '
             f'transform="translate(0,{cy(n) - mid})" data-spec="{escape(n)}" '
             f'data-up="{escape(" ".join(sorted(ups[n])))}">'
             f"<title>{_summary(spec, groups[n], reports)}</title>"

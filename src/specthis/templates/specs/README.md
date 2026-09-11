@@ -196,7 +196,8 @@ Every `.md` file in this directory begins with YAML frontmatter:
 name: <spec-name>          # filename stem, no extension
 kind: <kind>               # see below
 tier: intensive | quick    # compute specs; intensive is the default
-skip: true                 # optional: comment this spec out (see below)
+skip: true                 # optional: dormant — out of both queues (see below)
+draft: true                # optional, rare: unchecked prose (see below)
 title: <display title>     # optional: dashboard title, else first heading
 consumes:                  # upstream ENTRY names whose artefacts this
   - <entry-name>           #   spec's code reads — enters signatures
@@ -219,16 +220,28 @@ stripped before `spec_sha` is computed — retitling, retagging or
 reshuffling groups never touches the ledger. They carry no semantics:
 not edges, not status, just navigation.
 
-`skip: true` comments a spec out while developing: its entries leave
-both queues and every count, `run`/`vouch` refuse them, their ledger
-rows stay but go dormant, and the body is not grammar-checked (a
-half-written entry block is fine). The dashboard still renders the
-spec, greyed and marked *skipped*. Anything that `consumes:` a skipped
-entry becomes a lint problem — skip downstream too, or unwire the
-edge. Honesty is content-addressed: a spec edited while skipped comes
-back as *unvouched* (its bytes moved), while a pure skip/un-skip
-round-trip restores the exact vouched bytes and trust returns with
-them.
+`skip: true` makes a spec dormant: its entries leave both queues and
+every count, `run`/`vouch` refuse them, and their ledger rows stay but
+go dormant. The text, however, is **still checked** — the body is
+grammar-checked and every `consumes:`/`references:` edge is validated,
+because a dormant contract is still a contract and unchecked text rots
+at exactly the moment nobody is reading it. The dashboard still
+renders the spec, greyed and marked *skipped*. A **live** spec that
+`consumes:` a skipped entry is a lint problem — skip downstream too,
+or unwire the edge; dormant-to-dormant edges stay wired. Honesty is
+content-addressed: a spec edited while skipped comes back as
+*unvouched* (its bytes moved), while a pure skip/un-skip round-trip
+restores the exact vouched bytes and trust returns with them.
+
+`draft: true` is the rare, loud flag for a genuinely half-written
+file: the body is treated as prose — no grammar checks, no edge
+validation, entry headings claim no names. A draft is necessarily
+dormant (`draft` implies `skip`), but the reverse is deliberate
+policy, not a default: use `skip` for a finished contract you are not
+building yet, and `draft` only while the text itself is unfinished.
+Lint names every draft on every run, a live spec consuming a draft
+entry is a problem, and anything referencing a draft file earns a
+warning — the flag must never become invisible.
 
 Valid `kind:` values:
 

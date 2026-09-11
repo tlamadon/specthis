@@ -80,10 +80,9 @@ def build_index(
         entries = []
         for entry in spec.entries:
             r = reports.get(entry.name)
-            if r is None:  # dormant under skip: true
-                entries.append(
-                    {"name": entry.name, "status": "skipped", "outputs": entry.outputs}
-                )
+            if r is None:  # dormant under skip: true (or unchecked under draft: true)
+                status = "draft" if spec.draft else "skipped"
+                entries.append({"name": entry.name, "status": status, "outputs": entry.outputs})
                 continue
             entries.append(
                 {
@@ -112,6 +111,7 @@ def build_index(
                 "title": spec.title,
                 "kind": spec.kind,
                 "skip": spec.skip,
+                "draft": spec.draft,
                 "tier": spec.tier,
                 "consumes": spec.consumes,
                 "references": spec.references,
@@ -246,6 +246,7 @@ section.spec > h2.spec-title { font-size: 1.45rem; margin: 0.2rem 0 0.3rem; }
 .badge.unimplemented { background: #ebe8e2; color: #5a5a5a; }
 .badge.upstream      { background: #dce9f5; color: #23629c; }
 .badge.skipped       { background: #eeece6; color: #8a857a; }
+.badge.draft         { background: #eeece6; color: #a04100; }
 .badge.remote-bytes  { background: #e8e4f4; color: #4b3d8f; }
 .badge.evt-vouch     { background: #dff0e4; color: #1a5c33; }
 .badge.evt-run       { background: #dce9f5; color: #23629c; }
@@ -318,6 +319,7 @@ tr.detail > td { padding: 2px 0 10px; }
 .dag .dag-node text.meta { font-size: 10px; font-weight: 400; fill: var(--muted); }
 .dag .dag-node.skipped { opacity: 0.55; }
 .dag .dag-node.skipped .box { stroke-dasharray: 4 3; }
+.dag .dag-node.draft .box { stroke-dasharray: 2 3; stroke: #a04100; }
 .dag .edge { fill: none; stroke: #b9b3a7; stroke-width: 1.3; }
 .dag .rail { fill: none; stroke-width: 2; stroke-linecap: round; opacity: 0.45;
   transition: opacity 0.12s; }
@@ -795,10 +797,11 @@ def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) ->
             outputs = "<br>".join(_output_chip(project.root, o) for o in entry.outputs) or (
                 '<span class="empty">—</span>'
             )
+            badge = "draft" if spec.draft else "skipped"
             rows.append(
                 f'<tr id="{_e(_entry_anchor(entry.name))}">'
                 f"<td><b>{_e(entry.name)}</b></td>"
-                f'<td><span class="badge skipped">skipped</span></td>'
+                f'<td><span class="badge {badge}">{badge}</span></td>'
                 f"<td>{outputs}</td>"
                 f'<td><span class="empty">—</span></td>'
                 f'<td><span class="empty">—</span></td></tr>'
@@ -1339,6 +1342,8 @@ def _vouch_section(
     chips = _chip_row(tallies)
     if project.skipped_entries:
         chips += f'<span class="chip"><b>{len(project.skipped_entries)}</b> skipped</span>'
+    if project.draft_entries:
+        chips += f'<span class="chip"><b>{len(project.draft_entries)}</b> draft</span>'
 
     consumed_by = _consumed_by(project)
     rows = []
@@ -1475,9 +1480,12 @@ def _spec_section(
                 f"&#8596; {_e(other)}</a></span>"
             )
     tier = f"&middot; {_e(spec.tier)}" if spec.kind == "compute" else ""
-    skipped_badge = (
-        ' <span class="badge skipped">skipped — entries dormant</span>' if spec.skip else ""
-    )
+    if spec.draft:
+        skipped_badge = ' <span class="badge draft">draft — unchecked prose</span>'
+    elif spec.skip:
+        skipped_badge = ' <span class="badge skipped">skipped — entries dormant</span>'
+    else:
+        skipped_badge = ""
     meta = (
         f'<div class="spec-meta"><span class="kind kind-{_e(spec.kind)}">{_e(spec.kind)}</span> '
         f"{tier} <code>{_e(spec.path.name)}</code> {pair}{skipped_badge}</div>"
