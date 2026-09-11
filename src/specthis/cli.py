@@ -18,6 +18,7 @@ import click
 
 from . import __version__, hashing, progress, seam
 from .adopt import AdoptError, adopt_manifest, publish, step_of
+from .auditlint import spec_text_problems, spec_text_warnings
 from .backends import FAILED, BackendError
 from .backends import resolve as resolve_backend
 from .certificates import write_all as write_certificates
@@ -307,6 +308,10 @@ def check_cmd(project_path: Path, as_json: bool) -> None:
     three situations the single exit code cannot.
     """
     project, problems = _load_lenient(project_path)
+    # Problem-tier text checks hold the verdict exactly like grammar
+    # problems do; the warning tier stays out — the yolo Stop hook
+    # blocks on `lint.problems`, and advice must never trap a session.
+    problems = problems + spec_text_problems(project)
     reports = check_project(project)
     if as_json:
         click.echo(json.dumps(_queue_state(project, reports, problems), indent=2))
@@ -383,8 +388,11 @@ def lint_cmd(project_path: Path) -> None:
         problems
         + [Problem('specs', m) for m in template_problems(project)]
         + correspondence_problems(project)
+        + spec_text_problems(project)
     )
-    warnings = correspondence_warnings(project) + draft_warnings(project)
+    warnings = correspondence_warnings(project) + spec_text_warnings(project) + draft_warnings(
+        project
+    )
     for p in problems:
         click.echo(f"  {p.message}")
     for w in warnings:
@@ -1366,7 +1374,7 @@ def migrate_cmd(
     "selected",
     multiple=True,
     type=click.Choice(
-        ["spec-auditor", "spec-implementer", "experiment-runner", "spec-critic"]
+        ["spec-auditor", "spec-reader", "spec-implementer", "experiment-runner", "spec-critic"]
     ),
     help="Install only the named agent(s), and no slash commands. Repeatable. Default: everything.",
 )

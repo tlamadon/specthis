@@ -68,6 +68,10 @@ consumes:
 
 # beta figures
 
+## Artefact design
+
+One scatter, journal palette, caption states the sample.
+
 ## Entries
 
 ### fig-beta

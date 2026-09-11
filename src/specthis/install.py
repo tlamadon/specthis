@@ -6,7 +6,13 @@ import json
 from importlib import resources
 from pathlib import Path
 
-AGENT_NAMES = ("spec-auditor", "spec-implementer", "experiment-runner", "spec-critic")
+AGENT_NAMES = (
+    "spec-auditor",
+    "spec-reader",
+    "spec-implementer",
+    "experiment-runner",
+    "spec-critic",
+)
 COMMAND_NAMES = (
     "specthis-vouch",
     "specthis-run",

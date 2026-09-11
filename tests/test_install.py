@@ -46,6 +46,14 @@ def test_critic_carries_the_license_conditions(tmp_path: Path) -> None:
     assert "DOUBT" in body  # doubts never touch the ledger
 
 
+def test_reader_charter_is_text_only(tmp_path: Path) -> None:
+    install_agents(project_path=tmp_path, agents=["spec-reader"])
+    body = (tmp_path / ".claude" / "agents" / "spec-reader.md").read_text()
+    assert "tools: Read, Glob, Grep\n" in body  # no Bash: no verbs, no pen
+    assert "no code, no ledgers" in body
+    assert "suggested resolution" in body  # emits a fix list, not verdicts
+
+
 def test_install_is_idempotent_without_force(tmp_path: Path) -> None:
     install_agents(project_path=tmp_path)
     installed, skipped = install_agents(project_path=tmp_path)

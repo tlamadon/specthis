@@ -148,17 +148,27 @@ Start mechanical, end judgmental:
      decide; do not run it.
    - **waiting** entries — do nothing locally; point at the queued
      entry they are waiting on.
-3. While reading, also flag: compute-spec scope creep (compute code
-   writing under `reports/` or importing plotting libraries, or a
-   compute `Output:` naming a `reports/` path), spec state
-   leaks (`Script:` / `Status:` / `depends_on:` fields), missing
-   `## Artefact design` on report entries, and `references:` targets
-   never mentioned in the body.
+3. Read `specthis lint` output rather than re-deriving it: state
+   leaks (`Script:` / `Status:` / `depends_on:` in a body), a compute
+   `Output:` naming a `reports/` path, missing `## Artefact design`
+   on report entries, `references:` targets never mentioned in the
+   body, and dangling markdown links are all mechanical now. What
+   remains yours to flag while reading: compute *code* writing under
+   `reports/` or importing plotting libraries — lint cannot read code.
 4. Report as a table: entry / status / repair kind (mind, machine,
    mind + machine, patience) / notes. For entries you judged, end each note with a
    **proposed verdict** — "propose vouch ok" or "propose reject:
    <reason>" — for the human or a critic session to act on. Do not
    act on it yourself (see the one rule).
+
+When the mind queue is long, or spec files were heavily edited,
+commission **`spec-reader`** over `specs/` before any critic sees an
+entry. It reads the text and nothing else, and returns a fix list of
+internal contradictions — claims that disagree within or across
+files, counts that do not match their lists, notation used against a
+fixed convention. A contradiction found by the reader costs one cheap
+pass; found by critics it costs one expensive session per entry, and
+a critic judging a self-contradictory contract can only reject.
 
 Do not run project scripts, do not open large result files (key
 existence is enough), do not compile anything under `reports/`.
@@ -186,7 +196,9 @@ and you act instead of proposing. A Stop hook holds the loop closed and
 decides when it ends, so you do not have to — and because a queue grows
 as you drain it (a rebuilt output makes its consumers stale; a repaired
 definition expires its own vouch), you must re-check after every step
-rather than treating one pass as done.
+rather than treating one pass as done. Under yolo, `spec-reader` runs
+BEFORE critics are spent: fix what the text contradicts about itself
+first, then judge.
 
 **The one rule is not suspended, and neither is anything else that
 protects the ledger.** Under yolo you still never hold the pen: judgment

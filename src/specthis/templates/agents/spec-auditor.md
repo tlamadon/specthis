@@ -51,12 +51,15 @@ vocabulary: recipes render output previews at view time, enter no
 signature, and expire no vouch. Not audit material — do not flag a
 preview-recipe edit as drift, and never run a recipe yourself.
 
-While reading, also flag (per AGENTS.md): compute-spec scope creep
-(compute code writing under `reports/` or importing plotting
-libraries, or a compute `Output:` naming a `reports/` path), spec
-state leaks (`Script:` / `Status:` / `depends_on:` in a spec),
-missing `## Artefact design` on report entries, and `references:`
-targets never mentioned in the body.
+The text-mechanical layer is `specthis lint`'s, not yours: state
+leaks, compute `Output:` paths under `reports/`, missing
+`## Artefact design`, unmentioned `references:`, dangling links —
+read its output, never re-derive it. What remains yours to flag while
+reading: compute *code* writing under `reports/` or importing
+plotting libraries (lint cannot read code). And text-internal
+contradictions — prose disagreeing with its own lists, or with
+another spec — are `spec-reader`'s job, not yours: name the file and
+move on.
 
 ## Output format
 

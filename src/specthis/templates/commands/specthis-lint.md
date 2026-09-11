@@ -33,6 +33,23 @@ and `specs/bindings.toml`, and nothing else.
      like `".tex"`.
    - **consumes/references unknown targets** — usually a typo or a
      renamed entry; grep the specs for near-matches before asking.
+   - **state leak (`Script:` / `Status:` / `depends_on:` in a body)** —
+     delete the line: status is derived, scripts live in
+     bindings.toml. If it carried real information (a binding, an
+     edge), move it where it belongs first.
+   - **consumes draft entry** — the upstream contract is unchecked
+     prose; either finish that spec (drop its `draft:` flag) or
+     unwire the edge. Do not silently draft the consumer too.
+   And act on the warnings — they are advisory, not optional noise:
+   - **references target never mentioned in the body** — drop the
+     edge, or add the sentence that uses it.
+   - **link resolves to nothing** — fix the target or delete the link.
+   - **compute entry outputs under `reports/`** — the artefact belongs
+     to the paired report spec; propose the move.
+   - **report entries but no `## Artefact design`** — author the
+     section (what the artefact looks like is part of the contract).
+   - **spec is draft** — fine while genuinely half-written; flag to
+     the user if it has clearly outgrown the flag.
 3. Warn the user where a fix will move digests: editing a spec file
    returns its entries to *unvouched*, and adding/changing a
    binding does the same for that entry. That is correct behavior,
