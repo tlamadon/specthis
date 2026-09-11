@@ -44,6 +44,10 @@ and `specs/bindings.toml`, and nothing else.
    - **references target never mentioned in the body** — drop the
      edge, or add the sentence that uses it.
    - **link resolves to nothing** — fix the target or delete the link.
+   - **mentions a path nothing produces / an entry that doesn't
+     exist ("did you mean")** — usually a rename the prose missed;
+     update the mention, or wire the thing it names if it should
+     exist.
    - **compute entry outputs under `reports/`** — the artefact belongs
      to the paired report spec; propose the move.
    - **report entries but no `## Artefact design`** — author the

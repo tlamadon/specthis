@@ -51,7 +51,8 @@ def test_reader_charter_is_text_only(tmp_path: Path) -> None:
     body = (tmp_path / ".claude" / "agents" / "spec-reader.md").read_text()
     assert "tools: Read, Glob, Grep\n" in body  # no Bash: no verbs, no pen
     assert "no code, no ledgers" in body
-    assert "suggested resolution" in body  # emits a fix list, not verdicts
+    assert "suggested resolution" in body  # contradictions: a fix list, not verdicts
+    assert "I would need to know" in body  # open questions: the cold-implementer read
 
 
 def test_install_is_idempotent_without_force(tmp_path: Path) -> None:

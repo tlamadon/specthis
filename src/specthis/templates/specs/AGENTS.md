@@ -163,12 +163,15 @@ Start mechanical, end judgmental:
 
 When the mind queue is long, or spec files were heavily edited,
 commission **`spec-reader`** over `specs/` before any critic sees an
-entry. It reads the text and nothing else, and returns a fix list of
-internal contradictions — claims that disagree within or across
-files, counts that do not match their lists, notation used against a
-fixed convention. A contradiction found by the reader costs one cheap
-pass; found by critics it costs one expensive session per entry, and
-a critic judging a self-contradictory contract can only reject.
+entry. It reads the text and nothing else, and returns two lists:
+internal contradictions (claims that disagree within or across files,
+counts that do not match their lists, notation against a fixed
+convention) and open questions — the cold-implementer read: every
+fact an implementer with zero context would need that no spec states,
+every fork the text leaves open. A defect found by the reader costs
+one cheap pass; found by critics it costs one expensive session per
+entry, and a critic handed a broken contract can only reject or
+doubt.
 
 Do not run project scripts, do not open large result files (key
 existence is enough), do not compile anything under `reports/`.

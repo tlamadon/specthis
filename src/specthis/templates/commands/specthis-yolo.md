@@ -83,15 +83,19 @@ command exists.
 2. **Read the specs before judging them.** Commission a `spec-reader`
    subagent over `specs/` (one agent for the whole directory; one per
    folder on a large project). It reads the text and nothing else and
-   returns a fix list of internal contradictions — claims that
-   disagree within or across files, counts that do not match their
-   lists, notation against a fixed convention. Fix everything it
-   names; spec edits are mind-only and always safe, even while builds
-   are in flight. Re-commission only over files that changed since its
-   last pass, not every round. **Do not send an entry to a critic
-   while the reader has an open finding against its file** — a critic
-   judging a self-contradictory contract can only return doubt, at
-   many times the price.
+   returns two lists: internal contradictions (claims that disagree
+   within or across files, counts that do not match their lists,
+   notation against a fixed convention) and open questions — facts an
+   implementer would need that no spec states, forks the text leaves
+   open. Fix every contradiction; answer the open questions you can
+   answer in the spec text, and surface the rest to the user in the
+   final report — an open question is the one finding the loop may
+   not invent an answer to. Spec edits are mind-only and always safe,
+   even while builds are in flight. Re-commission only over files
+   that changed since its last pass, not every round. **Do not send
+   an entry to a critic while the reader has an open finding against
+   its file** — a critic judging a broken contract can only return
+   doubt, at many times the price.
 
 3. **Machine queue** — `specthis build`, or `specthis build <entry>
    --force` for the one repair case (an artefact edited on disk). Hand

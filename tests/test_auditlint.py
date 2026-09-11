@@ -8,7 +8,7 @@ from specthis.auditlint import spec_text_problems, spec_text_warnings
 from specthis.cli import main
 from specthis.parse import load_project_lenient
 
-from .conftest import COMPUTE_ALPHA, REPORT_BETA, write
+from .conftest import COMPUTE_ALPHA, COMPUTE_BETA, REPORT_BETA, write
 
 
 def run_cli(*args: str):
@@ -97,6 +97,71 @@ def test_known_links_are_quiet(root: Path) -> None:
         "\nSee [models](models.md), [the note](journal/2026-01-02-note.md),\n"
         "[design](design.md), and [the site](https://example.org/x.md).\n"
     ))
+    _, warnings = _audit(root)
+    assert warnings == []
+
+
+# --------------------------------------------------- dangling mentions
+
+
+def test_a_path_mention_nothing_backs_warns(root: Path) -> None:
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + (
+        "\nReads the raw pull from `data/raw/wages_v2.parquet`.\n"
+    ))
+    _, warnings = _audit(root)
+    assert any("mentions `data/raw/wages_v2.parquet` — nothing produces it" in w.message
+               for w in warnings)
+
+
+def test_backed_path_mentions_are_quiet(root: Path) -> None:
+    write(root, "data/raw/pull.csv", "a,b\n")
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + (
+        "\nDeclared output: `results/alpha/fit.json` (not yet built).\n"      # an output
+        "Implemented in `scripts/fit_alpha.py`.\n"                            # a bound script
+        "Raw bytes land at `data/raw/pull.csv`.\n"                            # on disk
+        "Run `uv run scripts/fit_alpha.py --fast` yourself.\n"                # a command, not a path
+        "The manager fills `{out}` and matches `src/pkg/**/*.py`.\n"          # placeholder, glob
+    ))
+    _, warnings = _audit(root)
+    assert warnings == []
+
+
+def test_a_near_miss_entry_name_warns_with_a_suggestion(root: Path) -> None:
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + (
+        "\nDownstream, `fit-betas` consumes this fit.\n"
+    ))
+    _, warnings = _audit(root)
+    assert any("no such entry; did you mean `fit-beta`?" in w.message for w in warnings)
+
+
+def test_known_and_unrelated_slugs_are_quiet(root: Path) -> None:
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + (
+        "\nExact names are fine: `fit-beta`. So is tool vocabulary:\n"
+        "`spec-critic` judges this entry. A slug close to nothing —\n"
+        "`read-modify-write` — is a concept, not a typo; the reader's job.\n"
+    ))
+    _, warnings = _audit(root)
+    assert warnings == []
+
+
+def test_dormant_entry_mentions_are_wired_not_dangling(root: Path) -> None:
+    write(root, "specs/compute-beta.md", COMPUTE_BETA.replace(
+        "kind: compute", "kind: compute\nskip: true"
+    ))
+    write(root, "specs/report-beta.md", REPORT_BETA.replace(
+        "kind: report", "kind: report\nskip: true"
+    ))
+    write(root, "specs/compute-alpha.md", COMPUTE_ALPHA + (
+        "\nThe dormant `fit-beta` will read `results/beta/fit.json` when it wakes.\n"
+    ))
+    _, warnings = _audit(root)
+    assert not any("mentions" in w.message for w in warnings)
+
+
+def test_meta_and_definitions_prose_is_not_scanned_for_mentions(root: Path) -> None:
+    # a spec with no entries documents; its example paths are not claims
+    write(root, "specs/models.md", "---\nname: models\nkind: definitions\n---\n\n"
+          "# models\n\nExamples live at `results/examples/demo.json`.\n")
     _, warnings = _audit(root)
     assert warnings == []
 
