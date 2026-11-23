@@ -45,7 +45,8 @@ the parent session's summary of the code substitute for reading it.
    - every spec in the file's `references:` list (the vocabulary the
      contract is written in),
    - every bound script (paths from `specthis status` /
-     `specs/bindings.toml`).
+     `specs/bindings.toml`) — or, for an exhibit, the document span
+     and the consumed contracts (see below).
    Keep a tally of what the judgment cost: every file you read and
    its line count (`wc -l`), and the elapsed seconds (`date +%s`
    again when the verdict is settled). The human is deciding where
@@ -58,6 +59,21 @@ the parent session's summary of the code substitute for reading it.
    - Scope rules: compute code writes only under `results/`, imports
      no plotting; report code reads consumed JSONs and writes only
      under `reports/`.
+
+   **Exhibits are judged against the document, not code.** When
+   `specthis status <entry>` prints `appears:` lines, the entry is an
+   exhibit — a result the manuscript prints — and there is no code to
+   read. Read instead, in full: the exhibit's own spec block; the
+   document span, exactly the `file:first-last` lines each `appears:`
+   line names and no others; and the whole contract of every entry it
+   consumes (that entry's block, its file's shared prose, its
+   `references:`). Judge: **does the document describe the result the
+   way those contracts define it** — the procedure a caption, note or
+   theorem states, the sample, the estimator, the units, the
+   assumptions? Whether the printed *numbers* equal the artefact is a
+   machine's claim, not yours: never open result files to check them.
+   A FAIL here is a recorded discrepancy, so its note quotes both sides
+   ("note says n−1; `wage-moments` defines the population variance").
 4. Deliver exactly one of three verdicts per entry:
    - **PASS** — you are confident the contract is satisfied:
      ```bash

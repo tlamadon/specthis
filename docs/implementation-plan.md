@@ -244,6 +244,52 @@ vouch is filed.
 
 ---
 
+## Phase 8 — exhibits: the manuscript as a terminal node — **steps 1–2 done** (2026-11-23)
+
+Issue #2, from a paper audited backwards: results the paper printed with
+no producer, prose describing a procedure the spec did not, and a Lean
+coverage table and a discrepancy list kept by hand with no digests. The
+chain ended at bytes; the manuscript sat one link past it.
+
+**Done — the issue's steps 1 and 2:**
+
+- `spans.py`: the `doc:<document>#<label>` span digest (spec §5.8) —
+  innermost environment around a `\label`, or a marker pair; comments
+  and whitespace normalised away, so a reflow moves nothing.
+- `exhibit`, the fifth type: `- appears: <document>#<label>` and no
+  `produces`. Terminal (nothing may consume it), no code, no step, no
+  run axis. Documents are named in `[documents]`, never by path (§3).
+- The "described" mind claim, through the existing engine: an exhibit's
+  `code_manifest` is its `doc:` rows plus a `spec:<entry>` row per
+  consumed entry, carrying that entry's `contract_sha`. Expiry,
+  attribution (`~doc:paper#tab:paths`) and the rejection rule fall out
+  of the tables unchanged — no new ledger field.
+- The orphan lint (warnings), its configuration drift, and a
+  per-document line in `status`.
+- `examples/paper`: one table, one proposition, executed by the suite.
+
+**Open questions, decided:** normalisation is whitespace- and
+comment-insensitive; prose numbers use marker pairs (anchor phrases
+deferred); upstream rows pin the **contract** digest, the subject the
+upstream's own vouch pins; an exhibit may appear in several documents.
+
+**Separable finding, fixed:** `certify ENTRY…` scopes the write, and a
+certificate lagging its code is a `check`/`lint` problem where a step
+depends on it (a warning otherwise).
+
+**Found on the way, fixed:** `build` adopted manifests in step-id order,
+so a consumer whose id sorted before its upstream's pinned the
+pre-build digest and read stale at once (the bundled examples' names
+happened to sort topologically); it now adopts upstream first. And the
+DAG drew only frontmatter `consumes:` edges, so a target-format project
+with cross-file `- consumes:` drew nothing.
+
+**Next — steps 3–5, open in spec §17:** the "printed" machine claim and
+a recorded `failed` state; formal statements as backing (validate the
+design on them first, per the issue); `tag`/`trace`; `/specthis-reverse`.
+
+---
+
 ## Risks
 
 **`export.py` is 1484 lines and touches every phase.** It is the largest

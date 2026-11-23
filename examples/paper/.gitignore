@@ -1,0 +1,5 @@
+.specthis/
+results/
+paper/tables/
+specs/runs.toml
+specs/vouches.toml

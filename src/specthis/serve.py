@@ -3,7 +3,7 @@
 Serves the rendered dashboard from memory (it writes nothing into the
 project tree) and re-renders when anything the view depends on
 changes: spec files, the ledgers, bindings, scripts, workflow files,
-outputs, or the package blob. The browser polls ``/__state`` and
+outputs, the package blob, or a declared manuscript. The browser polls ``/__state`` and
 reloads when the token bumps. Declared outputs are additionally
 readable at ``/view/<path>`` — text as an escaped, syntax-highlighted
 page, images and PDFs as raw bytes — and renderable at
@@ -31,6 +31,7 @@ from urllib.parse import quote, unquote
 from .export import is_text_file, output_lang, raw_view_type, render
 from .parse import Project, SpecError, load_project_lenient
 from .preview import CONTENT_TYPES, default_cache_dir, find_recipe, render_preview
+from .spans import files_of
 
 POLL_SECONDS = 1.0
 
@@ -48,6 +49,9 @@ def _watched_paths(root: Path, project: Project | None) -> list[Path]:
         paths += [root / r for r in sorted(rel)]
         for pattern in project.package_globs:
             paths += sorted(p for p in root.glob(pattern) if p.is_file())
+        # A co-author's edit to the manuscript moves exhibit spans.
+        for doc in project.documents.values():
+            paths += [root / r for r in files_of(project, doc)]
     return paths
 
 

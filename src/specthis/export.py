@@ -49,6 +49,7 @@ from .check import (
     Realization,
     Report,
     check_project,
+    is_exhibit,
     keys_for,
     machine_repairable,
 )
@@ -56,6 +57,7 @@ from .dag import dag_svg
 from .icons import ICONS
 from .journal import JournalEntry, load_journal
 from .parse import _FRONTMATTER, Entry, Problem, Project, SpecFile, load_project_lenient
+from .spans import location, resolve, unresolved
 from .timefmt import fmt_ago, fmt_duration
 
 
@@ -102,6 +104,7 @@ def build_index(
                     "materialized": r.materialized,
                     "consumes": entry.consumes,
                     "consumed_by": consumed_by.get(entry.name, []),
+                    **({"appears": [a.key for a in entry.appears]} if is_exhibit(entry) else {}),
                 }
             )
         specs.append(
@@ -136,7 +139,7 @@ _CSS = """
   --kind-templates: #6a3d8a; --kind-compute: #2e6e9e;
   --kind-report: #b85a1e;
   --kind-library: #8a6d1f; --kind-journal: #335c81;
-  --kind-source: #3f7f8c;
+  --kind-source: #3f7f8c; --kind-exhibit: #8c3f6b;
 }
 * { box-sizing: border-box; }
 html { font-size: 16px; scroll-behavior: smooth; }
@@ -163,6 +166,7 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
 .kind-report { color: var(--kind-report); }
 .kind-library { color: var(--kind-library); }
 .kind-source { color: var(--kind-source); }
+.kind-exhibit { color: var(--kind-exhibit); }
 .kind-journal { color: var(--kind-journal); }
 .kind-broken { color: #a40e26; }
 .kind-custom { color: var(--accent); }
@@ -759,7 +763,10 @@ def _bytes_badge(report: Report) -> str:
 def _mind_hint(report: Report, project: Project) -> str:
     """Why this definition needs a mind (the vouch-axis diagnosis)."""
     if report.certification is Certification.UNIMPLEMENTED:
-        return "no code at " + ", ".join(project.entries[report.entry].binding.scripts)
+        entry = project.entries[report.instance_of or report.entry]
+        if is_exhibit(entry):
+            return "nothing printed to judge: " + "; ".join(unresolved(project, entry))
+        return "no code at " + ", ".join(entry.binding.scripts)
     if report.certification is Certification.UNVOUCHED:
         return "spec or code moved since vouch" if report.vouch else "never vouched"
     if report.certification is Certification.REJECTED and report.vouch is not None:
@@ -787,6 +794,17 @@ def _spec_anchor(name: str) -> str:
 
 def _journal_anchor(stem: str) -> str:
     return f"journal-{stem}"
+
+
+def _appears_chips(project: Project, entry: Entry, sep: str = "<br>") -> str:
+    """Where a document prints an exhibit, in place of output chips: the
+    span address, titled with the lines the digest covers."""
+    chips = []
+    for a in entry.appears:
+        res = resolve(project, a)
+        title = location(res.site) if res.site is not None else res.why
+        chips.append(f'<code title="{_e(title)}">{_e(a.key)}</code>')
+    return sep.join(chips) or '<span class="empty">—</span>'
 
 
 def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) -> str:
@@ -825,8 +843,11 @@ def _entry_rows(spec: SpecFile, project: Project, reports: dict[str, Report]) ->
             )
         else:
             run = '<span class="empty">—</span>'
-        outputs = "<br>".join(_output_chip(project.root, o) for o in entry.outputs) or (
-            '<span class="empty">code-only</span>'
+        outputs = (
+            _appears_chips(project, entry)
+            if is_exhibit(entry)
+            else "<br>".join(_output_chip(project.root, o) for o in entry.outputs)
+            or '<span class="empty">code-only</span>'
         )
         moved = (
             f'<div class="moved">moved: {_e(", ".join(r.moved))}</div>'
@@ -1239,10 +1260,13 @@ def _detail_row(
         lines.append(("why", _e(why)))
     lines.append(("consumes", chips(entry.consumes)))
     lines.append(("consumed by", chips(consumed_by.get(entry.name, []))))
-    outputs = " ".join(_output_chip(project.root, o) for o in entry.outputs) or (
-        '<span class="empty">code-only</span>'
-    )
-    lines.append(("outputs", outputs))
+    if is_exhibit(entry):
+        lines.append(("appears", _appears_chips(project, entry, " ")))
+    else:
+        outputs = " ".join(_output_chip(project.root, o) for o in entry.outputs) or (
+            '<span class="empty">code-only</span>'
+        )
+        lines.append(("outputs", outputs))
     if r.vouch:
         note = f" — {r.vouch.note}" if r.vouch.note else ""
         lines.append(
@@ -1299,8 +1323,11 @@ _EMPTY = '<span class="empty">—</span>'
 
 
 def _kind_tier(e: Entry) -> str:
-    """`library` bare (tier is meaningless there), `kind/tier` otherwise —
-    on the run page the tier is the rebuild-cost signal next to `stale`."""
+    """`library` and `exhibit` bare (tier is meaningless there),
+    `kind/tier` otherwise — on the run page the tier is the rebuild-cost
+    signal next to `stale`."""
+    if is_exhibit(e):
+        return "exhibit"
     return _e(e.spec.kind if e.spec.kind == "library" else f"{e.spec.kind}/{e.tier}")
 
 

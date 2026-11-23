@@ -61,6 +61,10 @@ executed by the test suite so they cannot drift from the tool:
 - **[`examples/wage-grid`](examples/wage-grid)** — the same project after
   the second country arrives. One formula, many batches: templates, and
   what a single vouch over a family actually claims.
+- **[`examples/paper`](examples/paper)** — the paper as the last link. One
+  table and one proposition are *exhibits*: a judge attests the manuscript
+  describes each result the way the spec defines it, and lint names every
+  table the paper prints that nothing produced.
 
 Then [`docs/specification.md`](docs/specification.md) for what is
 precisely true.
@@ -80,6 +84,19 @@ the upstream digest to whatever consumes them — so editing a library
 spec or module flags exactly that entry for re-judgment and exactly
 its consumers for re-run, instead of detonating every vouch through
 the package blob.
+
+**The manuscript is the last link.** An `exhibit` entry is a result the
+paper prints: it declares `- appears: paper#tab:paths` — a labelled
+table, figure or theorem in a document named in `bindings.toml` — and
+consumes the entries that back it. It has no code, no step and no run
+claim. Its vouch attests that *the document describes the result as
+those entries' contracts define it*, pinning the span as printed
+(comments and reflows ignored) beside each consumed contract — so editing
+that table expires that exhibit and no other, editing a contract expires
+every description of it, and a rejection is a recorded discrepancy
+instead of a line in a hand-kept list. `lint` names every labelled table
+or theorem no exhibit claims: the results the paper prints that nothing
+produced.
 
 **Two species of claim, verified in opposite directions:**
 
@@ -187,7 +204,8 @@ specthis build <entry> --force # rebuild an artefact edited on disk
 specthis record <entry>        # pin bytes no pipeline produced (a download, a one-off)
 specthis adopt <entry> FILE    # countersign a manifest from a manager specthis did not launch
 specthis adopted               # publish the steps your manager can skip (.specthis/adopted.json)
-specthis certify               # code-identity certificates, if you use [package] globs
+specthis certify [entries…]    # code-identity certificates, if you use [package] globs;
+                               #   name entries to scope the write (lint flags lagging ones)
 ```
 
 `check --json` is the same derivation as the printed form, plus the two
@@ -414,9 +432,11 @@ and it's that baseline that makes later drift legible and delegable.
   small. Two facts no pipeline format can express — `scripts` (which of
   a step's dependencies is *judged code*, the boundary between the two
   trees) and `produces` (which file **is** a logical product) — plus
-  `[package]` globs for the shared library every code manifest covers.
-  Everything about *how* a step runs lives in the pipeline. Unbound
-  entries follow the `scripts/<entry>.py` convention.
+  `[package]` globs for the shared library every code manifest covers,
+  and `[documents]`: where each manuscript lives, and which of its
+  labelled environments lint holds to an exhibit. Everything about *how*
+  a step runs lives in the pipeline. Unbound entries follow the
+  `scripts/<entry>.py` convention.
 
 A spec file is markdown. Each `### entry` block declares its own
 interface as a field list:
@@ -432,9 +452,10 @@ One row per worker-year; no duplicates.
 ```
 
 Type is inferred from the fields — a bare `- code` is a library, a
-physical path is a source, logical `produces` is computable, and
+physical path is a source, logical `produces` is computable,
 `- props: dataset` makes it a **template** whose instances the pipeline
-declares. `kind:` and `name:` are optional; the older frontmatter form
+declares, and `- appears: paper#tab:paths` makes it an **exhibit**: a
+result a document prints. `kind:` and `name:` are optional; the older frontmatter form
 still parses, so a project migrates at its own pace.
 
 **A vouch pins the entry's own block**, not the whole file: editing a
@@ -631,7 +652,9 @@ code-identity certificates; migration; scaffolding and agent templates;
 the two-tree dashboard (`export` + `serve` with live reload — a
 vouch-tree landing and a run-tree page plus an activity log, a
 spec-level DAG with status rails, a layered figure and layout JSON via
-`specthis dag`, stdlib only); the journal; and output previews.
+`specthis dag`, stdlib only); the journal; output previews; and
+**exhibits** — the manuscript as a terminal node, with span digests, the
+"described" mind claim, and the orphan lint.
 
 Also done: **`skip: true` and `draft: true` in frontmatter** — two
 flags for two facts. `skip` makes a spec dormant: entries leave every
@@ -656,6 +679,12 @@ and trust returns with them.
   to land.
 
 **Known future extensions** — each additive, none precluded by the core:
+
+- **The rest of exhibits.** An optional *machine* claim on an exhibit — a
+  checker that compares the printed numbers with the artefact, with a
+  recorded `failed` state for "ran and disagrees" — formal statements (a
+  Lean theorem) as backing, and `tag` / `trace` for stamping and finding
+  digests. See `docs/specification.md` §17.
 
 - **Adoption path: `specthis init --from-code`.** Kick-start an existing
   repo: walk `scripts/`, read what is already there (docstrings,

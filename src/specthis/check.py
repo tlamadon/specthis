@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from graphlib import CycleError, TopologicalSorter
 
-from . import hashing
+from . import hashing, spans
 from .instances import Instance, instances, is_template
 from .ledger import Run, Vouch, read_runs, read_vouches
 from .parse import Entry, Project
@@ -55,8 +55,8 @@ class Certification(Enum):
 class Realization(Enum):
     """The run axis: whether the memoized call is the call the current
     tree implies — a claim about *values*, independent of any vouch.
-    Repair needs a machine. ``None`` for library entries (no run, no
-    output: they exist only on the vouch axis)."""
+    Repair needs a machine. ``None`` for library and exhibit entries (no
+    run, no output: they exist only on the vouch axis)."""
 
     NEVER_RUN = "never-run"
     STALE = "stale"  # signature mismatch, or output bytes edited on disk
@@ -97,7 +97,7 @@ class Report:
     #: e.g. an unvouched entry can also be stale, which ``status``
     #: alone cannot say.
     certification: Certification = Certification.CERTIFIED
-    realization: Realization | None = None  # None for library entries
+    realization: Realization | None = None  # None for library and exhibit entries
     #: Composition over each tree: every definition in the lineage
     #: certified / every call in the lineage current (libraries count
     #: as trivially realized). READY ≡ computable ∧ realized.
@@ -127,6 +127,17 @@ def code_present(project: Project, entry: Entry) -> bool:
 
 def is_library(entry: Entry) -> bool:
     return entry.kind == "library"
+
+
+def is_exhibit(entry: Entry) -> bool:
+    """A result a document prints (§2) — the terminal node past the bytes.
+
+    It has no code and no step: its subject is a span of a manuscript,
+    and its vouch attests that the document describes the result as its
+    upstream contracts define it. Like a library it lives on the vouch
+    axis alone; unlike one, nothing may consume it.
+    """
+    return entry.kind == "exhibit"
 
 
 def is_source(entry: Entry) -> bool:
@@ -176,6 +187,10 @@ def code_manifest(project: Project, entry: Entry) -> dict[str, str]:
     """
     if is_source(entry):
         return hashing.files_manifest(project.root, entry.outputs)
+    if is_exhibit(entry):
+        # The subject is the document, not code: each span as printed,
+        # and each consumed entry's contract — what it is described as.
+        return spans.exhibit_manifest(project, entry)
     manifest = {
         s: hashing.file_sha(project.root / s) or hashing.MISSING
         for s in entry.binding.scripts
@@ -195,6 +210,13 @@ def code_sha(project: Project, entry: Entry) -> str | None:
     """
     if is_source(entry):
         return hashing.output_sha(project.root, entry.outputs)
+    if is_exhibit(entry):
+        # Nothing to judge until every span it appears at resolves —
+        # the exhibit's `unimplemented`, as absent code is a script's.
+        manifest = code_manifest(project, entry)
+        if not entry.appears or hashing.MISSING in manifest.values():
+            return None
+        return hashing.manifest_sha(manifest.items())
     if not code_present(project, entry):
         return None
     return hashing.manifest_sha(code_manifest(project, entry).items())
@@ -271,6 +293,8 @@ def expected_inputs(project: Project, entry: Entry, runs: dict[str, Run]) -> dic
     """
     if is_source(entry):
         return hashing.files_manifest(project.root, entry.outputs)
+    if is_exhibit(entry):
+        return {}  # no run claim: the chain ends at the vouch
 
     # The pipeline declares what a step reads, so its deps *are* the
     # input set: code (whatever `map.scripts` names among them) and
@@ -410,8 +434,11 @@ def expired_since_vouch(
         out.append(f"step: {entry.name} rewired")
     if code_moved(project, entry, v, code_sha_now):
         if v.code_manifest:
+            # An exhibit's rows name their own kind — `doc:paper#tab:x`,
+            # `spec:wage-moments` — so they need no prefix to read.
+            prefix = "" if is_exhibit(entry) else "code: "
             out.extend(
-                table_diff(v.code_manifest, code_manifest(project, entry), "code: ")
+                table_diff(v.code_manifest, code_manifest(project, entry), prefix)
                 or ["code moved"]
             )
         else:
@@ -585,7 +612,7 @@ def _one(
     report.certification, report.expired = _certify(project, entry, v, s, c)
     certified = report.certification is Certification.CERTIFIED
 
-    if is_library(entry):
+    if is_library(entry) or is_exhibit(entry):
         realization, moved, materialized = None, [], True
     else:
         realization, moved, materialized = _realize_table(project, r, inputs, outputs)
@@ -734,7 +761,8 @@ def tally(reports: dict[str, Report]) -> tuple[dict[Certification, int], dict[Re
     The two totals differ on purpose. A library lives on the vouch tree
     alone (no run, no output), so it is counted as a definition and not
     as a call; folding libraries into the run total would put ``current``
-    permanently out of reach.
+    permanently out of reach. An exhibit is the same: a judged
+    description, with no bytes of its own.
     """
     vouch = dict.fromkeys(CERTIFICATION_ORDER, 0)
     run = dict.fromkeys(REALIZATION_ORDER, 0)
@@ -743,6 +771,40 @@ def tally(reports: dict[str, Report]) -> tuple[dict[Certification, int], dict[Re
         if r.realization is not None:
             run[r.realization] += 1
     return vouch, run
+
+
+@dataclass
+class DocumentTally:
+    """One manuscript at a glance: its exhibits by vouch state, and the
+    labels nothing backs — the orphans lint names, and the ones declared
+    unbacked on purpose."""
+
+    name: str
+    exhibits: dict[Certification, int]
+    orphans: int = 0
+    unbacked: int = 0
+
+
+def document_tally(project: Project, reports: dict[str, Report]) -> list[DocumentTally]:
+    """Per declared document, the roll-up behind ``status``'s document line.
+
+    An exhibit counts toward every document it appears in. Orphans are
+    counted here rather than only warned about, because *how much of the
+    paper is backed* is the question a reverse audit starts from.
+    """
+    out: list[DocumentTally] = []
+    with hashing.memoizing():
+        for name, doc in sorted(project.documents.items()):
+            counts = dict.fromkeys(CERTIFICATION_ORDER, 0)
+            for key, r in reports.items():
+                e = project.entries.get(r.instance_of or key)
+                if e is not None and is_exhibit(e) and any(
+                    a.document == name for a in e.appears
+                ):
+                    counts[r.certification] += 1
+            found = spans.census(project, doc)
+            out.append(DocumentTally(name, counts, len(found.orphans), len(found.unbacked)))
+    return out
 
 
 def keys_for(reports: dict[str, Report]) -> dict[str, list[str]]:

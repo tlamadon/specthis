@@ -1,0 +1,39 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm}
+\newtheorem{proposition}{Proposition}
+
+\begin{document}
+
+\section{Wages}
+
+Four workers, observed in 2019 and 2020. One 2020 wage is a coding error
+in the payroll system; we drop it rather than repair it, so the drop
+stays visible.
+
+\begin{table}[t]
+  \centering
+  \caption{Log wage moments by year}\label{tab:moments}
+  \input{tables/moments.tex}
+
+  \footnotesize Notes: non-positive wages are dropped. The variance is
+  the population variance of log wages (dividing by $n$, not $n-1$).
+\end{table}
+
+\begin{proposition}\label{prop:units}
+  The variance of log wages in Table~\ref{tab:moments} does not depend on
+  the currency unit: paying every worker $c > 0$ times their wage leaves
+  it unchanged.
+\end{proposition}
+
+\begin{proof}
+  Rescaling adds $\log c$ to every log wage, and a variance is unchanged
+  by adding a constant.
+\end{proof}
+
+\begin{figure}[h]
+  \centering
+  \fbox{payroll extract $\to$ positive wages $\to$ moments by year}
+  \caption{How the numbers in Table~\ref{tab:moments} are made.}\label{fig:flow}
+\end{figure}
+
+\end{document}

@@ -28,6 +28,13 @@ the two fields §4 gives it. Parallel rebuilds, push/fetch and remote
 adoption went with them — a manager that has those capabilities supplies
 them, and the bundled runner does not pretend to.
 
+**Exhibits** (2026-11-23, issue #2): the manuscript as a terminal node —
+§2's fifth type, §5.8's span digest, the mind claim on an exhibit
+("described", §8), and the orphan lint (§13). The exhibit's optional
+machine claim ("printed"), formal statements as backing, and
+`tag`/`trace` are open (§17). Projects with no exhibit entries record
+exactly what they recorded before.
+
 One residue: the `Status` enum still exists and is emitted in the JSON
 payloads. No surface renders it — the dashboard and the CLI speak only
 in axes — so §11 holds; removing the type itself is a test refactor with
@@ -80,6 +87,21 @@ specification?"* is answerable by composing the two ledgers. Where
 `[package] globs` are used, a certificate (§6) carries the glob's
 composed digest into the same chain.
 
+**The manuscript is the terminal node.** What a research project ships
+sits one link past the bytes, so the chain closes on it:
+
+```
+spec ──(vouch)── code ──(shared rows)── step ──(manifest)── bytes
+ │
+ └──(exhibit vouch: "described")── document span
+```
+
+An **exhibit** entry (§2) names a span of a document (§5.8), and its
+vouch pins that span beside the contract of each entry it consumes — so
+*"does the paper say what the spec says?"* has a subject, and expires
+when either side moves. A result the paper prints that no entry backs is
+an **orphan**, and only the document can enumerate those (§13).
+
 **Source entries have no step**: leaf bytes arrive from outside any
 pipeline, pinned by `record` and vouched for provenance (§2).
 
@@ -96,6 +118,8 @@ pipeline, pinned by `record` and vouched for provenance (§2).
 | **pinned tuple** | the digests an attestation covers |
 | **recorded table** | the `{path: sha}` an attestation pinned (the past) |
 | **implied table** | the `{path: sha}` the same subject resolves to now (the present) |
+| **document span** | one addressed piece of a manuscript, `doc:<document>#<label>` (§5.8) |
+| **exhibit** | an entry whose subject is a document span: a result the paper prints (§2) |
 
 **The engine, once:** compare recorded against implied. Equal → the
 claim stands. Different → its subject moved, and the table diff is the
@@ -114,11 +138,20 @@ and names the missing ingredient on failure.
 | **library** | prose + bare `code` | "these functions meet their contract" | no | **no** — chain stops at code |
 | **computable** | prose + `consumes` + `produces` (logical) | "this transformation is implemented correctly" | yes | yes |
 | **template** | prose + `props` + interface | the template, or one instance (§15.4) | per instance | per instance |
+| **exhibit** | prose + `consumes` + `appears` (a document span) | "the document describes this result as its upstream contracts define it" | **no** | **no** — the chain ends at the document |
 
 *Templates are specified in §15. A singleton — a template with no props —
 is the degenerate case, so nothing written today is rewritten.*
 
 A **report** is not a type — it is a computable with several `produces`.
+
+An **exhibit** is the graph's terminal node: it produces nothing, so
+nothing may consume it, and it has no code and no step. Its backing is
+whatever it consumes — computable entries, a library, a source for a
+constant quoted from the literature. It may appear in several documents
+(paper, slides, appendix): each appearance is pinned. `appears` beside
+`produces`, `code` or `props` is refused with the conflict named, and a
+field list matching no type names the ingredients that would make it one.
 
 ---
 
@@ -144,8 +177,8 @@ A spec file is ordinary markdown. Five rules:
    *(Implementation note: the parser currently closes a block only at
    `##`/`###` headings, not `#` — a divergence from "any level",
    recorded, not yet resolved.)*
-4. **Recognized fields:** `consumes`, `produces`, `code`, `props`.
-   Unknown keys are lint **errors**.
+4. **Recognized fields:** `consumes`, `produces`, `code`, `props`,
+   `appears`. Unknown keys are lint **errors**.
 5. **Type is inferred** from the fields present (§2).
 
 > **Divergence note.** The current format carries three frontmatter
@@ -163,6 +196,7 @@ A spec file is ordinary markdown. Five rules:
 | `produces` | list of logical names | physical paths legal **only** in a source entry |
 | `code` | bare key, no value | library marker |
 | `props` | list of names | free variables; template tier (§15) |
+| `appears` | list of `<document>#<label>` | an exhibit's subject (§5.8); `<document>` is a name from `[documents]`, never a path |
 
 ### Example
 
@@ -231,6 +265,11 @@ scripts  = ["src/clean_wages.py"]                   # which deps are judged code
 produces = { wages-panel = "data/wages.parquet" }   # logical name -> physical path
 declared_by = "implementer-agent"                   # [NEW] provenance
 declared_at = "2026-08-11T09:14:02Z"                # [NEW]
+
+[documents.paper]                                   # a manuscript exhibits appear in
+path         = "paper/paper.tex"                    # or a list of files and globs
+environments = ["table", "figure", "theorem"]       # labels lint holds to an exhibit
+unbacked     = ["fig:schematic"]                    # printed with no backing, on purpose
 ```
 
 | Field | Answers | On change |
@@ -239,6 +278,8 @@ declared_at = "2026-08-11T09:14:02Z"                # [NEW]
 | `produces` | *which file **is** `wages-panel`?* | stales if a path moves |
 | `[package] globs` | *what code is covered bluntly?* | unvouched, bluntly |
 | `[preview]` | dashboard vocabulary | nothing |
+| `[documents] path` | *which file **is** the manuscript `paper`?* | unvouched only where a span's content differs |
+| `[documents] environments`, `unbacked` | orphan-lint vocabulary (§13) | nothing |
 
 **Why only these two.** Every pipeline format lumps code and data into
 one dependency list (DVC's `deps`, scripthut's `inputs`), so nothing but
@@ -249,6 +290,11 @@ writes `data/wages.parquet`; only the map says that file **is**
 
 `produces` keys must exactly match the entry's spec `produces` list, and
 its values must exactly match the step's declared outputs (§13).
+
+`[documents]` is the same translation for the manuscript: an exhibit
+says `appears: paper#tab:paths`, and only the map says `paper` is
+`paper/paper.tex`. Moving the file is one map edit, and expires nothing
+whose span reads the same.
 
 ---
 
@@ -330,6 +376,46 @@ moves `step_sha`, so nothing is missed — but the break reports as
 `step:clean-wages moved` instead of naming what changed. Lint warns
 (§13); an attribution concern, not a correctness one.
 
+### 5.8 Span digest
+`span_sha(document, label)` = sha256 of one addressed span of a
+document, normalised to what the document prints. It appears in a pinned
+table as the pseudo-path `doc:<document>#<label>`, so one manuscript
+carries many independently pinned subjects — as one spec file carries
+many blocks (§5.2).
+
+**Address.** `<document>` is a name declared in `[documents]` (§4); its
+`path` may list several files, which share one label namespace as LaTeX
+compiles them. `<label>` resolves, in order:
+
+1. **A marker pair** on lines of their own — `specthis:begin{<label>}` …
+   `specthis:end{<label>}`, in comments (`% …` in LaTeX). The span is
+   the lines strictly between them. This is how prose with no
+   environment is pinned, and it overrides rule 2 for its label.
+2. **`\label{<label>}`** — the span is the innermost environment
+   enclosing it, `\begin{…}` through `\end{…}`, skipping `document` and
+   the alignment wrappers `center`, `flushleft`, `flushright`: a label
+   inside one of those names the float around it, and pinning only the
+   wrapper would leave a table note below it outside the claim.
+
+A label found nowhere, defined twice, or sitting in no environment
+addresses nothing: the exhibit derives `unimplemented` (§10.1), and lint
+names the last two (§13).
+
+**Normalisation.** In a `.tex` file, comments are removed as TeX removes
+them — an unescaped `%` eats the rest of its line, the line break, and
+the next line's leading blanks. Then every whitespace run collapses to
+one space. Co-authors reflow text constantly: a reflow or a comment never
+moves a span, a changed word always does. (Outside `.tex`, `%` is printed
+text and only whitespace collapses.)
+
+**An `\input` is pinned as written.** A span that inputs a generated
+fragment pins the line naming the file, not the fragment's bytes — those
+are the run claim of the entry that produced it, which the exhibit
+consumes.
+
+**Nothing more.** No LaTeX semantics beyond locating a labelled
+environment, and specthis never parses a number.
+
 ---
 
 ## 6. Certificates *(optional)*
@@ -364,6 +450,15 @@ One file per entry, generated by specthis into `specs/certificates/`.
 
 **Location:** generated, gitignored — reproducible from the repository,
 and byte-identical on regeneration.
+
+**Scope and lag.** `certify ENTRY…` writes only the named entries'
+certificates: a regenerated certificate stales every step depending on
+it, so certifying two new entries must not also publish unrelated edits
+elsewhere in the tree. A certificate on disk whose content differs from
+what `certify` would write now **lags** its code. Where a step depends on
+it, that lag hides a code edit from the compute axis — the dependency's
+bytes did not move — so `check` and `lint` report it as a problem until
+it is regenerated; otherwise lint warns.
 
 ---
 
@@ -486,6 +581,7 @@ asserted in the test suite.
 | source | **no** | bytes arrive from outside; `record` pins them |
 | library | **no** | no product of its own |
 | template | one per instance | expanded by the pipeline (§15) |
+| exhibit | **no** | a span of a document: a judge reads it, nothing runs it |
 
 Lint enforces this correspondence in both directions (§13).
 
@@ -602,12 +698,31 @@ One envelope; the capability decides the pinned tuple.
 | Capability | `pinned` contains | `verdict` |
 |---|---|---|
 | `mind` | `spec:block`, `step:<entry>` (§5.6), every bound script, `package` | `ok` \| `rejected` |
+| `mind`, on an exhibit | `spec:block`, `doc:<document>#<label>` per appearance (§5.8), `spec:<entry>` per consumed entry | `ok` \| `rejected` |
 | `machine` | `step:<entry>`, every step dependency, plus `out:<path>` per output | `ok` \| `failed` |
 
 `step:<entry>` appears on both axes and is the only row they share
 besides the code: a judge claims the wiring is right, a manager records
 which wiring produced the bytes. A **source** entry has no step, so the
 row is absent from both.
+
+**An exhibit's mind claim — "described".** Same envelope, same
+independence rule, same rejection rule; only the pinned tuple differs.
+`spec:<entry>` carries the consumed entry's **contract** digest (§5.2b) —
+the subject that entry's own vouch pins — because the description is
+judged against the contract: it expires exactly when the contract it
+describes does, and a sibling block edit in that file moves nothing. No
+code is pinned: the claim is about the document and the spec, and the
+upstream's code is the upstream vouch's business (propagation, §10.4).
+In `vouches.toml` these rows ride in the row's `code_manifest`, beside
+`spec_contract_sha` for the exhibit's own block — the field a source
+entry fills with its bytes:
+
+```toml
+[tab-paths.code_manifest]
+"doc:paper#tab:paths" = "…"   # caption, note, body as printed
+"spec:path-table"     = "…"   # the contract the paper describes
+```
 
 ### 8.1 Acceptance
 
@@ -621,6 +736,12 @@ A `rejected` mind-attestation binds at exactly its pinned table. An `ok`
 at a table carrying a standing rejection is refused; a digest must move,
 or a *different* actor must lift it at a moved table. This is the one
 policy rule in the notary, and it is deliberate.
+
+On an exhibit, a rejection is a **recorded discrepancy** — the document
+says something its contracts do not — with the judge's note as its
+statement. It lifts when the span moves (the paper was fixed) or a
+consumed contract moves (the computation was redefined); which one is a
+decision, never a rerun.
 
 ### 8.3 Manifests → attestations
 A compute manager emits a manifest (§14). `adopt` translates it:
@@ -701,6 +822,13 @@ nor upstream.
 **Expiry is judged on the table**, and `spec:block` is the *entry's
 block*, not the file — editing a sibling entry must not expire this one.
 
+For an **exhibit** the implied table is `{spec:block}` ∪ one
+`doc:<document>#<label>` row per appearance ∪ one `spec:<entry>` row per
+consumed entry (§8). An appearance that addresses no span (§5.8) makes
+it `unimplemented` — nothing printed to judge — and a moved row
+attributes itself: `~doc:paper#tab:paths`, `~spec:path-table`. Editing
+the document outside every pinned span moves nothing.
+
 ### 10.2 Currency
 Implied table = `{step:<entry>}` ∪ the step's declared dependencies
 (§7.1) hashed now, where a non-local upstream artefact contributes the
@@ -710,6 +838,7 @@ Compare to the machine-attestation's input pins.
 | Condition | Realization |
 |---|---|
 | library entry | *n/a* — chain stops at code |
+| exhibit entry | *n/a* — the chain ends at the document |
 | no attestation | `never-run` |
 | tables differ | `stale` + table diff |
 | otherwise | `current` |
@@ -740,6 +869,10 @@ MUST 2).
 Both trees, independently. An entry whose own tables all match but whose
 transitive upstream has a break is **`upstream-unverified`** on that
 tree. Never attested by anyone; derived by walking `consumes`.
+
+An exhibit has no run axis of its own, but it inherits its upstreams':
+a described table resting on stale bytes is certified and still waiting
+on machines.
 
 Cycles are an error.
 
@@ -797,8 +930,19 @@ vouch tree  11/16 certified        1 rejected   4 unvouched
 run tree    12/16 current          2 stale      2 never-run
 ```
 
-The two totals differ where the project has libraries: a library is a
-definition with no call, so it is counted on the vouch tree only.
+The two totals differ where the project has libraries or exhibits: each
+is a definition with no call, so it is counted on the vouch tree only.
+
+A project that declares `[documents]` gets one more line per document —
+the roll-up a paper audit starts from:
+
+```
+paper       5/8 described          1 rejected   2 unvouched   3 orphans   +1 unbacked
+```
+
+Exhibits appearing there that hold a standing vouch, the rest by vouch
+state, then the orphans lint names (§13) and the labels declared
+unbacked. A project with no `[documents]` keeps its two lines.
 
 `status -a` keeps those two lines and adds one row per entry — the two
 axes as separate columns, sorted worst break first (certification
@@ -914,7 +1058,7 @@ real compute. That needs the manager's probe.
 | `status [-a] [--timing] [entry]` | two-line summary / full list / detail, both axes (§11.1) | nothing |
 | `vouch <entry>` | file a mind-attestation | `ledger/mind.toml` |
 | `lint` | spec ↔ map ↔ pipeline correspondence (§13) | nothing |
-| `certify` | regenerate certificates, if `[package] globs` are used (§6) | `specs/certificates/` |
+| `certify [entry…]` | regenerate certificates — all, or the named entries' — if `[package] globs` are used (§6) | `specs/certificates/` |
 | `adopt <entry>` | verify a manifest, countersign | `ledger/machine.toml`, adopted set |
 | `record <entry>` | pin bytes for a manual edge or a source entry | `ledger/machine.toml`, adopted set |
 | `adopted` | publish the steps the ledger accounts for (§7.8) | `.specthis/adopted.json` |
@@ -947,19 +1091,36 @@ It replaces a compiler, and must therefore be complete.
 - `consumes` naming an unknown entry
 - a cycle in `consumes`
 - a logical name produced by two entries
+- `appears` beside `produces`, `code` or `props`; an `appears` that is
+  not `<document>#<label>`
+- a `consumes` edge into an exhibit — an exhibit is terminal
 
 **Errors — spec ↔ map:**
 
 - `map.produces` keys not matching the entry's spec `produces` list
 - a computable entry with no `scripts` bound *(reported as
   `unimplemented`, not a hard error)*
+- an exhibit appearing in a document `[documents]` does not declare
+- an exhibit bound to `scripts` or `produces` — it has no code
+
+**Errors — spec ↔ document:**
+
+- a marker pair opened twice, never closed, closing nothing, or sharing
+  one line
+- an exhibit whose label is defined twice, or sits in no environment
+  *(a label found nowhere is a state — `unimplemented` — not an error,
+  as absent code is)*
+
+**Errors — certificates:**
+
+- a certificate lagging its code that some step depends on (§6)
 
 **Errors — spec ↔ pipeline:**
 
 - a **computable** entry with no step of that id
 - a step whose id matches no entry
-- a step for a **source** or **library** entry *(those have no steps —
-  §7.4)*
+- a step for a **source**, **library** or **exhibit** entry *(those have
+  no steps — §7.4)*
 - a `consumes` edge with no corresponding dependency: `X`'s
   `map.produces` value absent from `Y`'s step `deps`, where
   `Y consumes X`
@@ -987,6 +1148,15 @@ It replaces a compiler, and must therefore be complete.
   bluntly by the blob, invisible per-entry
 - an entry demanding independence whose vouch actor equals its
   implementer *(pending §17)*
+- **the orphan detector:** a label of a configured environment class
+  (`[documents] environments`; `table*` counts as `table`), or any marker
+  span, that no exhibit claims and `unbacked` does not list — a result
+  the document prints that nothing in the graph backs. Dormant exhibits
+  still claim their labels
+- an `unbacked` label the document does not define, or one an exhibit
+  claims; a label nobody claims that is defined twice; a declared
+  document file that does not exist
+- a certificate lagging its code that no step depends on (§6)
 
 ---
 
@@ -1184,3 +1354,27 @@ the graph specthis reports is the graph that runs.
   makes a clone self-describing without running specthis.
 - **Source-entry ceremony** — `record` for a leaf pins bytes with no
   command; whether that reuses the machine capability or earns a third.
+- **Exhibits, the rest of issue #2.** Built: the span digest, the type,
+  the orphan lint, the "described" mind claim. Open, in order:
+  1. **The machine claim on an exhibit ("printed")** — an optional,
+     project-supplied checker step comparing the span's values with the
+     consumed artefacts, pinning the span, the `out:` rows it read and
+     its own code (same trust story as executors and `[preview]`).
+     §8.1's never-inspect rule and §8.3's never-adopt-failed rule leave
+     "ran and disagrees" no state; the proposal is a recorded `failed`
+     machine attestation for exhibit entries, routed to the **mind**
+     queue, since the repair is a decision. Whether `failed` generalises
+     to other check-like steps (test suites) is part of the question.
+     A span that `\input`s a generated fragment degenerates to digest
+     equality and needs no checker. Today an exhibit may have no step.
+  2. **Formal statements as backing** — a `formal:<path>#<declaration>`
+     row in the described tuple (the Lean statement says what the
+     paper's theorem says), via a project-declared extractor, as
+     `[preview]` is. To be validated against the design above before
+     (1) is built, so the shape is not one project's tables.
+  3. **`specthis tag ENTRY [OUTPUT]`** (a stamp a renderer embeds in a
+     generated fragment) and **`specthis trace <sha>`** (the ledger rows
+     pinning a digest); a `/specthis-reverse` skill for auditing a paper
+     backwards.
+  4. **Prose anchors** — pinning a paragraph by a short anchor phrase,
+     for co-authors who will not keep marker comments.

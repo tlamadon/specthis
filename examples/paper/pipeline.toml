@@ -1,0 +1,16 @@
+# The pipeline: you author this, specthis reads it. Edges are derived
+# from deps/outs.
+#
+# Three entries have no step: `raw-wages` is a source (pinned with
+# `specthis record`), and the two exhibits in specs/paper.md are spans of
+# the manuscript — a judge reads them; nothing runs them.
+
+[steps.wage-moments]
+command = "python3 scripts/moments.py"
+deps    = ["scripts/moments.py", "data/raw/wages.csv"]
+outs    = ["results/moments.json"]
+
+[steps.moments-table]
+command = "python3 scripts/table.py"
+deps    = ["scripts/table.py", "results/moments.json"]
+outs    = ["paper/tables/moments.tex"]

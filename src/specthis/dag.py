@@ -72,6 +72,7 @@ _KIND_FILL = {
     "report": "#b85a1e",
     "library": "#8a6d1f",
     "source": "#3f7f8c",
+    "exhibit": "#8c3f6b",
 }
 
 #: inline rules for the standalone document — the look the page CSS

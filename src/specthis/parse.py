@@ -46,8 +46,8 @@ from .ledger import LOCALITIES
 from .pipeline import PipelineError, Step, load_pipeline
 from .preview import CONTENT_TYPES
 
-KINDS = {"meta", "definitions", "templates", "library", "source", "compute", "report"}
-ENTRY_KINDS = {"library", "source", "compute", "report"}
+KINDS = {"meta", "definitions", "templates", "library", "source", "compute", "report", "exhibit"}
+ENTRY_KINDS = {"library", "source", "compute", "report", "exhibit"}
 TIERS = {"intensive", "quick"}
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -123,6 +123,49 @@ class PreviewRecipe:
     inputs: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class Appearance:
+    """One place a document prints an exhibit: ``paper#tab:paths``.
+
+    ``document`` is a *name* declared in ``[documents]`` — a contract
+    names no physical path (§3), so moving the manuscript costs one map
+    edit and no judgment. ``label`` addresses a span inside it (§5.8).
+    """
+
+    document: str
+    label: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.document}#{self.label}"
+
+    @property
+    def row(self) -> str:
+        """The pseudo-path this span is pinned under in a vouch's table."""
+        return f"doc:{self.key}"
+
+
+@dataclass
+class Document:
+    """A manuscript the project ships (``[documents.<name>]``, spec §4).
+
+    The map's one fact about it is where it lives; ``environments`` and
+    ``unbacked`` configure the orphan lint and enter no digest.
+    """
+
+    name: str
+    #: Project-relative files, each a path or a glob; a document split
+    #: into section files is one label namespace, as LaTeX compiles it.
+    paths: list[str]
+    #: Environment classes whose every label must be claimed by an
+    #: exhibit (a starred variant counts as its class). Empty: only
+    #: marker spans are policed.
+    environments: list[str] = field(default_factory=list)
+    #: Labels deliberately printed with no backing — a schematic, a
+    #: result quoted from the literature. Not orphans, by declaration.
+    unbacked: list[str] = field(default_factory=list)
+
+
 @dataclass
 class Entry:
     name: str
@@ -153,6 +196,9 @@ class Entry:
     #: ``kind:``. Per-entry because type *is* per entry — one file may
     #: hold a source, two computes and a library.
     own_kind: str | None = None
+    #: Where a document prints this result — an **exhibit**'s subject
+    #: (§2). Empty for every other type.
+    appears: list[Appearance] = field(default_factory=list)
 
     @property
     def kind(self) -> str:
@@ -223,6 +269,8 @@ class Project:
     #: run rows that never declared where they happened. Config, not a
     #: claim: it enters no digest and never overrides a row that says.
     localities: dict[str, str] = field(default_factory=dict)
+    #: ``[documents]`` — name -> the manuscript an exhibit appears in.
+    documents: dict[str, Document] = field(default_factory=dict)
     #: Memo for the package blob — see :func:`check.package_blob`, which
     #: is the only thing that should read or write it. Its lifetime is
     #: this loaded project, so it expires on the re-load `serve` already
@@ -270,7 +318,7 @@ def _str_list(raw: object, where: str, what: str) -> list[str]:
 #: list (spec §3 rule 2). Values may be backticked; a bare `- code`
 #: takes no value.
 _ENTRY_FIELD = re.compile(r"^- +([a-z_]+)\s*(?::\s*(.*?))?\s*$", re.MULTILINE)
-ENTRY_FIELDS = {"consumes", "produces", "code", "props"}
+ENTRY_FIELDS = {"consumes", "produces", "code", "props", "appears"}
 
 
 def entry_fields(block: str, where: str) -> dict[str, list[str]]:
@@ -298,8 +346,14 @@ def infer_kind(fields: dict[str, list[str]], outputs: list[str]) -> str:
     """Type from fields (§2), for entries written in the target format.
 
     A bare ``code`` marks a library; a physical path in ``produces``
-    marks a source; anything producing logical names is computable.
+    marks a source; anything producing logical names is computable; an
+    ``appears`` marks an **exhibit** — a result a document prints, the
+    terminal node past the bytes. (Contradictory combinations, such as
+    ``appears`` beside ``produces``, are refused by the parser, which can
+    name the conflict.)
     """
+    if "appears" in fields:
+        return "exhibit"
     if "code" in fields and not fields.get("produces"):
         return "library"
     if any("/" in p or "." in p for p in fields.get("produces", ())):
@@ -333,6 +387,44 @@ def _infer_file_kind(body: str) -> str:
     # derives `unimplemented` exactly as a source entry should.
     kinds.discard("library")
     return "report" if len(kinds) > 1 else kinds.pop()
+
+
+def _appearances(
+    fields: dict[str, list[str]], file_props: list[str], where: str
+) -> list[Appearance]:
+    """An exhibit's ``- appears:`` targets, after refusing every field
+    combination that cannot be one (§2) — by name, so the error says
+    which ingredient is wrong rather than that the type is."""
+    if fields.get("produces"):
+        raise SpecError(
+            f"{where} declares both `appears` and `produces` — an exhibit prints a "
+            "result and makes none; give the result its own entry and have the "
+            "exhibit consume it"
+        )
+    if "code" in fields:
+        raise SpecError(
+            f"{where} is an exhibit and has no code — its subject is the document "
+            "span it appears at; drop `- code`"
+        )
+    if fields.get("props") or file_props:
+        raise SpecError(
+            f"{where} is an exhibit and cannot be a template — instances come "
+            "from pipeline steps, and an exhibit has none"
+        )
+    out: list[Appearance] = []
+    for value in fields["appears"]:
+        document, sep, label = value.partition("#")
+        if not (sep and document and label):
+            raise SpecError(
+                f"{where}: `appears: {value}` must address a span as "
+                "`<document>#<label>` — e.g. `paper#tab:paths`"
+            )
+        a = Appearance(document.strip(), label.strip())
+        if a not in out:
+            out.append(a)
+    if not out:
+        raise SpecError(f"{where}: `- appears:` names no span")
+    return out
 
 
 def _spec_sha(text: str, m: re.Match[str]) -> str:
@@ -451,7 +543,18 @@ def parse_spec(path: Path) -> SpecFile:
                 raise SpecError(f"{path.name}: bad entry name `{entry_name}`")
             fields = entry_fields(block_match.group(2), f"{path.name}: `{entry_name}`")
             own_kind = infer_kind(fields, []) if fields else None
-            if kind == "library":
+            appears: list[Appearance] = []
+            if own_kind == "exhibit":
+                # Terminal node: a span of a document is the subject, so
+                # nothing is produced and nothing is bound as code.
+                appears = _appearances(fields, props, f"{path.name}: `{entry_name}`")
+                outputs = []
+            elif kind == "exhibit":
+                raise SpecError(
+                    f"{path.name}: exhibit entry `{entry_name}` declares no "
+                    "`- appears: <document>#<label>` field"
+                )
+            elif kind == "library":
                 # A library entry is judged code with no artifact: the
                 # chain stops at code, so an Output: is a contradiction.
                 if _field_paths(block_match.group(2), "Output") or _field_paths(
@@ -469,6 +572,14 @@ def parse_spec(path: Path) -> SpecFile:
                 outputs = fields["produces"]
             else:
                 outputs = _field_paths(block_match.group(2), label)
+                if not outputs and fields:
+                    # A field list that matches no type (§2): name the
+                    # ingredients that would make it one.
+                    raise SpecError(
+                        f"{path.name}: entry `{entry_name}` declares no `- produces:` "
+                        "(what it makes) and no `- appears:` (where a document prints "
+                        "it) — or `- code`, if it is a library"
+                    )
                 if not outputs:
                     raise SpecError(
                         f"{path.name}: entry `{entry_name}` declares no `{label}:` path "
@@ -488,6 +599,7 @@ def parse_spec(path: Path) -> SpecFile:
                     own_consumes=fields.get("consumes"),
                     own_props=fields.get("props"),
                     own_kind=own_kind,
+                    appears=appears,
                 )
             )
         if spec.entries:
@@ -561,12 +673,59 @@ def _parse_localities(data: dict) -> dict[str, str]:
     return out
 
 
-def _load_bindings(
-    specs_dir: Path,
-) -> tuple[dict[str, Binding], list[str], dict[str, PreviewRecipe], str | None, dict[str, str]]:
+def _parse_documents(data: dict) -> dict[str, Document]:
+    """The ``[documents]`` table: name -> the manuscript an exhibit cites.
+
+    ``path`` is the one fact a contract cannot carry — where the file
+    lives — so an exhibit says ``appears: paper#tab:paths`` and a moved
+    manuscript costs a map edit, never a judgment. ``environments`` and
+    ``unbacked`` only configure lint: they enter no digest.
+    """
+    out: dict[str, Document] = {}
+    for name, raw in data.get("documents", {}).items():
+        where = f"bindings.toml: [documents.{name}]"
+        if not _ENTRY_NAME.match(name):
+            raise SpecError(f"{where}: a document name is a slug (letters, digits, `.`, `_`, `-`)")
+        if not isinstance(raw, dict):
+            raise SpecError(f'{where}: must be a table with `path = "<file>"`')
+        if unknown := set(raw) - {"path", "environments", "unbacked"}:
+            raise SpecError(f"{where}: unknown key(s) {sorted(unknown)}")
+        paths = raw.get("path")
+        if isinstance(paths, str):
+            paths = [paths]
+        if not paths or not isinstance(paths, list) or not all(
+            isinstance(p, str) and p for p in paths
+        ):
+            raise SpecError(
+                f"{where}: needs `path` — the document's file, or a list of files and globs"
+            )
+        out[name] = Document(
+            name=name,
+            paths=list(paths),
+            environments=_str_list(raw.get("environments"), where, "environments"),
+            unbacked=_str_list(raw.get("unbacked"), where, "unbacked"),
+        )
+    return out
+
+
+@dataclass
+class _Map:
+    """Everything ``bindings.toml`` says, parsed — one value, so adding a
+    table to the map is one field here rather than one more tuple slot at
+    every call site."""
+
+    bindings: dict[str, Binding] = field(default_factory=dict)
+    globs: list[str] = field(default_factory=list)
+    previews: dict[str, PreviewRecipe] = field(default_factory=dict)
+    backend_class: str | None = None
+    localities: dict[str, str] = field(default_factory=dict)
+    documents: dict[str, Document] = field(default_factory=dict)
+
+
+def _load_bindings(specs_dir: Path) -> _Map:
     path = specs_dir / "bindings.toml"
     if not path.is_file():
-        return {}, [], {}, None, {}
+        return _Map()
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -579,7 +738,14 @@ def _load_bindings(
             scripts=_str_list(table.get("scripts"), "bindings.toml", "scripts"),
             produces=_produces_map(entry_name, table.get("produces")),
         )
-    return bindings, globs, _parse_previews(data), backend_class, _parse_localities(data)
+    return _Map(
+        bindings=bindings,
+        globs=globs,
+        previews=_parse_previews(data),
+        backend_class=backend_class,
+        localities=_parse_localities(data),
+        documents=_parse_documents(data),
+    )
 
 
 def _produces_map(entry_name: str, raw: object) -> dict[str, str]:
@@ -622,12 +788,11 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             problems.append(Problem(path.name, str(exc)))
 
     try:
-        bindings, package_globs, previews, backend_class, localities = _load_bindings(
-            specs_dir
-        )
+        the_map = _load_bindings(specs_dir)
     except SpecError as exc:
         problems.append(Problem("bindings.toml", str(exc)))
-        bindings, package_globs, previews, backend_class, localities = {}, [], {}, None, {}
+        the_map = _Map()
+    bindings, package_globs = the_map.bindings, the_map.globs
 
     steps: dict[str, Step] = {}
     pipeline_file = root / "pipeline.toml"
@@ -664,9 +829,10 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                     continue
                 entry.binding = bindings.get(entry.name) or (
                     # no convention fallback for library modules: an
-                    # invented path must not be carved out of the blob
+                    # invented path must not be carved out of the blob —
+                    # nor for an exhibit, which has no code at all
                     Binding(scripts=[])
-                    if spec.kind == "library"
+                    if spec.kind == "library" or entry.kind == "exhibit"
                     else _default_binding(entry.name)
                 )
                 skipped_entries[entry.name] = spec.path.name
@@ -683,7 +849,40 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
                 )
                 spec.entries.remove(entry)
                 continue
-            if spec.kind == "library":
+            if entry.kind == "exhibit":
+                # No code, no product: the map's only word about an
+                # exhibit is where its document lives ([documents]).
+                bound = bindings.get(entry.name)
+                if bound is not None and (bound.scripts or bound.produces):
+                    problems.append(
+                        Problem(
+                            spec.path.name,
+                            f"{spec.path.name}: `{entry.name}` is an exhibit — it has no "
+                            f"code and produces nothing; drop [entries.{entry.name}] from "
+                            "specs/bindings.toml",
+                        )
+                    )
+                entry.binding = Binding(scripts=[])
+                for a in list(entry.appears):
+                    if a.document in the_map.documents:
+                        continue
+                    hint = (
+                        " — a contract names a document, not a path (§3): declare "
+                        f'`[documents.<name>] path = "{a.document}"` in '
+                        f"specs/bindings.toml and write `appears: <name>#{a.label}`"
+                        if "/" in a.document or "." in a.document
+                        else f' — declare `[documents.{a.document}] path = "<file>"` '
+                        "in specs/bindings.toml"
+                    )
+                    problems.append(
+                        Problem(
+                            spec.path.name,
+                            f"{spec.path.name}: `{entry.name}` appears in undeclared "
+                            f"document `{a.document}`{hint}",
+                        )
+                    )
+                    entry.appears.remove(a)
+            elif spec.kind == "library":
                 # Modules live at arbitrary package paths; no naming
                 # convention can guess them, so the binding is mandatory.
                 binding = bindings.get(entry.name)
@@ -752,11 +951,26 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         for spec in specs:
             spec.consumes[:] = [producer_of.get(u, u) for u in spec.consumes]
 
+    # An exhibit is the graph's terminal node: it makes nothing, so an
+    # edge into it would pin an upstream digest that does not exist.
+    exhibits = {n for n, e in entries.items() if e.kind == "exhibit"}
+
+    def terminal(spec: SpecFile, prefix: str, up: str) -> Problem:
+        return Problem(
+            spec.path.name,
+            f"{prefix} consumes exhibit `{up}` — an exhibit is a terminal node: it "
+            "prints a result in a document and produces nothing to consume",
+        )
+
     spec_names = {s.name for s in specs}
     for spec in specs:
         if spec.draft:
             continue  # unchecked prose: draft edges are nobody's problem
         for up in list(spec.consumes):
+            if up in exhibits:
+                problems.append(terminal(spec, f"{spec.path.name}:", up))
+                spec.consumes.remove(up)
+                continue
             if up in entries:
                 continue
             if up in skipped_entries:
@@ -795,11 +1009,15 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
             if entry.own_consumes is None:
                 continue
             for up in list(entry.own_consumes):
+                where = f"{spec.path.name}: `{entry.name}`"
+                if up in exhibits:
+                    problems.append(terminal(spec, where, up))
+                    entry.own_consumes.remove(up)
+                    continue
                 if up in entries:
                     continue
                 if up in skipped_entries and spec.skip:
                     continue  # dormant -> dormant, as above
-                where = f"{spec.path.name}: `{entry.name}`"
                 if up in draft_entries:
                     message = f"{where} consumes draft entry `{up}`"
                 elif up in skipped_entries:
@@ -832,10 +1050,11 @@ def load_project_lenient(root: Path) -> tuple[Project, list[Problem]]:
         ),
         skipped_entries=skipped_entries,
         draft_entries=draft_entries,
-        previews=previews,
+        previews=the_map.previews,
         steps=steps,
-        backend_class=backend_class,
-        localities=localities,
+        backend_class=the_map.backend_class,
+        localities=the_map.localities,
+        documents=the_map.documents,
     )
     return project, problems
 

@@ -70,6 +70,31 @@ lineage the same. Entries green on both axes but blocked upstream are
 summarized as waiting (split by which tree blocks them). Status is
 never written anywhere; it is derived. Nothing consults mtime.
 
+**Exhibits — the manuscript as the last link.** An entry declaring
+`- appears: <document>#<label>` (and no `produces`) is an **exhibit**: a
+result the paper prints — a labelled table, figure or theorem, or a
+marked paragraph. It has no code, no pipeline step and **no run state**
+(like a library, it lives on the vouch tree only), and nothing may
+consume it. Its vouch — "described" — attests that *the document
+describes the result as the contracts of the entries it consumes define
+it*, and pins the span as printed (`doc:paper#tab:x`) beside each
+consumed entry's contract (`spec:<entry>`). So editing that span expires
+that exhibit alone, editing the document elsewhere expires nothing, and
+editing a consumed contract expires every exhibit describing it — the
+attribution names which (`~doc:paper#tab:x`, `~spec:<entry>`). An
+exhibit reads *unimplemented* when its span is missing from the
+document: nothing printed to judge. A rejected exhibit is a recorded
+discrepancy between the paper and the spec; repairing it is a decision
+(fix the paper, or change the computation), never a rerun. `specthis
+status` adds one line per declared document: exhibits described, the
+rest by state, and orphans.
+
+The `[documents]` table in `specs/bindings.toml` names each manuscript.
+Its `path` re-points exhibits at a file and moves a digest only where a
+span's content differs; its `environments` and `unbacked` lists
+configure the orphan lint and move **no** digest — editing them is
+always free.
+
 An entry with a current claim may additionally be marked **bytes
 remote** (in `check` output, `status`, and the dashboard): its claim
 stands but the output
@@ -98,6 +123,10 @@ against the claim) if a local step actually needs them.
   **file name**: a dot is a folder, so `compute.omega.weights.md` sits
   under `compute › omega` in the sidebar. (`group:` / `priority:` are
   retired — inert if left behind, but they do nothing.)
+- **Exhibit** entries carry `- consumes:` and `- appears:
+  <document>#<label>` and nothing else: no output, no binding, no step.
+  The document is a name from `[documents]` in `specs/bindings.toml`,
+  never a path.
 - The whole file, frontmatter included, is the contract: any edit
   returns its entries to *unvouched*. Sole carve-out: the
   display-only `title:` line is stripped before `spec_sha`, so
@@ -145,16 +174,23 @@ Start mechanical, end judgmental:
      entry's spec section and its scripts (paths are in `specthis
      status <entry>` / `specs/bindings.toml`) and judge **contract in
      spirit**: does the code do what the prose demands? Read enough to
-     decide; do not run it.
+     decide; do not run it. For an **exhibit** there is no code: read
+     the document span (`specthis status <exhibit>` prints its exact
+     lines) against the contracts of the entries it consumes — does the
+     paper describe the result the way they define it?
    - **waiting** entries — do nothing locally; point at the queued
      entry they are waiting on.
 3. Read `specthis lint` output rather than re-deriving it: state
    leaks (`Script:` / `Status:` / `depends_on:` in a body), a compute
    `Output:` naming a `reports/` path, missing `## Artefact design`
    on report entries, `references:` targets never mentioned in the
-   body, and dangling markdown links are all mechanical now. What
-   remains yours to flag while reading: compute *code* writing under
-   `reports/` or importing plotting libraries — lint cannot read code.
+   body, and dangling markdown links are all mechanical now. So are
+   **orphans** — a labelled table, figure or theorem the manuscript
+   prints that no exhibit claims (warnings: each is a result nothing in
+   the graph backs, worth reporting as such) — and a certificate
+   lagging its code. What remains yours to flag while reading: compute
+   *code* writing under `reports/` or importing plotting libraries —
+   lint cannot read code.
 4. Report as a table: entry / status / repair kind (mind, machine,
    mind + machine, patience) / notes. For entries you judged, end each note with a
    **proposed verdict** — "propose vouch ok" or "propose reject:
@@ -189,6 +225,14 @@ After (or as part of) an audit:
   branches concurrently; dependency order still holds).
 - Then **unimplemented** entries whose contract is a small variant of
   a ready one — the natural next authoring step.
+- **Orphans** are proposals too: for each, "an exhibit could claim
+  `tab:x` once we know what produced it" — tracing that is the audit,
+  and a result with no producer is a finding to report, not to paper
+  over with an `unbacked` line. Only the human lists a label as
+  unbacked.
+- A **rejected exhibit** is the human's call: report the discrepancy
+  and both readings (edit the paper, or change the computation). Never
+  propose editing the manuscript to make it agree.
 
 Express proposals as "I could now implement X" or "the next thing to
 run is Y" — not as actions taken. Wait for explicit confirmation.
@@ -222,6 +266,11 @@ Only when explicitly asked:
    Keep the declared output schema.
 3. Bind the entry in `specs/bindings.toml` (scripts + run command)
    if the default `scripts/<entry>.py` convention doesn't fit.
+   **Exhibits are the exception**: they have no code, no binding and
+   no step — never author a script or a pipeline step for one. An
+   unimplemented exhibit means the manuscript does not (yet) print the
+   span; the manuscript is the authors' text, so say what is missing
+   and leave it to them unless they asked you to write it.
 4. Compute entries: smoke-test only (data loads, model builds, first
    step finite) — never a full fit, never writing the real output.
    Report entries: run the exporter end-to-end (it is cheap)
@@ -245,6 +294,8 @@ Only when explicitly asked:
 - Do **not** run fitting scripts or anything that burns compute.
   Authoring includes a smoke-test; running does not.
 - Do **not** edit result files or artefacts under `reports/`.
+- Do **not** edit the manuscript to make an exhibit pass, and do not
+  add a pipeline step or a binding for an exhibit.
 - Do **not** write `Script:`, `Status:`, or `depends_on:` into a
   spec, and do not hand-edit `vouches.toml` or `runs.toml` — ledgers
   are written by their verbs only.

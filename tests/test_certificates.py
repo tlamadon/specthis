@@ -5,7 +5,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from specthis.certificates import content, path_for, render, write_all
+from specthis.certificates import content, lagging, path_for, render, write_all
 from specthis.cli import main
 from specthis.parse import load_project
 
@@ -73,3 +73,67 @@ def test_entries_without_code_get_no_certificate(root: Path) -> None:
     project = load_project(root)
     written = {p.stem for p in write_all(project)}
     assert all(project.entries[n].binding.scripts for n in written)
+
+
+# ------------------------------------------- scoped writes, lagging copies
+
+
+def test_certify_can_be_scoped_to_named_entries(root: Path) -> None:
+    """Certifying two new entries must not also publish unrelated,
+    uncommitted edits elsewhere — every rewritten certificate stales
+    every step that depends on it."""
+    project = load_project(root)
+    write_all(project)
+    beta = path_for(project, "fit-beta").read_text()
+    write(root, "scripts/fit_alpha.py", "# alpha edited\n")
+    write(root, "scripts/fit_beta.py", "# beta edited, not ready to publish\n")
+
+    result = CliRunner().invoke(main, ["certify", "fit-alpha", "--path", str(root)])
+    assert result.exit_code == 0, result.output
+    assert "1 certificate(s)" in result.output
+    assert path_for(project, "fit-beta").read_text() == beta, "an unnamed entry was rewritten"
+    assert lagging(load_project(root)) == [("fit-beta", path_for(project, "fit-beta"))]
+
+
+def test_certify_refuses_an_unknown_entry(root: Path) -> None:
+    result = CliRunner().invoke(main, ["certify", "no-such", "--path", str(root)])
+    assert result.exit_code != 0
+    assert "unknown entry" in result.output
+
+
+def test_a_current_certificate_is_not_lagging(root: Path) -> None:
+    write_all(load_project(root))
+    assert lagging(load_project(root)) == []
+
+
+def test_lint_warns_on_a_certificate_lagging_its_code(root: Path) -> None:
+    write_all(load_project(root))
+    write(root, "scripts/fit_alpha.py", "# rewritten\n")
+    result = CliRunner().invoke(main, ["lint", "--path", str(root)])
+    assert "warning: certificate `specs/certificates/fit-alpha.json` lags" in result.output
+    assert "specthis certify fit-alpha" in result.output
+
+
+def test_a_lagging_certificate_a_step_depends_on_holds_the_check_verdict(root: Path) -> None:
+    """The finding from issue #2: with the certificate (not the script)
+    as the step's dependency, a code edit moved nothing the run axis
+    reads, so `check` called the entry current. It must say so instead."""
+    write(root, "pipeline.toml", PIPELINE_ON_CERTIFICATE)
+    write_all(load_project(root))
+    write(root, "scripts/fit_alpha.py", "# rewritten\n")
+    result = CliRunner().invoke(main, ["check", "--path", str(root)])
+    assert result.exit_code != 0
+    assert "certificate `specs/certificates/fit-alpha.json` lags" in result.output
+    assert "fit-alpha depend on it" in result.output
+
+    CliRunner().invoke(main, ["certify", "fit-alpha", "--path", str(root)])
+    lint = CliRunner().invoke(main, ["lint", "--path", str(root)])
+    assert "lags" not in lint.output
+
+
+PIPELINE_ON_CERTIFICATE = """\
+[steps.fit-alpha]
+command = "python3 scripts/fit_alpha.py"
+deps    = ["specs/certificates/fit-alpha.json", "scripts/fit_alpha.py", "hut.fit-alpha.json"]
+outs    = ["results/alpha/fit.json"]
+"""

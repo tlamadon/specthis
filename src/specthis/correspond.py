@@ -14,7 +14,7 @@ has not adopted a pipeline yet.
 
 from __future__ import annotations
 
-from .check import is_library, is_source
+from .check import is_exhibit, is_library, is_source
 from .instances import instances, is_template
 from .parse import Entry, Problem, Project
 
@@ -45,10 +45,12 @@ def correspondence_problems(project: Project) -> list[Problem]:
 
     # --- spec <-> pipeline -------------------------------------------------
     for name, entry in sorted(entries.items()):
-        if is_library(entry) or is_source(entry):
+        if is_library(entry) or is_source(entry) or is_exhibit(entry):
             if name in steps:
-                kind = "library" if is_library(entry) else "source"
-                bad(f"{PIPELINE}: `{name}` is a {kind} entry and must have no step (§7.4)")
+                bad(
+                    f"{PIPELINE}: `{name}` is a{'n' if is_exhibit(entry) else ''} "
+                    f"{entry.kind} entry and must have no step (§7.4)"
+                )
             continue
         if is_template(entry):
             if not instances(project, entry):

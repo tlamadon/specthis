@@ -205,8 +205,9 @@ def record_vouch(specs_dir: Path, entry: str, vouch: Vouch) -> None:
             and same_subject(prior, vouch)
         ):
             raise LedgerError(
-                f"`{entry}` carries a standing rejection by {prior.attester} at this exact "
-                "(spec, code) pair — change the spec or the code before vouching ok"
+                f"`{entry}` carries a standing rejection by {prior.attester} at these exact "
+                "digests — change what it pins (the spec or the code; for an exhibit, the "
+                "document span or a contract it consumes) before vouching ok"
             )
         vouches[entry] = vouch
         # TOML has no null: optional fields (note, spec_contract_sha,

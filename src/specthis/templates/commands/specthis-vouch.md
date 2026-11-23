@@ -24,7 +24,10 @@ hand the vouching pen to a fresh critic session.
    - the project root.
    Each critic re-reads the spec and code from disk with no memory of
    this session or of the other entries; do not summarize the code
-   for it. One entry per critic keeps every judgment independently
+   for it. **Exhibits** (entries with `- appears:`) go to a critic like
+   any other entry: it judges the document span against the contracts
+   the exhibit consumes, and there is no code. Do not quote the
+   manuscript to it either — it reads the exact lines itself. One entry per critic keeps every judgment independently
    fresh, isolates it from its siblings' conclusions, and cuts the
    wall-clock wait. Concurrent `specthis vouch` writes are safe — the
    ledger serializes them.

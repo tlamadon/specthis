@@ -33,6 +33,7 @@ from .check import (
     check_project,
     expected_inputs,
     instance_inputs,
+    is_exhibit,
     sibling_keys,
 )
 from .instances import resolve_key
@@ -73,6 +74,11 @@ def verify(project: Project, entry_name: str, manifest: dict) -> None:
         entry, inst = resolve_key(project, entry_name)
     except KeyError:
         raise AdoptError(f"no entry or instance named `{entry_name}`") from None
+    _require(
+        not is_exhibit(entry),
+        f"`{entry_name}` is an exhibit — a span of a document, read by a judge; "
+        "it has no run claim to adopt",
+    )
 
     outputs = manifest.get("outputs") or {}
     _require(bool(outputs), f"`{entry_name}`: manifest declares no outputs")

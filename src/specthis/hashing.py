@@ -119,6 +119,43 @@ def _digest(path: Path) -> str | None:
     return digest
 
 
+#: Memo keys for :func:`file_text` live in the same per-derivation dict
+#: as the digests, behind a prefix no path can start with.
+_TEXT = "\x00text:"
+
+
+def file_text(path: Path) -> str | None:
+    """A text file's contents, or ``None`` if it does not exist.
+
+    The reader behind document spans (§5.8): an exhibit's digest is taken
+    over one addressed span of a manuscript, so the manuscript has to be
+    read as text rather than hashed whole. Inside :func:`memoizing` it is
+    read at most once however many exhibits it prints — the same
+    one-moment rule :func:`file_sha` follows — and the whole-file digest
+    falls out of the same read, so a document that is also some step's
+    dependency is not read a second time for that.
+    """
+    memo = _memo.get()
+    key = _TEXT + str(path)
+    if memo is not None and key in memo:
+        if _observer is not None:
+            _observer(path, 0, 0.0, True)
+        return memo[key]
+    if not path.is_file():
+        text = None
+    else:
+        started = time.perf_counter()
+        data = path.read_bytes()
+        text = data.decode("utf-8", errors="replace")
+        if _observer is not None:
+            _observer(path, len(data), time.perf_counter() - started, False)
+        if memo is not None:
+            memo.setdefault(str(path), sha256_bytes(data))
+    if memo is not None:
+        memo[key] = text
+    return text
+
+
 def manifest_sha(pairs: Iterable[tuple[str, str]]) -> str:
     """Digest of ``(key, sha)`` pairs, order-independent.
 

@@ -42,7 +42,15 @@ the part that needs you — is judgment:
    section and its scripts (paths are in `specthis status <entry>`
    and `specs/bindings.toml`) and judge **contract in spirit**: does
    the code do what the prose demands? Read enough to decide; do not
-   run it.
+   run it. An **exhibit** (its `status` shows `appears:` lines) has no
+   code: read the document span those lines name against the contracts
+   of the entries it consumes — does the paper describe the result as
+   they define it? It has no run state (`—`, like a library), so it is
+   never in the machine queue; an *unimplemented* exhibit means its span
+   is missing from the document — report that, the manuscript is the
+   authors' to edit. A rejected exhibit is a recorded discrepancy
+   between paper and spec: report it with both repairs (edit the paper,
+   or change the computation), never just one.
 6. **waiting** entries: skip — point at the queued entry they wait
    on (the check output splits waiting by tree: minds vs machines).
 
@@ -53,9 +61,12 @@ preview-recipe edit as drift, and never run a recipe yourself.
 
 The text-mechanical layer is `specthis lint`'s, not yours: state
 leaks, compute `Output:` paths under `reports/`, missing
-`## Artefact design`, unmentioned `references:`, dangling links —
-read its output, never re-derive it. What remains yours to flag while
-reading: compute *code* writing under `reports/` or importing
+`## Artefact design`, unmentioned `references:`, dangling links,
+**orphans** (labelled tables, figures or theorems the manuscript prints
+that no exhibit claims), and certificates lagging their code — read its
+output, never re-derive it. Report each orphan as what it is: a result
+the paper prints that nothing in the graph backs. What remains yours to
+flag while reading: compute *code* writing under `reports/` or importing
 plotting libraries (lint cannot read code). And text-internal
 contradictions — prose disagreeing with its own lists, or with
 another spec — are `spec-reader`'s job, not yours: name the file and

@@ -25,8 +25,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from . import hashing
 from .check import code_manifest
-from .parse import Entry, Project
+from .parse import Entry, Problem, Project
 
 CERTIFICATE_VERSION = 1
 CERT_DIR = "certificates"
@@ -54,20 +55,81 @@ def path_for(project: Project, entry_name: str) -> Path:
     return project.specs_dir / CERT_DIR / f"{entry_name}.json"
 
 
-def write_all(project: Project) -> list[Path]:
-    """Emit a certificate per entry that has code bound.
+def certified(project: Project) -> list[str]:
+    """The entries that get a certificate: every one with code bound."""
+    return sorted(name for name, e in project.entries.items() if e.binding.scripts)
+
+
+def write_all(project: Project, names: list[str] | None = None) -> list[Path]:
+    """Emit a certificate per entry that has code bound — or, given
+    ``names``, for those entries only.
 
     Returns the paths written. Rewriting an unchanged certificate leaves
-    the bytes alone, so a regeneration never stales anything.
+    the bytes alone, so a regeneration never stales anything — but a
+    *changed* one stales every step that depends on it, which is why the
+    write can be scoped: certifying two new entries must not also publish
+    the uncommitted script edits of sixteen others.
     """
     out: list[Path] = []
-    for name, entry in sorted(project.entries.items()):
-        if not entry.binding.scripts:
-            continue
+    for name in certified(project) if names is None else names:
         target = path_for(project, name)
-        text = render(content(project, entry))
+        text = render(content(project, project.entries[name]))
         if not target.is_file() or target.read_text(encoding="utf-8") != text:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
         out.append(target)
     return out
+
+
+def lagging(project: Project) -> list[tuple[str, Path]]:
+    """Certificates on disk whose content is not what ``certify`` would
+    write now — ``(entry, path)``, sorted.
+
+    A certificate is derived state with a committed copy, so it can lag
+    the code it describes. Where a step lists the certificate (not the
+    scripts) among its dependencies, that lag hides a code edit from the
+    compute axis: the dependency's bytes did not move, so the run reads
+    current while the code under it changed. Nothing else would say so.
+    A missing certificate is not lagging — a step that needs it reads
+    the path as missing, which is already a break.
+    """
+    out: list[tuple[str, Path]] = []
+    with hashing.memoizing():
+        for name in certified(project):
+            target = path_for(project, name)
+            if not target.is_file():
+                continue
+            if target.read_text(encoding="utf-8") != render(content(project, project.entries[name])):
+                out.append((name, target))
+    return out
+
+
+def certificate_findings(project: Project) -> tuple[list[Problem], list[Problem]]:
+    """Lagging certificates as (problems, warnings).
+
+    A problem when some step depends on the certificate — `check` cannot
+    be trusted on that step's run axis until it is regenerated — and a
+    warning otherwise, where the lag misleads only a reader.
+    """
+    problems: list[Problem] = []
+    warnings: list[Problem] = []
+    for name, target in lagging(project):
+        rel = target.relative_to(project.root).as_posix()
+        users = sorted(sid for sid, step in project.steps.items() if rel in step.deps)
+        if users:
+            problems.append(
+                Problem(
+                    "bindings.toml",
+                    f"certificate `{rel}` lags `{name}`'s code — step(s) "
+                    f"{', '.join(users)} depend on it and cannot see the change; "
+                    f"run `specthis certify {name}`",
+                )
+            )
+        else:
+            warnings.append(
+                Problem(
+                    "bindings.toml",
+                    f"certificate `{rel}` lags `{name}`'s code — run `specthis certify {name}`",
+                )
+            )
+    return problems, warnings

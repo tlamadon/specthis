@@ -255,3 +255,131 @@ def test_a_templated_source_is_pinned_per_instance(grid: Path) -> None:
 
     runs = read_runs(grid / "specs")
     assert {f"raw-wages[country={c}]" for c in COUNTRIES} <= set(runs)
+
+
+# ================================================================= paper
+
+PAPER = Path(__file__).parent.parent / "examples" / "paper"
+
+
+@pytest.fixture
+def paper(tmp_path: Path) -> Path:
+    root = tmp_path / "paper"
+    shutil.copytree(PAPER, root)
+    return root
+
+
+def judge_paper(root: Path) -> None:
+    """§3 of the README: the ordinary loop, then the exhibits."""
+    assert cli(root, "record", "raw-wages").exit_code == 0
+    assert cli(root, "build").exit_code == 0
+    for entry in ("raw-wages", "wage-moments", "moments-table"):
+        assert cli(root, "vouch", entry, "--as", "ana").exit_code == 0
+    for entry in ("tab-moments", "prop-units"):
+        assert cli(root, "vouch", entry, "--as", "ben").exit_code == 0
+
+
+def edit_paper(root: Path, old: str, new: str) -> None:
+    tex = root / "paper/paper.tex"
+    assert old in tex.read_text()
+    tex.write_text(tex.read_text().replace(old, new))
+
+
+def test_the_paper_lints_clean(paper: Path) -> None:
+    result = cli(paper, "lint")
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "specs are clean"
+
+
+def test_dropping_unbacked_makes_the_schematic_an_orphan(paper: Path) -> None:
+    bindings = paper / "specs/bindings.toml"
+    bindings.write_text("\n".join(
+        ln for ln in bindings.read_text().splitlines() if not ln.startswith("unbacked")))
+    result = cli(paper, "lint")
+    assert "figure `fig:flow` is claimed by no exhibit" in result.output
+
+
+def test_exhibits_have_no_code_and_no_step(paper: Path) -> None:
+    from specthis.check import is_exhibit
+
+    project = load_project(paper)
+    for name in ("tab-moments", "prop-units"):
+        assert is_exhibit(project.entries[name])
+        assert name not in project.steps
+
+
+def test_status_shows_the_lines_a_critic_reads(paper: Path) -> None:
+    result = cli(paper, "status", "tab-moments")
+    assert "appears:   paper#tab:moments  ->  paper/paper.tex:13-20 (table)" in result.output
+
+
+def test_the_paper_reaches_ready_and_is_described(paper: Path) -> None:
+    judge_paper(paper)
+    check = cli(paper, "check")
+    assert check.exit_code == 0, check.output
+    assert "ready: 5/5" in check.output
+    status = cli(paper, "status").output.splitlines()
+    assert status[1].split()[:3] == ["run", "tree", "3/3"], "exhibits are not on the run tree"
+    assert status[2].split() == ["paper", "2/2", "described", "+1", "unbacked"]
+
+
+def test_a_reflow_and_a_comment_expire_nothing(paper: Path) -> None:
+    judge_paper(paper)
+    edit_paper(paper, "Notes: non-positive wages are dropped. The variance is\n  the",
+               "Notes: non-positive wages are dropped.  % per the payroll memo\n"
+               "  The variance is the")
+    assert "ready: 5/5" in cli(paper, "check").output
+
+
+def test_prose_outside_every_span_expires_nothing(paper: Path) -> None:
+    judge_paper(paper)
+    edit_paper(paper, "Four workers, observed", "Four workers, each observed")
+    assert "ready: 5/5" in cli(paper, "check").output
+
+
+def test_editing_the_note_is_one_exhibit_and_a_rejection_is_the_discrepancy(paper: Path) -> None:
+    judge_paper(paper)
+    edit_paper(paper, "(dividing by $n$, not $n-1$)", "(dividing by $n-1$)")
+    out = cli(paper, "check").output
+    assert "tab-moments                  moved since vouch: ~doc:paper#tab:moments" in out
+    assert "prop-units" not in out and "run tree" not in out
+
+    assert cli(paper, "vouch", "tab-moments", "--as", "ben", "--reject", "--note",
+               "the note says n-1; wage-moments defines the population variance").exit_code == 0
+    assert axes(paper, "tab-moments")[0] is Certification.REJECTED
+    refused = cli(paper, "vouch", "tab-moments", "--as", "carol")
+    assert refused.exit_code != 0 and "standing rejection" in refused.output
+
+    edit_paper(paper, "(dividing by $n-1$)", "(dividing by $n$, not $n-1$)")
+    assert axes(paper, "tab-moments")[0] is Certification.UNVOUCHED, "the span moved"
+    assert cli(paper, "vouch", "tab-moments", "--as", "ben").exit_code == 0
+    assert "ready: 5/5" in cli(paper, "check").output
+
+
+def test_a_contract_edit_expires_every_description_of_it(paper: Path) -> None:
+    judge_paper(paper)
+    spec = paper / "specs/wages.md"
+    spec.write_text(spec.read_text().replace(
+        "population form (divide by n)", "population form (divide by n, the positive wages)"))
+    out = cli(paper, "check").output
+    assert "prop-units                   moved since vouch: ~spec:wage-moments" in out
+    assert "tab-moments                  moved since vouch: ~spec:wage-moments" in out
+    assert "run tree" not in out, "no machine is asked for anything"
+
+
+def test_a_table_nothing_produced_is_an_orphan(paper: Path) -> None:
+    judge_paper(paper)
+    edit_paper(paper, "\\end{document}",
+               "\\begin{table}\\caption{Typed by hand}\\label{tab:extra}\n"
+               "1 & 2 \\\\\n\\end{table}\n\n\\end{document}")
+    assert "table `tab:extra` is claimed by no exhibit" in cli(paper, "lint").output
+    status = cli(paper, "status").output.splitlines()
+    assert status[2].split() == ["paper", "2/2", "described", "1", "orphan", "+1", "unbacked"]
+
+
+def test_moving_the_manuscript_is_one_map_edit(paper: Path) -> None:
+    judge_paper(paper)
+    (paper / "paper/paper.tex").rename(paper / "paper/main.tex")
+    bindings = paper / "specs/bindings.toml"
+    bindings.write_text(bindings.read_text().replace('"paper/paper.tex"', '"paper/main.tex"'))
+    assert "ready: 5/5" in cli(paper, "check").output

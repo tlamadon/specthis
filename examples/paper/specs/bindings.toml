@@ -1,0 +1,18 @@
+# The map: which dependencies are judged code, which file is which
+# logical product — and where the manuscript lives.
+
+[entries.wage-moments]
+scripts  = ["scripts/moments.py"]
+produces = { wage-moments = "results/moments.json" }
+
+[entries.moments-table]
+scripts  = ["scripts/table.py"]
+produces = { moments-table = "paper/tables/moments.tex" }
+
+# A contract names the document, never its path — an exhibit says
+# `appears: paper#tab:moments` — so moving the file is one edit here and
+# expires no judgment. `environments` and `unbacked` only configure lint.
+[documents.paper]
+path         = "paper/paper.tex"
+environments = ["table", "figure", "proposition"]  # each such label needs an exhibit
+unbacked     = ["fig:flow"]                         # a schematic: nothing computed backs it

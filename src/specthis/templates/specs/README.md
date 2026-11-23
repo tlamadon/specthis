@@ -104,7 +104,7 @@ or just patience while upstream heals.
 |---|---|---|
 | `specs/vouches.toml` | attested claims: `(spec_sha, code_sha, verdict, attester, when, note)` per entry, plus the decomposed digests (`spec_contract_sha` — the entry's block plus the file's shared prose, the tier that decides expiry — then `spec_block_sha` and `code_manifest`, so an expired vouch can say *what* moved), and wall-clock `duration_seconds` when vouched with `--took` | `specthis vouch` — only |
 | `specs/runs.toml` | derived claims: input table, per-output digests, executor, and what the work cost — wall-clock `duration_seconds`, `cpu_seconds`, and `where` it ran (`local`/`remote`) | `specthis build` / `adopt` / `record` — only |
-| `specs/bindings.toml` | the map: `scripts` (which deps are judged code) and `produces` (which file is which logical product); plus `[package]` globs, `[preview]` recipes and the `[executors]` locality table | you, by hand |
+| `specs/bindings.toml` | the map: `scripts` (which deps are judged code) and `produces` (which file is which logical product); plus `[package]` globs, `[preview]` recipes, the `[executors]` locality table, and `[documents]` (where each manuscript lives) | you, by hand |
 | `pipeline.toml` | the production sheet: one step per entry — command, deps, outs | you, by hand |
 
 One more file is **derived**, so it is not in that table and belongs in
@@ -253,6 +253,7 @@ Valid `kind:` values:
 | `templates`   | Reusable table / figure patterns: palette, layout, captioning rules, a reference snippet to copy. No entries — ledger-invisible like `definitions`; report specs pull one in via `references:`. See "Templates" below. |
 | `compute`     | Named entries with an `Output:` contract that produce JSON / data. Usually `tier: intensive`. |
 | `report`      | Named entries with an `Export outputs:` contract that produce figures/tables. Quick. |
+| `exhibit`     | Entries declaring `- appears: <document>#<label>` — results a manuscript prints. No code, no step, no run state; a vouch attests the document describes them as their upstream contracts do. Inferred from the field; see "Exhibits" below. |
 
 The `definitions` / `library` split answers "when does an edit get
 picked up?": a `definitions` edit is picked up only when a human next
@@ -344,6 +345,91 @@ stayers-late — see the identification note below).
 The file is committed and hashed like any input, so editing it moves
 digests; the prose says what it means.
 
+## Exhibits: what the paper prints
+
+The chain ends at bytes, but a research project ships a **manuscript**.
+An **exhibit** entry makes the manuscript the graph's last link: one
+labelled table, figure, theorem or marked paragraph, held to the
+entries that back it.
+
+```markdown
+### tab-paths
+
+Table 3: the path decomposition, as `path-table` lays it out. The note
+must state the sample restriction `path-sample` defines.
+
+- consumes: path-table, path-sample
+- appears: paper#tab:paths
+```
+
+`- appears:` and no `- produces:` — that is the whole type. An exhibit
+has **no code, no pipeline step and no run state**, and nothing may
+consume it (it is terminal). `appears` beside `produces`, `code` or
+`props` is a lint error that names the conflict. List several targets
+(`paper#tab:paths, slides#tab:paths`) when the same result is printed
+in more than one document; each is pinned.
+
+**The document is named in the map, never by path** — a contract names
+no physical file, so moving the manuscript is one map edit and expires
+nothing:
+
+```toml
+[documents.paper]
+path         = "paper/paper.tex"          # or a list of files and globs
+environments = ["table", "figure", "theorem", "proposition"]
+unbacked     = ["fig:schematic"]          # printed with no backing, on purpose
+```
+
+**The span.** `paper#tab:paths` addresses the innermost environment
+around `\label{tab:paths}` — `\begin{table}` through `\end{table}`:
+caption, note and body as printed. `center`, `flushleft` and
+`flushright` are skipped (a label inside one names the float around
+it), and so is `document`. Prose with no environment — a number in a
+paragraph — is pinned with a marker pair, each marker on a line of its
+own; a marker pair also overrides the environment rule for its label:
+
+```latex
+% specthis:begin{p:growth}
+Real wages grew by 3.2\% over the period.
+% specthis:end{p:growth}
+```
+
+The digest ignores what is not printed: LaTeX comments are dropped as
+TeX drops them, and whitespace runs collapse, so a co-author's reflow
+never expires a judgment and a changed word always does. An `\input`
+inside the span is pinned as the line that names the file — a generated
+fragment is pinned by the run claim of the entry that produced it.
+
+**The vouch ("described").** The judge reads the span (`specthis status
+<exhibit>` prints its exact lines) and the contracts of the consumed
+entries, and attests the document describes the result as those
+contracts define it — reading, never running, and no code. The vouch
+pins the span and each consumed entry's contract, so:
+
+- editing the span expires that exhibit, and no other;
+- editing the document anywhere outside every span expires nothing;
+- editing a consumed entry's contract — its block or its file's shared
+  prose — expires every exhibit describing it.
+
+A rejection is a **recorded discrepancy** ("the note says n−1; the spec
+defines the population variance"), binding at exactly those digests
+until the paper or the contract moves. That replaces the hand-kept list.
+An exhibit whose label is missing from the document reads
+*unimplemented*: nothing printed to judge.
+
+**The orphan detector.** Every label in a configured environment class
+(`table*` counts as `table`), and every marker pair, must be claimed by
+an exhibit or listed in `unbacked`. `specthis lint` warns on each one
+that is not — a result the paper prints that nothing in the graph
+backs. Only the manuscript can enumerate those. `specthis status` adds
+one line per document: exhibits described, the rest by state, orphans,
+unbacked.
+
+**Which `[documents]` edits move digests.** `path` re-points every
+exhibit at a file, and expires only those whose span now reads
+differently. `environments` and `unbacked` configure lint and move
+nothing.
+
 ## What a specification looks like
 
 A spec is **an authoring contract on code**. Every compute / report
@@ -395,11 +481,16 @@ specthis build [entries…]      # hand the pipeline to a compute manager and ad
                                #   what comes back; --force rebuilds an artefact
                                #   edited on disk
 specthis record <entry>        # pin bytes no pipeline produced (a download, a one-off)
-specthis lint                  # every problem at once: spec ↔ map ↔ pipeline
+specthis lint                  # every problem at once: spec ↔ map ↔ pipeline,
+                               #   and every table the manuscript prints that
+                               #   no exhibit claims (warnings)
 specthis vouch <entry> --as NAME [--reject] [--note TEXT]
                                # attest — someone other than the author, always named
 specthis serve                 # live dashboard (a regenerated view; writes nothing,
                                #   and the ledger never reads it)
+specthis certify [entries…]    # code-identity certificates for [package] globs —
+                               #   name entries to write only theirs; lint flags a
+                               #   certificate lagging its code
 specthis dag [--out FILE]      # the spec-level DAG: a layered SVG figure
                                #   (--view rails for the dashboard's list form), or
                                #   --format json (nodes + layouts + edges) — same species of view

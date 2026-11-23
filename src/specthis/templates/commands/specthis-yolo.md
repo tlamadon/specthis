@@ -77,7 +77,11 @@ command exists.
    `specthis lint` and fix them. Act on the warnings too — an
    unmentioned reference or a dangling link is the cheap, mechanical
    form of exactly what burns critic budgets when it survives. Your
-   pen covers `specs/*.md` and `specs/bindings.toml` and nothing else.
+   pen covers `specs/*.md` and `specs/bindings.toml` and nothing else
+   — plus `specthis certify <entry>` for a certificate lint says lags
+   its code. **Orphans** (labels the manuscript prints that no exhibit
+   claims) are findings for the final report, not warnings to silence:
+   never add one to `unbacked`, which only the human may declare.
    Nothing below is trustworthy until this is clean.
 
 2. **Read the specs before judging them.** Commission a `spec-reader`
@@ -180,6 +184,16 @@ command exists.
    with the reason and move on. The hook stops counting set-aside
    entries as work on either axis, so the loop converges instead of
    grinding.
+
+   **Exhibits are the one doubt you do not fix.** An exhibit (an entry
+   with `- appears:`) is judged against the *manuscript*, and a
+   rejection or doubt on one is a discrepancy between the paper and the
+   spec. Choosing which side is wrong is the authors' decision: never
+   edit the manuscript to make it agree, and never bend a contract to
+   match the paper. Set the exhibit aside with the critic's note — and
+   do the same for an *unimplemented* exhibit, whose span the document
+   does not yet print. The final report lists each one with both
+   readings.
 
 6. **Two things that look like breaks and are not.** Entries listed in
    `bytes_not_local` are `current` — the claim stands and the bytes live

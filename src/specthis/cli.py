@@ -21,9 +21,11 @@ from .adopt import AdoptError, adopt_manifest, publish, step_of
 from .auditlint import spec_text_problems, spec_text_warnings
 from .backends import FAILED, BackendError
 from .backends import resolve as resolve_backend
+from .certificates import certificate_findings
 from .certificates import write_all as write_certificates
 from .check import (
     Certification,
+    DocumentTally,
     Realization,
     Report,
     Spend,
@@ -31,8 +33,10 @@ from .check import (
     code_manifest,
     code_sha,
     coordinates,
+    document_tally,
     expected_inputs,
     instance_inputs,
+    is_exhibit,
     is_library,
     is_source,
     judging,
@@ -78,6 +82,7 @@ from .parse import (
     load_project_lenient,
 )
 from .pipeline import PipelineError
+from .spans import document_problems, document_warnings, location, resolve, unresolved
 from .timefmt import fmt_duration as _fmt_duration
 
 
@@ -151,8 +156,10 @@ def _path_option(f):
 def _mind_hint(report: Report, project: Project) -> str:
     """Why this definition needs a mind (the vouch-axis diagnosis)."""
     if report.certification is Certification.UNIMPLEMENTED:
-        scripts = project.entries[report.instance_of or report.entry].binding.scripts
-        return "no code at " + ", ".join(scripts)
+        entry = project.entries[report.instance_of or report.entry]
+        if is_exhibit(entry):
+            return "nothing printed to judge: " + "; ".join(unresolved(project, entry))
+        return "no code at " + ", ".join(entry.binding.scripts)
     if report.certification is Certification.UNVOUCHED:
         if report.expired:
             return "moved since vouch: " + "; ".join(report.expired)
@@ -313,7 +320,10 @@ def check_cmd(project_path: Path, as_json: bool) -> None:
     # Problem-tier text checks hold the verdict exactly like grammar
     # problems do; the warning tier stays out — the yolo Stop hook
     # blocks on `lint.problems`, and advice must never trap a session.
-    problems = problems + spec_text_problems(project)
+    # A certificate lagging its code is in the problem tier only when a
+    # step depends on it: then this very derivation's run axis is blind
+    # to a code edit, and saying "current" would be the lie.
+    problems = problems + spec_text_problems(project) + certificate_findings(project)[0]
     reports = check_project(project)
     if as_json:
         click.echo(json.dumps(_queue_state(project, reports, problems), indent=2))
@@ -384,16 +394,28 @@ def lint_cmd(project_path: Path) -> None:
     That last group is load-bearing. The pipeline is authored rather
     than generated, so lint is what replaces a compiler's guarantee
     that the two agree. Exits non-zero if anything is wrong. Reads only.
+
+    For a project that declares `[documents]`, it is also the orphan
+    detector: every label of a configured environment class that no
+    exhibit claims, and no one listed as unbacked, is named — the
+    results a manuscript prints that nothing in the graph produces.
     """
     project, problems = _load_lenient(project_path)
+    lagging, lagging_quietly = certificate_findings(project)
     problems = (
         problems
         + [Problem('specs', m) for m in template_problems(project)]
         + correspondence_problems(project)
         + spec_text_problems(project)
+        + document_problems(project)
+        + lagging
     )
-    warnings = correspondence_warnings(project) + spec_text_warnings(project) + draft_warnings(
-        project
+    warnings = (
+        correspondence_warnings(project)
+        + spec_text_warnings(project)
+        + draft_warnings(project)
+        + document_warnings(project)
+        + lagging_quietly
     )
     for p in problems:
         click.echo(f"  {p.message}")
@@ -550,12 +572,41 @@ def _minds_line(reports: dict[str, Report]) -> str:
     return f"{'minds':<12}{_paint(head, bold=True)}{tail}"
 
 
+def _document_line(t: DocumentTally) -> str:
+    """One manuscript, one line: how much of what it prints is described
+    by a standing vouch, what the rest needs, and what nothing backs.
+
+    Orphans are yellow because somebody has work to do — trace the
+    result, write its exhibit — and unbacked labels are dim, because
+    somebody already decided they need none.
+    """
+    total = sum(t.exhibits.values())
+    done = t.exhibits[Certification.CERTIFIED]
+    head = f"{done}/{total} described"
+    tail = [
+        _paint(f"{n} {state.value}", _STATE_COLOR[state])
+        for state, n in t.exhibits.items()
+        if state is not Certification.CERTIFIED and n
+    ]
+    if t.orphans:
+        tail.append(_paint(f"{t.orphans} orphan{'s' if t.orphans > 1 else ''}", "yellow"))
+    if t.unbacked:
+        tail.append(_paint(f"+{t.unbacked} unbacked", dim=True))
+    whole = total and done == total and not t.orphans
+    line = f"{t.name:<12}" + _paint(head, "green" if whole else None, bold=True)
+    return (line + " " * max(3, 22 - len(head)) + "   ".join(tail)) if tail else line
+
+
 def _summary(project: Project, reports: dict[str, Report]) -> None:
     """The two queues at a glance — one line per tree, and that is all.
 
     ``skipped`` rides on the vouch line because a skip is a fact about a
     definition (``skip: true`` in a spec's frontmatter). Without it the
     totals here would quietly disagree with the number of specs on disk.
+
+    A project that declares ``[documents]`` gets one more line per
+    manuscript — the roll-up a paper audit asks for first: how much of
+    what it prints is described, and how much nothing backs.
     """
     if not reports:
         click.echo("no entries")
@@ -565,6 +616,8 @@ def _summary(project: Project, reports: dict[str, Report]) -> None:
     drafts = len(project.draft_entries)
     click.echo(_tree_line("vouch tree", vouch, Certification.CERTIFIED, skipped, drafts))
     click.echo(_tree_line("run tree", run, Realization.CURRENT))
+    for t in document_tally(project, reports):
+        click.echo(_document_line(t))
     if machines := _machines_line(project, reports):
         click.echo(machines)
     if minds := _minds_line(reports):
@@ -584,12 +637,12 @@ def _status_rows(project: Project, reports: dict[str, Report]) -> None:
     for name in names:
         r = reports[name]
         e = project.entries[r.instance_of or name]
-        kind = e.kind if e.kind in ("library", "source") else f"{e.kind}/{e.tier}"
+        kind = e.kind if e.kind in ("library", "source", "exhibit") else f"{e.kind}/{e.tier}"
         cert = _paint(f"{r.certification.value:<14}", _STATE_COLOR[r.certification])
         real = (
             _paint(f"{r.realization.value:<12}", _STATE_COLOR[r.realization])
             if r.realization is not None
-            else _paint(f"{'—':<12}", dim=True)  # a library is not on this tree
+            else _paint(f"{'—':<12}", dim=True)  # a library or exhibit is not on this tree
         )
         upstream = waiting_on(r)
         notes = ([] if r.materialized else ["bytes remote"]) + (
@@ -633,7 +686,9 @@ def status_cmd(entry: str | None, show_all: bool, timing: bool, project_path: Pa
     """Both trees in two lines — or one entry in detail.
 
     Bare, this is the glance: per tree, how much of the project holds
-    and what the rest is waiting for. `-a` keeps those two lines and
+    and what the rest is waiting for — plus, for each manuscript the
+    project declares, how much of what it prints is described and how
+    much nothing backs. `-a` keeps those two lines and
     adds the inventory behind them, one row per entry, sorted worst
     break first and coloured by state. Name an ENTRY instead for the
     full record — digests, scripts, outputs, and which input moved.
@@ -672,13 +727,22 @@ def _status_detail(project: Project, reports: dict[str, Report], entry: str) -> 
         )
     r = reports[entry]
     e = project.entries[r.instance_of or entry]
-    click.echo(f"entry:     {entry}   ({e.spec.path.name}, {e.kind}/{e.tier})")
+    kind = e.kind if is_exhibit(e) else f"{e.kind}/{e.tier}"
+    click.echo(f"entry:     {entry}   ({e.spec.path.name}, {kind})")
     click.echo(f"state:     {coordinates(r)}")
     click.echo(f"spec_sha:  {r.spec_sha}")
-    click.echo(f"code_sha:  {r.code_sha or '(code missing)'}")
-    click.echo(f"scripts:   {', '.join(e.binding.scripts)}")
-    outs = list(r.run.outputs) if r.run and r.run.outputs else list(e.outputs)
-    click.echo(f"outputs:   {', '.join(outs) or '(none — library: chain stops at code)'}")
+    if is_exhibit(e):
+        # The critic reads exactly these lines: the span the digest covers.
+        for a in e.appears:
+            res = resolve(project, a)
+            where = location(res.site) if res.site is not None else res.why
+            click.echo(f"appears:   {a.key}  ->  {where}")
+        click.echo("outputs:   (none — exhibit: the chain ends at the document)")
+    else:
+        click.echo(f"code_sha:  {r.code_sha or '(code missing)'}")
+        click.echo(f"scripts:   {', '.join(e.binding.scripts)}")
+        outs = list(r.run.outputs) if r.run and r.run.outputs else list(e.outputs)
+        click.echo(f"outputs:   {', '.join(outs) or '(none — library: chain stops at code)'}")
     if e.consumes:
         click.echo(f"consumes:  {', '.join(e.consumes)}")
     if r.vouch:
@@ -853,9 +917,11 @@ def record_cmd(
 
 
 @main.command("certify")
+@click.argument("entries", nargs=-1)
 @_path_option
-def certify_cmd(project_path: Path) -> None:
-    """Write a code-identity certificate per entry (spec §6).
+def certify_cmd(entries: tuple[str, ...], project_path: Path) -> None:
+    """Write a code-identity certificate per entry (spec §6) — or, naming
+    ENTRIES, for those alone.
 
     Most projects need none: a step lists its code among its deps, so
     those digests already reach the manager and the manifest. Certificates
@@ -863,11 +929,30 @@ def certify_cmd(project_path: Path) -> None:
     stable file list, so its composed digest can only enter a key as a
     file.
 
-    Deterministic: unchanged code regenerates byte-identical bytes, so
-    running this never stales anything.
+    Deterministic: unchanged code regenerates byte-identical bytes, so a
+    certificate whose code did not move is never rewritten. One whose
+    code did is, and every step depending on it goes stale — which is
+    why the write can be scoped: certifying the entries you just wrote
+    must not also publish unrelated edits elsewhere in the tree.
+    `specthis lint` names any certificate lagging its code.
     """
     project = _load(project_path)
-    written = write_certificates(project)
+    names = list(dict.fromkeys(entries)) or None
+    if names is not None:
+        for name in names:
+            _require_active(project, name)
+        bare = [n for n in names if n not in project.entries]
+        if bare:
+            raise click.ClickException(
+                f"certificates are per entry, not per instance: {', '.join(bare)} — "
+                "name the template"
+            )
+        uncoded = [n for n in names if not project.entries[n].binding.scripts]
+        if uncoded:
+            raise click.ClickException(
+                f"no code bound, so no certificate: {', '.join(uncoded)}"
+            )
+    written = write_certificates(project, names)
     click.echo(f"{len(written)} certificate(s) in {project.specs_dir / 'certificates'}")
 
 
@@ -1034,7 +1119,8 @@ def adopted_cmd(project_path: Path) -> None:
 @click.option(
     "--reject",
     is_flag=True,
-    help="Record that the code does NOT satisfy the contract at these digests.",
+    help="Record that the code does NOT satisfy the contract at these digests "
+    "(for an exhibit: that the document does not describe it as its contracts do).",
 )
 @click.option("--note", default="", help="Free-text note recorded with the verdict.")
 @click.option(
@@ -1056,6 +1142,12 @@ def vouch_cmd(
     """Attest that the entry's code satisfies its contract at the current
     digests. Only someone who did NOT author the change may vouch.
 
+    For an exhibit the subject is the document, not code: the vouch says
+    the span it appears at describes the result as the entries it
+    consumes define it, and pins that span and those contracts. A
+    rejection is then a recorded discrepancy, and stands until the span
+    or a contract moves.
+
     Writes vouches.toml only; never touches runs.toml.
     """
     project = _load(project_path)
@@ -1069,6 +1161,10 @@ def vouch_cmd(
         if inst and is_source(e)
         else code_sha(project, e)
     )
+    if c is None and is_exhibit(e):
+        raise click.ClickException(
+            f"`{entry}` has nothing printed to judge: {'; '.join(unresolved(project, e))}"
+        )
     if c is None:
         raise click.ClickException(
             f"`{entry}` has no code on disk ({', '.join(e.binding.scripts)}) — nothing to judge"

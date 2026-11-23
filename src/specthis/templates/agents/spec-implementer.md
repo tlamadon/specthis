@@ -19,6 +19,15 @@ passed smoke-test — and a **proposed** vouch. You author the change, therefore
 - The entry name (e.g. `<entry-stem>`) or the spec file containing it.
 - If ambiguous, ask the parent — but otherwise infer from `specs/`.
 
+**An exhibit is not yours to implement.** An entry declaring
+`- appears: <document>#<label>` is a result the manuscript prints: it
+has no code, no binding and no pipeline step, and you must not create
+any of them for it. Its "implementation" is the span in the document,
+which is the authors' text. If asked to implement one, report what the
+document is missing and stop — edit the manuscript only if the parent
+explicitly asked you to write that text. The entries it consumes are
+ordinary, and those you implement as below.
+
 ## Procedure
 
 1. Re-read `specs/AGENTS.md` §3 and the entry's spec section. Then
@@ -76,8 +85,8 @@ outs    = ["results/<entry>.json"]   # every path the entry declares
 - `outs` must list exactly the paths the entry produces.
 - **Never** put parameters in the command. A flag is a number nobody can
   attribute — put it in a config file and list that file in `deps`.
-- LIBRARY and SOURCE entries get **no step**. A source's bytes are pinned
-  with `specthis record`.
+- LIBRARY, SOURCE and EXHIBIT entries get **no step**. A source's bytes
+  are pinned with `specthis record`; an exhibit is read, never run.
 
 ## Expanding a parameter set
 

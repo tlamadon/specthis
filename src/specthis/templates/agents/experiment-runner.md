@@ -25,7 +25,9 @@ completion.
    If the experiment is a spec entry, run `specthis status <entry>`
    first — if its run state is not `stale` or `never-run`, ask the
    parent whether to force-rerun before launching anything. Never
-   infer freshness from mtimes.
+   infer freshness from mtimes. Library and **exhibit** entries have no
+   run state at all (an exhibit is a span of the manuscript, read by a
+   judge): there is nothing to launch — say so and stop.
 2. **Launch in the background.** If the experiment is a spec entry,
    prefer `specthis build <entry>` — it hands the pipeline to the
    compute manager and records the input
