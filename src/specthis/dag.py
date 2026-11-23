@@ -115,11 +115,12 @@ def spec_graph(project: Project) -> tuple[list[SpecFile], list[tuple[str, str]]]
     """The spec-level projection: nodes (specs with entries, skipped
     included) and deduped ``consumes`` edges as (upstream, downstream).
 
-    ``consumes:`` targets entry names, but the field lives on the spec
-    and every entry inherits it — so the projection loses nothing.
-    Skipped specs keep their dormant edges; targets that resolve to no
-    known entry (possible only on skipped specs — live edges are
-    validated at load) are silently not drawn.
+    ``consumes`` targets entry names: per entry in the target format's
+    field list (§3), or once in a legacy spec's frontmatter, which every
+    entry inherits — reading each entry's edges covers both, so the
+    projection loses nothing. Skipped specs keep their dormant edges;
+    targets that resolve to no known entry (possible only on skipped
+    specs — live edges are validated at load) are silently not drawn.
     """
     nodes = [s for s in project.specs if s.kind in ENTRY_KINDS]
     names = {s.name for s in nodes}
@@ -129,8 +130,9 @@ def spec_graph(project: Project) -> tuple[list[SpecFile], list[tuple[str, str]]]
             owner.setdefault(entry.name, spec.name)
     edges: list[tuple[str, str]] = []
     for spec in nodes:
-        for consumed in spec.consumes:
-            up = owner.get(consumed)
+        consumed = [up for e in spec.entries for up in e.consumes] or spec.consumes
+        for target in consumed:
+            up = owner.get(target)
             edge = (up or "", spec.name)
             if up and up != spec.name and up in names and edge not in edges:
                 edges.append(edge)

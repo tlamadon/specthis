@@ -348,3 +348,14 @@ def test_dag_diamond_shares_a_row(tmp_path: Path) -> None:
     assert pos["compute-a"][1] < pos["compute-b"][1] == pos["compute-c"][1] < pos["compute-d"][1]
     assert pos["compute-b"][0] != pos["compute-c"][0]  # side by side in the row
     assert svg.count('class="edge"') == 4
+
+
+def test_per_entry_consumes_edges_are_drawn(root: Path) -> None:
+    """The target format declares `- consumes:` per entry (§3), not in
+    frontmatter. Reading only the frontmatter drew no edge at all for a
+    project written that way."""
+    write(root, "specs/downstream.md",
+          "---\ntitle: d\n---\n\n# d\n\n### uses-beta\n\nReads beta.\n\n"
+          "- consumes: fit-beta\n- produces: results/d.json\n")
+    _, edges = spec_graph(load_project(root))
+    assert ("compute-beta", "downstream") in edges
