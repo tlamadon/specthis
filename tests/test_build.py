@@ -339,3 +339,22 @@ def test_upstream_artefacts_are_pinned_by_claim_not_by_bytes(piped: Path) -> Non
     inputs = expected_inputs(project, project.entries["fit-beta"], runs)
     assert "upstream:fit-alpha" in inputs
     assert "results/alpha/fit.json" not in inputs
+
+
+def test_a_consumer_named_before_its_upstream_is_adopted_after_it(root: Path) -> None:
+    """Adoption pins each upstream's *recorded* digest, so `build` must
+    adopt upstream first — not in step-id order. Here the consumer's id
+    sorts first; adopted alphabetically, it pinned the digest from
+    before the build and read stale the moment its upstream landed."""
+    write(root, "pipeline.toml", PIPELINE.replace("fit-beta", "a-beta"))
+    for rel, old, new in (
+        ("specs/compute-beta.md", "fit-beta", "a-beta"),
+        ("specs/report-beta.md", "- fit-beta", "- a-beta"),
+        ("specs/bindings.toml", "[entries.fit-beta]", "[entries.a-beta]"),
+    ):
+        path = root / rel
+        path.write_text(path.read_text().replace(old, new))
+    result = run_cli("build", "--path", str(root))
+    assert result.exit_code == 0, result.output
+    assert result.output.index("adopted fit-alpha") < result.output.index("adopted a-beta")
+    assert realization(root, "a-beta") is Realization.CURRENT

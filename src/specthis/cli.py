@@ -45,6 +45,7 @@ from .check import (
     spending,
     step_digest,
     tally,
+    topo_order,
     verified,
     waiting_on,
 )
@@ -933,8 +934,20 @@ def build_cmd(
     # never from how a backend chose to name its steps.
     instance_of_step = {sid: inst.name for sid, (_e, inst) in instances_by_step(project).items()}
 
+    # Upstream first. A claim pins each upstream's *recorded* output
+    # digest, read from the ledger at the moment it is adopted — so a
+    # consumer adopted before its upstream pins the digest from before
+    # this build, and reads stale the instant the upstream lands. Step
+    # ids are no order at all: `moments-table` sorts before the
+    # `wage-moments` it consumes.
+    rank = {name: i for i, name in enumerate(topo_order(project))}
+
+    def upstream_first(item: tuple[str, dict]) -> tuple[int, str]:
+        key = instance_of_step.get(item[0], item[0])
+        return rank.get(key.partition("[")[0], len(rank)), item[0]
+
     adopted, refused, failed = [], [], []
-    for sid, manifest in sorted(produced.items()):
+    for sid, manifest in sorted(produced.items(), key=upstream_first):
         # A failed step is not a refused manifest: the manager is
         # reporting honestly that the work did not happen. Saying
         # "manifest reports a failed step" buried that, and buried the
